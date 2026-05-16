@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>FNC Tournament Hub</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0f1622;
+    --panel:#19222f;
+    --panel-2:#1e2836;
+    --card:#22303f;
+    --card-2:#2b3a4d;
+    --border:#2a3645;
+    --text:#e6edf3;
+    --muted:#8a99ac;
+    --accent:#f5a623;
+    --accent-2:#f6c453;
+    --green:#22c55e;
+    --green-2:#15803d;
+    --red:#ef4444;
+    --blue:#3b82f6;
+    --teal:#22b3a4;
+    --yellow:#eab308;
+    --gold:#d4a14a;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--text);font-family:'Inter',system-ui,sans-serif;font-size:13px;line-height:1.4}
+  a{color:inherit;text-decoration:none}
+  .app{padding:22px 28px;max-width:1600px;margin:0 auto}
+
+  /* Header */
+  .top{display:flex;align-items:center;gap:18px;margin-bottom:18px}
+  .logo{width:62px;height:72px;border-radius:8px;background:linear-gradient(180deg,#2a3340,#1a212c);display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:9px;line-height:1;border:1px solid #34404f;position:relative;overflow:hidden}
+  .logo .f{font-size:9px;letter-spacing:1px;color:#fff;text-align:center}
+  .logo .pin{width:18px;height:22px;background:var(--red);clip-path:polygon(50% 100%,0 35%,15% 0,85% 0,100% 35%);margin-top:4px}
+  h1.title{font-size:34px;font-weight:800;margin:0;letter-spacing:-.5px}
+
+  /* Toolbar */
+  .toolbar{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px 18px;display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:13px;margin-bottom:18px}
+  .toolbar .left,.toolbar .right{display:flex;gap:18px;align-items:center}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--green);display:inline-block;margin-right:6px;box-shadow:0 0 8px rgba(34,197,94,.6)}
+  .pill{display:inline-flex;align-items:center;padding:2px 8px;border:1px solid var(--border);border-radius:6px;background:var(--panel-2)}
+
+  /* Layout */
+  .grid{display:grid;grid-template-columns:1fr 320px 320px;gap:18px;align-items:start}
+  .col{display:flex;flex-direction:column;gap:18px}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px}
+  .panel h2{font-size:15px;margin:0 0 14px;font-weight:700}
+  .panel-h-center{text-align:center;color:var(--muted);font-size:13px;letter-spacing:.5px;font-weight:600;margin:0 0 14px}
+  .panel-h-alert{color:var(--gold)}
+
+  /* Match cards */
+  .match-row{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .match{background:var(--card);border:1px solid #2f3d4f;border-radius:8px;padding:10px}
+  .match-top{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:4px}
+  .match-top b{color:var(--text);font-weight:600}
+  .live{color:var(--red);font-weight:700;font-size:11px;display:flex;align-items:center;gap:4px}
+  .live .ldot{width:7px;height:7px;border-radius:50%;background:var(--red);box-shadow:0 0 6px rgba(239,68,68,.8)}
+  .live.off{color:var(--muted)}
+  .live.off .ldot{background:#4b5563;box-shadow:none}
+  .station-sel{background:#0f1722;border:1px solid #2f3d4f;border-radius:4px;padding:2px 6px;font-size:11px;color:var(--text);min-width:78px;display:inline-flex;justify-content:space-between;align-items:center;gap:6px}
+  .round{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--muted);margin-bottom:10px}
+  .round b{color:var(--text);font-weight:600}
+
+  .player{display:flex;align-items:center;gap:8px;background:#fff;color:#111;border-radius:6px;padding:6px 8px;margin-bottom:6px;border-left:5px solid var(--accent)}
+  .player .badge{background:var(--accent);color:#1a1a1a;font-weight:800;font-size:11px;padding:3px 7px;border-radius:4px;align-self:stretch;display:flex;align-items:center}
+  .avatar{width:26px;height:26px;border-radius:50%;background:linear-gradient(135deg,#cbd5e1,#94a3b8);display:flex;align-items:center;justify-content:center;font-size:13px;color:#1a1a1a}
+  .pinfo{flex:1;min-width:0}
+  .pname{font-weight:700;font-size:12px;line-height:1.2;color:#1a1a1a}
+  .pmeta{display:flex;align-items:center;gap:5px;font-size:10px;color:#475569}
+  .flag{width:14px;height:10px;border-radius:1px;display:inline-block;background:#ccc;border:1px solid #aaa}
+  .flag-us{background:linear-gradient(180deg,#b22234 0 33%,#fff 33% 66%,#3c3b6e 66%)}
+  .flag-nl{background:linear-gradient(180deg,#ae1c28 0 33%,#fff 33% 66%,#21468b 66%)}
+  .flag-fr{background:linear-gradient(90deg,#0055a4 0 33%,#fff 33% 66%,#ef4135 66%)}
+  .score{display:flex;align-items:center;gap:4px}
+  .score .num{font-size:22px;font-weight:800;color:#1a1a1a;min-width:18px;text-align:center}
+  .score .arrows{display:flex;flex-direction:column;color:#475569;font-size:9px;line-height:1}
+
+  .actions{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px}
+  .act{background:transparent;border:none;color:var(--muted);display:flex;flex-direction:column;align-items:center;gap:4px;font-size:11px;cursor:pointer;padding:6px 2px;border-radius:6px}
+  .act:hover{background:#0f1722;color:var(--text)}
+  .act .ico{width:30px;height:30px;border-radius:50%;background:#0f1722;border:1px solid #2f3d4f;display:flex;align-items:center;justify-content:center}
+  .act svg{width:14px;height:14px}
+
+  /* Streams */
+  .streams-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+  .streams-head .links{display:flex;gap:18px;color:var(--muted);font-size:12px}
+  .streams-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+  .station{background:var(--card);border:1px solid #2f3d4f;border-radius:8px;padding:10px}
+  .station-head{display:flex;justify-content:space-between;align-items:center;padding:6px 8px;background:#1a2532;border-radius:6px;margin-bottom:8px}
+  .station-head .l{display:flex;align-items:center;gap:8px;font-weight:700}
+  .tv{width:22px;height:18px;border:1.5px solid var(--text);border-radius:3px;position:relative}
+  .tv:before{content:"";position:absolute;width:8px;height:3px;background:var(--text);top:-5px;left:6px;transform:rotate(-15deg)}
+  .station-head .r{display:flex;gap:8px;color:var(--muted)}
+  .so-label{text-align:center;color:var(--muted);font-size:11px;margin:6px 0 8px}
+  .ov-row{display:flex;justify-content:space-between;align-items:center;padding:6px 4px;font-size:12px;border-bottom:1px solid #243140}
+  .ov-row:last-of-type{border-bottom:none}
+  .ov-row .icons{display:flex;gap:8px;color:var(--muted)}
+  .add-ov{display:flex;align-items:center;justify-content:center;gap:6px;color:var(--muted);padding:8px;border-top:1px dashed #2f3d4f;margin-top:6px;cursor:pointer;font-size:12px}
+
+  /* Tournament data */
+  .td-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px}
+  .td-right{text-align:right}
+  .td-right .small{color:var(--muted);font-size:11px}
+  .td-input-row{display:flex;gap:8px;align-items:center;margin-top:6px}
+  .input{background:#0f1722;border:1px solid #2f3d4f;border-radius:6px;padding:7px 10px;color:var(--text);font-size:12px;flex:1}
+  .input::placeholder{color:#5a6878}
+  .btn{padding:7px 12px;border-radius:6px;border:1px solid #2f3d4f;background:#0f1722;color:var(--text);font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+  .btn-blue{background:#1d3a5f;border-color:#27598d;color:#cfe1f7}
+  .btn-red{background:#4a1b1b;border-color:#7a2828;color:#f8c8c8}
+  .btn-teal{background:#163a3a;border-color:#1f5d5a;color:#9be4dd}
+  .td-status{background:#0f1722;border:1px solid #2f3d4f;border-radius:6px;padding:8px 10px;color:var(--muted);font-size:12px;flex:1}
+  .tabs{border-bottom:1px solid #2f3d4f;margin:14px 0 0}
+  .tab{display:inline-block;padding:8px 4px;color:var(--teal);border-bottom:2px solid var(--teal);font-size:12px;font-weight:600}
+  .table{width:100%;border-collapse:collapse;margin-top:10px}
+  .table th,.table td{padding:10px 6px;border-bottom:1px solid #243140;text-align:left;font-size:12px}
+  .table th{color:var(--muted);font-weight:500}
+
+  /* Match Dashboard */
+  .section-head{font-size:18px;font-weight:700;font-style:italic;color:var(--gold);border-bottom:1px solid var(--gold);padding-bottom:4px;margin:14px 0 10px}
+  .md-row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+  .md-num{width:32px;height:28px;border-radius:5px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:#fff}
+  .md-bar{flex:1;height:28px;border-radius:5px;display:flex;align-items:center;justify-content:space-between;padding:0 10px;font-size:12px;font-weight:600;color:#fff}
+  .green-bg{background:var(--green-2)}
+  .green-bar{background:#22c55e;color:#fff}
+  .yellow-bg{background:#a16207}
+  .yellow-bar{background:var(--yellow);color:#1a1a1a}
+  .gray-bg{background:#475569}
+  .gray-bar{background:#64748b}
+  .md-eye{width:22px;height:22px;border-radius:50%;background:rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center}
+
+  /* Conflicts & Alerts */
+  .alert h3{margin:0 0 6px;font-size:14px;color:var(--text);font-weight:700}
+  .alert .claims{margin:6px 0 12px;padding-left:18px;color:var(--text);font-size:13px}
+  .alert .claims div{margin:2px 0}
+  .alert-actions{display:flex;gap:18px;color:var(--muted);font-size:12px;margin-bottom:14px}
+  .syslog-h{color:var(--text);font-weight:600;margin:14px 0 8px;font-size:13px}
+  .syslog{color:var(--text);font-size:13px;line-height:1.7}
+
+  .botfeed{font-size:12px;line-height:1.7;color:var(--text)}
+  .botfeed .row{margin-bottom:6px}
+
+  /* small icons (stroke style) */
+  .icon{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Header -->
+  <header class="top">
+    <div class="logo" aria-label="Friday Night Championship">
+      <div class="f">Friday<br/>Night</div>
+      <div class="pin"></div>
+      <div class="f" style="font-size:6px;margin-top:2px">Championship</div>
+    </div>
+    <h1 class="title">FNC Tournament Hub</h1>
+  </header>
+
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <div class="left">
+      <span>[Login/Logout]</span>
+      <span>|</span>
+      <span>🏆 Tournament: [ SF6 Weekly #1 ▼ ] | Settings</span>
+    </div>
+    <div class="right">
+      <span>Status:</span>
+      <span class="pill"><span class="dot"></span>Start.gg API</span>
+      <span class="pill"><span class="dot"></span>Discord Bot</span>
+      <span class="pill"><span class="dot"></span>WebSockets</span>
+    </div>
+  </div>
+
+  <div class="grid">
+    <!-- LEFT COL -->
+    <div class="col">
+      <!-- Active Match Status -->
+      <section class="panel">
+        <h2>Active Match Status</h2>
+        <div class="match-row">
+          <!-- Match 1 -->
+          <div class="match">
+            <div class="match-top">
+              <span>Match#: <b>35</b></span>
+              <span class="live"><span class="ldot"></span>LIVE ON</span>
+            </div>
+            <div class="round">
+              <span>Round: <b>Winners Semis</b></span>
+              <span class="station-sel">Station 1 ▾</span>
+            </div>
+            <div class="player">
+              <span class="badge">P1</span>
+              <div class="avatar">👤</div>
+              <div class="pinfo">
+                <div class="pname">Player1 Name</div>
+                <div class="pmeta"><span class="flag flag-us"></span>[Player1Team]</div>
+              </div>
+              <div class="score"><div class="num">0</div><div class="arrows">▲<br/>▼</div></div>
+            </div>
+            <div class="player">
+              <span class="badge">P2</span>
+              <div class="avatar">👤</div>
+              <div class="pinfo">
+                <div class="pname">Player2 Name</div>
+                <div class="pmeta"><span class="flag flag-us"></span>[Player2Team]</div>
+              </div>
+              <div class="score"><div class="num">0</div><div class="arrows">▲<br/>▼</div></div>
+            </div>
+            <div class="actions">
+              <button class="act"><span class="ico"><svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M5 5l14 14"/></svg></span>DQ Force</button>
+              <button class="act"><span class="ico"><svg class="icon" viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="12" rx="2"/><circle cx="9" cy="13" r="1.2"/><circle cx="15" cy="13" r="1.2"/><path d="M12 3v4"/></svg></span>Bot</button>
+              <button class="act"><span class="ico"><svg class="icon" viewBox="0 0 24 24"><path d="M3 8h14l-3-3M21 16H7l3 3"/></svg></span>Swap</button>
+              <button class="act"><span class="ico"><svg class="icon" viewBox="0 0 24 24"><path d="M3 11l18-8-8 18-2-8-8-2z"/></svg></span>Send</button>
+            </div>
+          </div>
+
+          <!-- Match 2 -->
+          <div class="match">
+            <div class="match-top">
+              <span>Match#: <b>34</b></span>
+              <span class="live"><span class="ldot"></span>LIVE ON</span>
+            </div>
+            <div class="round">
+              <span>Round: <b>Winners Semis</b></span>
+              <span class="station-sel">Station 2 ▾</span>
+            </div>
+            <div class="player">
+              <span class="badge">P1</span>
+              <div class="avatar">👤</div>
+              <div class="pinfo">
+                <div class="pname">Player2 Name</div>
+                <div class="pmeta"><span class="flag flag-nl"></span>[Player2Team]</div>
+              </div>
+              <div class="score"><div class="num">1</div><div class="arrows">▲<br/>▼</div></div>
+            </div>
+            <div class="player">
+              <span class="badge">P2</span>
+              <div class="avatar">👤</div>
+              <div class="pinfo">
+                <div class="pname">Player1 Name</div>
+                <div class="pmeta"><span class="flag flag-us"></span>[Player2Team]</div>
+              </div>
+              <div class="score"><div class="num">1</div><div class="arrows">▲<br/>▼</div></div>
+            </div>
+            <div class="actions">
+              <button class="act"><span class="ico"><svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M5 5l14 14"/></svg></span>DQ Force</button>
+              <button class="act"><span class="ico"><svg class="icon" viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="12" rx="2"/><circle cx="9" cy="13" r="1.2"/><circle cx="15" cy="13" r="1.2"/><path d="M12 3v4"/></svg></span>Bot</button>
+              <button class="act"><span class="ico"><svg class="icon" viewBox="0 0 24 24"><path d="M3 8h14l-3-3M21 16H7l3 3"/></svg></span>Swap</button>
+              <button class="act"><span class="ico"><svg class="icon" viewBox="0 0 24 24"><path d="M3 11l18-8-8 18-2-8-8-2z"/></svg></span>Send</button>
+            </div>
+          </div>
+
+          <!-- Match 3 -->
+          <div class="match">
+            <div class="match-top">
+              <span>Match#: <b>16</b></span>
+              <span class="live off"><span class="ldot"></span>LIVE ON</span>
+            </div>
+            <div class="round">
+              <span>Round: <b>Winners Semis</b></span>
+              <span class="station-sel">&nbsp; ▾</span>
+            </div>
+            <div class="player">
+              <span class="badge">P1</span>
+              <div class="avatar">👤</div>
+              <div class="pinfo">
+                <div class="pname">Player1 Name</div>
+                <div class="pmeta"><span class="flag flag-us"></span>[Player1Team]</div>
+              </div>
+              <div class="score"><div class="num">2</div><div class="arrows">▲<br/>▼</div></div>
+            </div>
+            <div class="player">
+              <span class="badge">P2</span>
+              <div class="avatar">👤</div>
+              <div class="pinfo">
+                <div class="pname">Player2 Name</div>
+                <div class="pmeta"><span class="flag flag-fr"></span>[Player2Team]</div>
+              </div>
+              <div class="score"><div class="num">1</div><div class="arrows">▲<br/>▼</div></div>
+            </div>
+            <div class="actions">
+              <button class="act"><span class="ico"><svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M5 5l14 14"/></svg></span>DQ Force</button>
+              <button class="act"><span class="ico"><svg class="icon" viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="12" rx="2"/><circle cx="9" cy="13" r="1.2"/><circle cx="15" cy="13" r="1.2"/><path d="M12 3v4"/></svg></span>Bot</button>
+              <button class="act"><span class="ico"><svg class="icon" viewBox="0 0 24 24"><path d="M3 8h14l-3-3M21 16H7l3 3"/></svg></span>Swap</button>
+              <button class="act"><span class="ico"><svg class="icon" viewBox="0 0 24 24"><path d="M3 11l18-8-8 18-2-8-8-2z"/></svg></span>Send</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Active Streams Status -->
+      <section class="panel">
+        <div class="streams-head">
+          <h2 style="margin:0">Active Streams Status</h2>
+          <div class="links"><span>Load Saved</span><span>Add Station</span></div>
+        </div>
+        <div class="streams-row">
+          <div class="station">
+            <div class="station-head">
+              <div class="l"><div class="tv"></div> Station 1</div>
+              <div class="r">✏️ 🔗 👁️</div>
+            </div>
+            <div class="so-label">Stream Overlays</div>
+            <div class="ov-row"><span>Versues Screen</span><span class="icons">🗑️ 🔗 ⚙️</span></div>
+            <div class="ov-row"><span>Scoreboard</span><span class="icons">🗑️ 🔗 ⚙️</span></div>
+            <div class="ov-row"><span>Match Result</span><span class="icons">🗑️ 🔗 ⚙️</span></div>
+            <div class="add-ov">＋ Add Overlay</div>
+          </div>
+          <div class="station">
+            <div class="station-head">
+              <div class="l"><div class="tv"></div> Station 2</div>
+              <div class="r">✏️ 🔗 👁️</div>
+            </div>
+            <div class="so-label">Stream Overlays</div>
+            <div class="ov-row"><span>Tekken VS</span><span class="icons">🗑️ 🔗 ⚙️</span></div>
+            <div class="ov-row"><span>Tekken Scoreboard</span><span class="icons">🗑️ 🔗 ⚙️</span></div>
+            <div class="ov-row"><span>Tekken Match Result</span><span class="icons">🗑️ 🔗 ⚙️</span></div>
+            <div class="add-ov">＋ Add Overlay</div>
+          </div>
+          <div></div>
+        </div>
+      </section>
+
+      <!-- Tournament Data -->
+      <section class="panel">
+        <div class="td-head">
+          <h2 style="margin:0">Tournament Data</h2>
+          <div class="td-right">
+            <div style="font-weight:700">Register Tournament</div>
+            <div class="small">Startup Tournament Club</div>
+          </div>
+        </div>
+        <div class="td-input-row">
+          <div class="td-status">[Bloch][Tournament][cer] year 2013: preventted.</div>
+          <button class="btn btn-blue">⟳ Refresh</button>
+          <button class="btn btn-red">🗑 Resoyze</button>
+          <input class="input" placeholder="eg. alg olti Tournament 2235" style="max-width:280px"/>
+          <button class="btn btn-teal">Add Tournament</button>
+        </div>
+        <div class="tabs"><span class="tab">Participants</span></div>
+        <table class="table">
+          <thead><tr><th style="width:40px">II</th><th>Name</th><th>Team</th><th>Cont.</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>Player A</td><td><span class="flag flag-us"></span></td><td>Sext Fighier B</td></tr>
+            <tr><td>2</td><td>Player B</td><td><span class="flag flag-fr"></span></td><td>Sext Fighier B</td></tr>
+          </tbody>
+        </table>
+      </section>
+    </div>
+
+    <!-- MIDDLE COL: Match Dashboard -->
+    <div class="col">
+      <section class="panel" style="min-height:780px">
+        <div class="panel-h-center">Match Dashboard</div>
+
+        <div class="section-head">In Progress</div>
+        <div class="md-row"><div class="md-num green-bg">11</div><div class="md-bar green-bar">Player1 VS Player2</div></div>
+        <div class="md-row"><div class="md-num green-bg">22</div><div class="md-bar green-bar">Player1 VS Player2</div></div>
+
+        <div class="section-head">Players Called</div>
+        <div class="md-row"><div class="md-num yellow-bg">33</div><div class="md-bar yellow-bar">Player1 VS Player2 <span class="md-eye">👁</span></div></div>
+        <div class="md-row"><div class="md-num yellow-bg">44</div><div class="md-bar yellow-bar">Player1 VS Player2 <span class="md-eye">👁</span></div></div>
+
+        <div class="section-head">Not Started</div>
+        <div class="md-row"><div class="md-num gray-bg">01</div><div class="md-bar gray-bar">Player1 VS Player2</div></div>
+        <div class="md-row"><div class="md-num gray-bg">02</div><div class="md-bar gray-bar">Player1 VS Player2</div></div>
+
+        <div class="section-head">Complete</div>
+        <div class="md-row"><div class="md-num gray-bg">03</div><div class="md-bar gray-bar">Player1 VS Player2</div></div>
+        <div class="md-row"><div class="md-num gray-bg">05</div><div class="md-bar gray-bar">Player1 VS Player2</div></div>
+      </section>
+    </div>
+
+    <!-- RIGHT COL -->
+    <div class="col">
+      <section class="panel alert">
+        <div class="panel-h-center panel-h-alert">CONFLICTS &amp; ALERTS</div>
+        <h3>Match #25 - Conflict! ]</h3>
+        <div class="claims">
+          <div>1-GamerA claims: 2-0</div>
+          <div>2-GamerB claims: 1-2</div>
+        </div>
+        <div class="alert-actions"><span>Accept 1</span><span>Accept 2</span><span>MSG to Thread</span></div>
+        <div class="syslog-h">[ System Log ]</div>
+        <div class="syslog">
+          14:02 - Bot: Match #12 Auto-completed.<br/>
+          14:05 - GamerX Check-In for Match #14.
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-h-center panel-h-alert">BOT FEED &amp; LIVE LOGS</div>
+        <div class="botfeed">
+          <div class="row">[14:00] : Match #12 called in #match-booking</div>
+          <div class="row">[14:02] GamerA (Match #12): "ready"</div>
+          <div class="row">[14:02] GamerB (Match #12): "ready"</div>
+          <div class="row">[14:03] : Match #12 started. Players moved to #match-reporting.</div>
+          <div class="row">[14:15] GamerE (Match #14): "I won 2-0"</div>
+          <div class="row">[14:16] : Match #14 auto-submitted (GamerE).</div>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+</body>
+</html>

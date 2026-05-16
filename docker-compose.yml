@@ -1,0 +1,40 @@
+version: "3.9"
+
+services:
+  api:
+    build:
+      context: .
+      target: api
+    container_name: tourney_api
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      # Persist the SQLite database
+      - ./backend/core:/app/backend/core
+      # Persist player avatars and static uploads
+      - ./backend/api/static:/app/backend/api/static
+      # Persist overlay configs per slot
+      - ./backend/api/overlay_configs:/app/backend/api/overlay_configs
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  bot:
+    build:
+      context: .
+      target: bot
+    container_name: tourney_bot
+    env_file:
+      - .env
+    volumes:
+      # Share the same database and avatars as the API
+      - ./backend/core:/app/backend/core
+      - ./backend/api/static:/app/backend/api/static
+    restart: always
+    depends_on:
+      - api

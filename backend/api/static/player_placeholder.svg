@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
+  <rect width="200" height="200" fill="#1a1a2e" rx="12"/>
+  <circle cx="100" cy="72" r="38" fill="#2d2d4e"/>
+  <circle cx="100" cy="72" r="30" fill="#4a4a6a"/>
+  <path d="M 32 185 Q 32 130 100 130 Q 168 130 168 185" fill="#2d2d4e"/>
+  <path d="M 42 185 Q 42 138 100 138 Q 158 138 158 185" fill="#4a4a6a"/>
+  <!-- Controller icon -->
+  <rect x="72" y="140" width="56" height="28" fill="#6a6a8a" rx="14"/>
+  <circle cx="85" cy="154" r="4" fill="#9a9aba"/>
+  <circle cx="115" cy="154" r="4" fill="#9a9aba"/>
+  <circle cx="100" cy="148" r="3" fill="#9a9aba"/>
+  <circle cx="100" cy="160" r="3" fill="#9a9aba"/>
+</svg>

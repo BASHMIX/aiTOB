@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>OBS Overlay</title>
+    <style>
+        body, html {
+            margin: 0; padding: 0;
+            width: 1920px; height: 1080px;
+            overflow: hidden;
+            background-color: transparent;
+        }
+        #canvas {
+            position: relative;
+            width: 100%; height: 100%;
+            background-size: cover;
+            background-position: center;
+        }
+        .el {
+            position: absolute;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            transition: left 0.3s ease, top 0.3s ease,
+                        font-size 0.3s ease, color 0.3s ease,
+                        opacity 0.3s ease, width 0.3s ease, height 0.3s ease;
+            white-space: nowrap;
+            box-sizing: border-box;
+        }
+        .el.img-el img {
+            width: 100%; height: 100%;
+            object-fit: contain;
+            display: block;
+            transition: opacity 0.3s ease;
+        }
+    </style>
+</head>
+<body>
+<div id="canvas"></div>
+<script>
+    const slot = new URLSearchParams(location.search).get('slot') || 'default';
+    let ws = null;
+
+    function connectWs() {
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(`${proto}//${location.host}/ws/overlay/${encodeURIComponent(slot)}`);
+        ws.onmessage = (e) => renderState(JSON.parse(e.data));
+        ws.onclose = () => setTimeout(connectWs, 3000);
+    }
+
+    function injectFont(url) {
+        if (!url) return;
+        let link = document.getElementById('dyn-font') || document.createElement('link');
+        link.id = 'dyn-font'; link.rel = 'stylesheet';
+        if (link.href !== url) { link.href = url; document.head.appendChild(link); }
+    }
+
+    function renderState(state) {
+        const canvas = document.getElementById('canvas');
+
+        if (state.background_url) canvas.style.backgroundImage = `url('${state.background_url}')`;
+        else canvas.style.backgroundImage = 'none';
+
+        if (state.global_font_url) injectFont(state.global_font_url);
+        if (state.global_font_family) document.body.style.fontFamily = state.global_font_family;
+
+        for (const [id, p] of Object.entries(state.elements || {})) {
+            const isImg = p.type === 'image';
+            let el = document.getElementById('el_' + id);
+
+            if (!p.visible) {
+                if (el) el.style.opacity = '0';
+                continue;
+            }
+
+            if (!el) {
+                el = document.createElement('div');
+                el.id = 'el_' + id;
+                el.className = 'el ' + (isImg ? 'img-el' : 'text-el');
+                if (isImg) {
+                    const img = document.createElement('img');
+                    img.id = 'img_' + id;
+                    el.appendChild(img);
+                }
+                canvas.appendChild(el);
+            }
+
+            el.style.opacity = '1';
+            el.style.left = `${p.x}px`;
+            el.style.top = `${p.y}px`;
+
+            if (isImg) {
+                el.style.width = `${p.width}px`;
+                el.style.height = `${p.height}px`;
+                const img = el.querySelector('img');
+                if (img && img.src !== p.src) img.src = p.src;
+            } else {
+                el.style.fontSize = `${String(p.fontSize).replace('px','')}px`;
+                el.style.color = p.color;
+                el.innerText = p.text;
+            }
+        }
+
+        // Remove stale elements
+        canvas.querySelectorAll('.el').forEach(el => {
+            const id = el.id.replace('el_', '');
+            if (!state.elements[id]) el.remove();
+        });
+    }
+
+    connectWs();
+</script>
+</body>
+</html>

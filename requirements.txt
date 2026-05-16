@@ -1,0 +1,15 @@
+fastapi
+uvicorn[standard]
+aiosqlite
+discord.py
+httpx
+python-dotenv
+Pillow
+langgraph
+langchain-core
+langchain-google-genai
+pydantic
+websockets
+jinja2
+python-multipart
+psutil

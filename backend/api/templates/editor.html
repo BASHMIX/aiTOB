@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>OBS Overlay Editor</title>
+    <style>
+        body { font-family: sans-serif; display: flex; margin: 0; background: #222; color: white; height: 100vh; overflow: hidden; }
+        #sidebar { width: 360px; min-width: 360px; background: #2b2b2b; padding: 16px; box-sizing: border-box; overflow-y: auto; }
+        #main { flex-grow: 1; display: flex; align-items: center; justify-content: center; background: #111; }
+
+        #canvas-wrapper {
+            position: relative;
+            width: 1920px;
+            height: 1080px;
+            background-color: #000;
+            background-size: cover;
+            background-position: center;
+            transform-origin: center;
+            overflow: hidden;
+            box-shadow: 0 0 30px rgba(0,255,200,0.15);
+            cursor: default;
+        }
+
+        .el {
+            position: absolute;
+            cursor: move;
+            user-select: none;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            box-sizing: border-box;
+        }
+        .el.text-el { white-space: nowrap; }
+        .el.img-el img { width: 100%; height: 100%; object-fit: contain; display: block; }
+        .selected { outline: 2px dashed #00ffcc; z-index: 100; }
+
+        input[type=text], input[type=number], input[type=url], button, select {
+            width: 100%; padding: 7px 9px; margin-bottom: 12px; box-sizing: border-box;
+            background: #3a3a3a; border: 1px solid #555; color: white; border-radius: 4px;
+        }
+        input[type=color] { width: 100%; height: 38px; padding: 2px; margin-bottom: 12px; border: 1px solid #555; border-radius: 4px; background: #3a3a3a; cursor: pointer; }
+        label { display: block; margin-bottom: 4px; font-size: 11px; color: #999; text-transform: uppercase; letter-spacing: 0.5px; }
+        hr { border: 1px solid #3a3a3a; margin: 14px 0; }
+        button { background: #00ffcc; color: #111; font-weight: bold; cursor: pointer; border: none; }
+        button:hover { background: #00d4aa; }
+        button.danger { background: #ff4444; color: white; }
+        button.danger:hover { background: #cc2222; }
+        button.secondary { background: #444; color: white; }
+        button.secondary:hover { background: #555; }
+        h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: #00ffcc; margin: 0 0 12px; }
+        .row { display: flex; gap: 8px; }
+        .row > * { flex: 1; margin-bottom: 0; }
+        .row { margin-bottom: 12px; }
+        #statusMsg { font-size: 11px; color: #888; text-align: center; margin: 0; }
+        .hint { font-size: 10px; color: #666; text-align: center; margin-top: -8px; margin-bottom: 12px; }
+    </style>
+</head>
+<body>
+
+<div id="sidebar">
+    <!-- Library -->
+    <h2>Layout Profiles</h2>
+    <label>Save Current Layout</label>
+    <div class="row">
+        <input type="text" id="saveLayoutName" placeholder="Profile name...">
+        <button id="btnSaveLayout" style="width:70px;">Save</button>
+    </div>
+    <label>Load / Delete</label>
+    <div class="row">
+        <select id="loadLayoutSelect"></select>
+        <button id="btnLoadLayout" style="width:55px;">Load</button>
+        <button id="btnDeleteLayout" class="danger" style="width:40px;">🗑️</button>
+    </div>
+    <hr>
+
+    <!-- Global Settings -->
+    <h2>Global Settings</h2>
+    <label>Background Image URL</label>
+    <input type="url" id="bgUrl" placeholder="https://...">
+    <label>Google Font URL</label>
+    <input type="url" id="fontUrl" placeholder="https://fonts.googleapis.com/css2?family=...">
+    <label>Font Family</label>
+    <input type="text" id="fontFamily" placeholder="'Cairo', sans-serif">
+    <button id="btnApplyGlobal">Apply Global Settings</button>
+    <hr>
+
+    <!-- Data Bindings -->
+    <h2>Data Bindings</h2>
+    <div class="row">
+        <select id="hiddenElementsSelect"></select>
+        <button id="btnAddElement" style="width:55px;">+ Add</button>
+    </div>
+    <hr>
+
+    <!-- Element Settings -->
+    <h2>Element Settings</h2>
+    <p id="noSelection" style="color:#666; font-size:12px; margin:0 0 8px;">Click an element on the canvas.</p>
+    <p class="hint">Press <kbd>Delete</kbd> or <kbd>Backspace</kbd> to remove selected element</p>
+    <div id="elementControls" style="display:none;">
+        <label>ID</label>
+        <input type="text" id="elId" readonly style="background:#222;">
+
+        <!-- Text controls -->
+        <div id="textControls">
+            <label>Text</label>
+            <input type="text" id="elText">
+            <label>Font Size (px)</label>
+            <input type="number" id="elFontSize" step="1" min="1">
+            <label>Color</label>
+            <input type="color" id="elColor">
+        </div>
+
+        <!-- Image controls -->
+        <div id="imageControls" style="display:none;">
+            <label>Image URL or /static/... path</label>
+            <input type="text" id="elSrc">
+            <div class="row">
+                <div><label>Width (px)</label><input type="number" id="elWidth" step="1" min="1"></div>
+                <div><label>Height (px)</label><input type="number" id="elHeight" step="1" min="1"></div>
+            </div>
+        </div>
+
+        <!-- Shared -->
+        <div class="row">
+            <div><label>X Center</label><input type="number" id="elX" step="1"></div>
+            <div><label>Y Center</label><input type="number" id="elY" step="1"></div>
+        </div>
+
+        <button class="danger" id="btnDeleteElement" style="margin-top:4px;">🙈 Hide Element</button>
+    </div>
+    <hr>
+
+    <button id="btnSync">⬆ Push to OBS</button>
+    <p id="statusMsg">Not connected</p>
+</div>
+
+<div id="main">
+    <div id="canvas-wrapper"></div>
+</div>
+
+<script>
+    let state = { elements: {} };
+    let selectedId = null;
+    let ws = null;
+    let currentScale = 1;
+    let isDragging = false;
+    let dragStartX = 0, dragStartY = 0;
+    const slot = new URLSearchParams(location.search).get('slot') || 'default';
+
+    // ─── WebSocket ──────────────────────────────────────────────────
+    function connectWs() {
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(`${proto}//${location.host}/ws/overlay/${encodeURIComponent(slot)}`);
+        ws.onopen = () => { setStatus(`Connected — Slot: ${slot}`); document.title = `Editor [${slot}]`; };
+        ws.onclose = () => { setStatus("Disconnected – retrying…"); setTimeout(connectWs, 3000); };
+        ws.onmessage = (e) => {
+            if (Object.keys(state.elements).length === 0) {
+                state = JSON.parse(e.data);
+                renderState();
+                fetchOverlays();
+            }
+        };
+    }
+
+    function setStatus(msg) { document.getElementById('statusMsg').innerText = msg; }
+
+    // ─── Font injection ─────────────────────────────────────────────
+    function injectFont(url) {
+        if (!url) return;
+        let link = document.getElementById('dyn-font') || document.createElement('link');
+        link.id = 'dyn-font'; link.rel = 'stylesheet';
+        if (link.href !== url) { link.href = url; document.head.appendChild(link); }
+    }
+
+    // ─── Render ─────────────────────────────────────────────────────
+    function renderState() {
+        document.getElementById('bgUrl').value = state.background_url || '';
+        document.getElementById('fontUrl').value = state.global_font_url || '';
+        document.getElementById('fontFamily').value = state.global_font_family || '';
+
+        const canvas = document.getElementById('canvas-wrapper');
+        canvas.style.backgroundImage = state.background_url ? `url('${state.background_url}')` : 'none';
+        if (state.global_font_url) injectFont(state.global_font_url);
+        if (state.global_font_family) canvas.style.fontFamily = state.global_font_family;
+
+        canvas.innerHTML = '';
+
+        for (const [id, p] of Object.entries(state.elements)) {
+            const isImg = p.type === 'image';
+            const isHidden = !p.visible && id !== selectedId;
+            if (isHidden) continue;
+
+            const el = document.createElement('div');
+            el.id = 'el_' + id;
+            el.className = 'el ' + (isImg ? 'img-el' : 'text-el');
+            if (id === selectedId) el.classList.add('selected');
+
+            el.style.left = `${p.x}px`;
+            el.style.top = `${p.y}px`;
+            if (!p.visible) el.style.opacity = '0.3';
+
+            if (isImg) {
+                el.style.width = `${p.width}px`;
+                el.style.height = `${p.height}px`;
+                const img = document.createElement('img');
+                img.src = p.src;
+                img.draggable = false;
+                el.appendChild(img);
+            } else {
+                el.style.fontSize = `${String(p.fontSize).replace('px','')}px`;
+                el.style.color = p.color;
+                el.innerText = p.text;
+            }
+
+            el.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                selectElement(id);
+                isDragging = true;
+                dragStartX = e.clientX;
+                dragStartY = e.clientY;
+            });
+            canvas.appendChild(el);
+        }
+        populateHiddenDropdown();
+        syncSidebarToSelected();
+    }
+
+    // ─── Custom drag ─────────────────────────────────────────────────
+    window.addEventListener('mousemove', (e) => {
+        if (!isDragging || !selectedId) return;
+        const dx = (e.clientX - dragStartX) / currentScale;
+        const dy = (e.clientY - dragStartY) / currentScale;
+        const p = state.elements[selectedId];
+        p.x += dx; p.y += dy;
+        dragStartX = e.clientX; dragStartY = e.clientY;
+        const el = document.getElementById('el_' + selectedId);
+        if (el) { el.style.left = `${p.x}px`; el.style.top = `${p.y}px`; }
+        document.getElementById('elX').value = Math.round(p.x);
+        document.getElementById('elY').value = Math.round(p.y);
+    });
+
+    window.addEventListener('mouseup', () => { if (isDragging) { isDragging = false; renderState(); } });
+
+    // ─── Select ──────────────────────────────────────────────────────
+    function selectElement(id) {
+        selectedId = id;
+        renderState(); // re-render first so DOM is up to date
+        syncSidebarToSelected();
+    }
+
+    function syncSidebarToSelected() {
+        if (!selectedId || !state.elements[selectedId]) return;
+        const p = state.elements[selectedId];
+        const isImg = p.type === 'image';
+
+        document.getElementById('noSelection').style.display = 'none';
+        document.getElementById('elementControls').style.display = 'block';
+        document.getElementById('textControls').style.display = isImg ? 'none' : 'block';
+        document.getElementById('imageControls').style.display = isImg ? 'block' : 'none';
+
+        document.getElementById('elId').value = selectedId;
+        document.getElementById('elX').value = Math.round(p.x);
+        document.getElementById('elY').value = Math.round(p.y);
+
+        if (isImg) {
+            document.getElementById('elSrc').value = p.src || '';
+            document.getElementById('elWidth').value = p.width || 100;
+            document.getElementById('elHeight').value = p.height || 100;
+        } else {
+            let fs = String(p.fontSize).replace('px', '');
+                document.getElementById('elFontSize').value = fs;
+            document.getElementById('elColor').value = p.color || '#ffffff';
+            document.getElementById('elText').value = p.text || '';
+        }
+    }
+
+    // ─── Update from sidebar ─────────────────────────────────────────
+    function updateSelected() {
+        if (!selectedId || !state.elements[selectedId]) return;
+        const p = state.elements[selectedId];
+        p.x = parseFloat(document.getElementById('elX').value) || 0;
+        p.y = parseFloat(document.getElementById('elY').value) || 0;
+
+        if (p.type === 'image') {
+            p.src = document.getElementById('elSrc').value;
+            p.width = parseFloat(document.getElementById('elWidth').value) || 100;
+            p.height = parseFloat(document.getElementById('elHeight').value) || 100;
+        } else {
+            p.text = document.getElementById('elText').value;
+            p.fontSize = parseFloat(document.getElementById('elFontSize').value) || 32;
+            p.color = document.getElementById('elColor').value;
+        }
+        renderState();
+    }
+
+    ['elText','elX','elY','elFontSize','elColor','elSrc','elWidth','elHeight']
+        .forEach(id => document.getElementById(id).addEventListener('input', updateSelected));
+
+    // ─── Scroll to adjust numbers ─────────────────────────────────────
+    function scrollAdjust(id, multiplier=1) {
+        document.getElementById(id).addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const step = e.shiftKey ? 10 : 1;
+            document.getElementById(id).value = (parseFloat(document.getElementById(id).value)||0) + (e.deltaY < 0 ? step : -step) * multiplier;
+            updateSelected();
+        }, { passive: false });
+    }
+    ['elX','elY','elFontSize','elWidth','elHeight'].forEach(id => scrollAdjust(id));
+
+    // ─── Delete element ───────────────────────────────────────────────
+    function deleteSelected() {
+        if (!selectedId || !state.elements[selectedId]) return;
+        // Hide it (don't remove) so it stays in the data bindings pool
+        state.elements[selectedId].visible = false;
+        selectedId = null;
+        document.getElementById('noSelection').style.display = 'block';
+        document.getElementById('elementControls').style.display = 'none';
+        renderState();
+    }
+
+    document.getElementById('btnDeleteElement').addEventListener('click', deleteSelected);
+
+    window.addEventListener('keydown', (e) => {
+        if (['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)) return;
+        if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) {
+            deleteSelected();
+        }
+    });
+
+    // ─── Hidden elements dropdown ─────────────────────────────────────
+    function populateHiddenDropdown() {
+        const select = document.getElementById('hiddenElementsSelect');
+        select.innerHTML = '';
+        let any = false;
+        for (const [id, p] of Object.entries(state.elements)) {
+            if (!p.visible) {
+                const opt = document.createElement('option');
+                opt.value = id; opt.text = id;
+                select.appendChild(opt); any = true;
+            }
+        }
+        document.getElementById('btnAddElement').disabled = !any;
+    }
+
+    document.getElementById('btnAddElement').addEventListener('click', () => {
+        const id = document.getElementById('hiddenElementsSelect').value;
+        if (id && state.elements[id]) {
+            state.elements[id].visible = true;
+            selectElement(id);
+        }
+    });
+
+    // ─── Global settings ─────────────────────────────────────────────
+    document.getElementById('btnApplyGlobal').addEventListener('click', () => {
+        state.background_url = document.getElementById('bgUrl').value;
+        state.global_font_url = document.getElementById('fontUrl').value;
+        state.global_font_family = document.getElementById('fontFamily').value;
+        renderState();
+    });
+
+    // ─── Push to OBS ─────────────────────────────────────────────────
+    document.getElementById('btnSync').addEventListener('click', () => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify(state));
+            setStatus("Pushed to OBS ✓");
+            setTimeout(() => setStatus("Connected to server"), 2000);
+        } else { alert("WebSocket not connected!"); }
+    });
+
+    // ─── DB Profiles ─────────────────────────────────────────────────
+    async function fetchOverlays() {
+        try {
+            const res = await fetch('/api/overlays');
+            const data = await res.json();
+            const select = document.getElementById('loadLayoutSelect');
+            select.innerHTML = '';
+            if (data.overlays && data.overlays.length > 0) {
+                data.overlays.forEach(ov => {
+                    const opt = document.createElement('option');
+                    opt.value = ov.name; opt.text = ov.name;
+                    select.appendChild(opt);
+                });
+            } else {
+                const opt = new Option("-- No saved profiles --", "");
+                opt.disabled = true; select.appendChild(opt);
+            }
+        } catch(e) { console.error(e); }
+    }
+
+    document.getElementById('btnSaveLayout').addEventListener('click', async () => {
+        const name = document.getElementById('saveLayoutName').value.trim();
+        if (!name) return alert("Enter a profile name.");
+        const res = await fetch('/api/overlays', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ name, config: state })
+        });
+        if (res.ok) { fetchOverlays(); setStatus(`Saved '${name}'`); }
+    });
+
+    document.getElementById('btnLoadLayout').addEventListener('click', async () => {
+        const name = document.getElementById('loadLayoutSelect').value;
+        if (!name) return;
+        const res = await fetch('/api/overlays');
+        const data = await res.json();
+        const profile = data.overlays.find(o => o.name === name);
+        if (profile) {
+            state = JSON.parse(profile.config);
+            selectedId = null;
+            document.getElementById('noSelection').style.display = 'block';
+            document.getElementById('elementControls').style.display = 'none';
+            renderState();
+        }
+    });
+
+    document.getElementById('btnDeleteLayout').addEventListener('click', async () => {
+        const name = document.getElementById('loadLayoutSelect').value;
+        if (!name || !confirm(`Delete profile '${name}'?`)) return;
+        const res = await fetch(`/api/overlays/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        if (res.ok) fetchOverlays();
+    });
+
+    // ─── Canvas resize ────────────────────────────────────────────────
+    function resizeCanvas() {
+        const wrapper = document.getElementById('canvas-wrapper');
+        const main = document.getElementById('main');
+        currentScale = Math.min((main.clientWidth - 40) / 1920, (main.clientHeight - 40) / 1080);
+        wrapper.style.transform = `scale(${currentScale})`;
+    }
+    window.addEventListener('resize', resizeCanvas);
+
+    connectWs();
+    resizeCanvas();
+</script>
+</body>
+</html>

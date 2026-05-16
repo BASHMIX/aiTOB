@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+  <title>FNC Tournament Hub</title>
+  <link rel="icon" type="image/x-icon" href="/assets/favicon.ico">
+  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            appDark: '#12161E',
+            cardDark: '#1A202C',
+            accentYellow: '#E2B714',
+            textLight: '#E2E8F0',
+            textDim: '#94A3B8',
+            btnActive: '#2C3A4F',
+            statusGreen: '#4ADE80',
+            statusRed: '#EF4444',
+            matchProgress: '#22C55E',
+            matchCalled: '#EAB308',
+            matchNotStarted: '#4F46E5',
+            matchComplete: '#4B5563',
+          },
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', 'Courier New', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+  <style data-purpose="custom-scrollbars">
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #1A202C; }
+    ::-webkit-scrollbar-thumb { background: #4B5563; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #6B7280; }
+  </style>
+  <style data-purpose="utility-classes">
+    .icon-btn { @apply p-1.5 rounded hover:bg-white/10 transition-colors text-textDim hover:text-white flex flex-col items-center justify-center gap-1 text-[10px]; }
+    .status-dot { @apply w-2 h-2 rounded-full; }
+    .empty { @apply text-center p-5 text-textDim text-sm; }
+  </style>
+</head>
+<body class="bg-appDark text-textLight font-sans min-h-screen flex flex-col p-4 gap-4">
+
+<!-- BEGIN: Header -->
+<header class="flex items-center justify-between gap-4 pb-2 border-b border-white/10">
+  <div class="flex items-center gap-3">
+    <div class="w-10 h-10 rounded overflow-hidden flex items-center justify-center">
+      <img src="/assets/favicon.ico" alt="Logo" class="w-full h-full object-contain">
+    </div>
+    <h1 class="text-2xl font-bold text-white tracking-wide">FNC Tournament Hub</h1>
+  </div>
+</header>
+<!-- END: Header -->
+
+<!-- BEGIN: Top Navigation Bar -->
+<nav class="bg-cardDark rounded-md p-3 flex flex-wrap items-center justify-between gap-4 text-sm shadow-md">
+  <div class="flex items-center gap-4 font-medium text-white">
+    <a class="hover:text-accentYellow transition-colors" href="#">[Login/Logout]</a>
+    <div class="flex items-center gap-2 border-l border-white/20 pl-4">
+      <span>Tournament:</span>
+      <select id="tourneySelect" class="bg-transparent border-none text-white focus:ring-0 text-sm p-0 cursor-pointer hover:text-accentYellow font-bold">
+        <option class="text-black" value="">[ Select Tournament ▼ ]</option>
+      </select>
+    </div>
+    <a class="border-l border-white/20 pl-4 hover:text-accentYellow transition-colors" href="#" onclick="togglePanel('settingsPanel')">Settings</a>
+  </div>
+  <div class="flex items-center gap-4 font-mono text-xs">
+    <span class="text-textDim">Status:</span>
+    <div class="flex items-center gap-2">
+      <span id="dotStartgg" class="status-dot bg-statusRed"></span>
+      <span>Start.gg API</span>
+    </div>
+    <div class="flex items-center gap-2 border-l border-white/20 pl-4">
+      <span id="dotBot" class="status-dot bg-statusRed"></span>
+      <span>Discord Bot</span>
+    </div>
+    <div class="flex items-center gap-2 border-l border-white/20 pl-4">
+      <span id="dotWs" class="status-dot bg-statusRed"></span>
+      <span class="text-textDim">WebSockets</span>
+    </div>
+  </div>
+</nav>
+<!-- END: Top Navigation Bar -->
+
+<!-- BEGIN: Main Content Area -->
+<main class="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
+
+  <!-- LEFT COLUMN -->
+  <div class="lg:col-span-6 xl:col-span-7 flex flex-col gap-4">
+    
+    <!-- BEGIN: Active Match Status -->
+    <section class="bg-cardDark rounded-lg p-4 shadow-md flex flex-col gap-3">
+      <h2 class="text-accentYellow font-bold text-lg tracking-wide uppercase border-b border-white/10 pb-2">Active Match Status</h2>
+      <div id="activeMatchCards" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+        <div class="empty col-span-full">No active matches. Assign sets from the Match Dashboard.</div>
+      </div>
+    </section>
+    <!-- END: Active Match Status -->
+
+    <!-- BEGIN: Active Streams Status -->
+    <section class="bg-cardDark rounded-lg p-4 shadow-md flex flex-col gap-3">
+      <div class="flex justify-between items-center border-b border-white/10 pb-2">
+        <h2 class="text-accentYellow font-bold text-lg tracking-wide uppercase">Active Streams Status</h2>
+        <div class="flex gap-3 text-xs font-medium text-textDim">
+          <button onclick="loadSavedStation()" class="hover:text-white transition-colors">Load Saved</button>
+          <button onclick="addStation()" class="hover:text-white transition-colors">Add Station</button>
+        </div>
+      </div>
+      <div id="stationsContainer" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="empty col-span-full">No stations</div>
+      </div>
+    </section>
+    <!-- END: Active Streams Status -->
+
+    <!-- BEGIN: Tournament Data & Registration -->
+    <section id="settingsPanel" class="bg-cardDark rounded-lg p-4 shadow-md flex flex-col md:flex-row gap-6">
+      <!-- Tournament Data Table -->
+      <div class="flex-1 flex flex-col gap-3">
+        <h2 class="text-accentYellow font-bold text-lg tracking-wide uppercase border-b border-white/10 pb-2">Tournament Data</h2>
+        <div class="flex justify-between items-center bg-appDark p-2 rounded border border-white/10">
+          <span class="text-sm font-mono truncate mr-2 text-textDim">Current Tournament</span>
+          <div class="flex gap-2">
+            <button onclick="refreshTournament()" class="bg-btnActive text-white text-xs px-3 py-1.5 rounded hover:bg-white/20 transition-colors flex items-center gap-1">
+              <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg> Refresh
+            </button>
+            <button onclick="deleteTournament()" class="bg-red-900/50 text-red-200 border border-red-800 text-xs px-3 py-1.5 rounded hover:bg-red-900 transition-colors flex items-center gap-1">
+              <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg> Remove
+            </button>
+          </div>
+        </div>
+        <div id="participantsContainer">
+          <div class="empty">Select a tournament</div>
+        </div>
+      </div>
+      <!-- Register Tournament -->
+      <div class="md:w-1/3 flex flex-col gap-3 pl-0 md:pl-4 border-t md:border-t-0 md:border-l border-white/10 pt-4 md:pt-0">
+        <h2 class="text-accentYellow font-bold text-lg tracking-wide uppercase border-b border-white/10 pb-2">Register Tournament</h2>
+        <div class="text-sm mb-1">Start.gg Tournament Slug</div>
+        <div class="flex gap-2">
+          <input id="slugInput" class="w-full bg-appDark border border-white/10 rounded px-3 py-1.5 text-sm text-white focus:border-accentYellow focus:ring-1 focus:ring-accentYellow" placeholder="e.g. tournament/slug" type="text"/>
+          <button onclick="addTournament()" class="bg-btnActive text-white text-xs px-3 py-1.5 rounded hover:bg-white/20 transition-colors whitespace-nowrap">
+            Add
+          </button>
+        </div>
+      </div>
+    </section>
+    <!-- END: Tournament Data & Registration -->
+
+  </div>
+  <!-- END LEFT COLUMN -->
+
+  <!-- MIDDLE COLUMN: Match Dashboard -->
+  <div class="lg:col-span-3 bg-cardDark rounded-lg shadow-md flex flex-col h-full max-h-[85vh]">
+    <div class="p-4 border-b border-white/10">
+      <h2 class="text-accentYellow font-bold text-lg tracking-wide uppercase text-center">Match Dashboard</h2>
+    </div>
+    <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-6">
+      
+      <!-- In Progress -->
+      <div class="flex flex-col gap-2">
+        <h3 class="text-matchProgress font-bold text-lg border-b border-white/10 pb-1">In Progress</h3>
+        <div id="mdInProgress" class="flex flex-col gap-2"></div>
+      </div>
+      
+      <!-- Players Called -->
+      <div class="flex flex-col gap-2">
+        <h3 class="text-matchCalled font-bold text-lg border-b border-white/10 pb-1">Players Called</h3>
+        <div id="mdCalled" class="flex flex-col gap-2"></div>
+      </div>
+      
+      <!-- Not Started -->
+      <div class="flex flex-col gap-2">
+        <h3 class="text-matchNotStarted font-bold text-lg border-b border-white/10 pb-1 text-[#7888af]">Not Started</h3>
+        <div id="mdNotStarted" class="flex flex-col gap-2"></div>
+      </div>
+      
+      <!-- Complete -->
+      <div class="flex flex-col gap-2">
+        <h3 class="text-matchComplete font-bold text-lg border-b border-white/10 pb-1">Complete</h3>
+        <div id="mdComplete" class="flex flex-col gap-2"></div>
+      </div>
+      
+    </div>
+  </div>
+  <!-- END MIDDLE COLUMN -->
+
+  <!-- RIGHT COLUMN -->
+  <div class="lg:col-span-3 xl:col-span-2 flex flex-col gap-4 h-full max-h-[85vh]">
+    
+    <!-- BEGIN: Conflicts & Alerts -->
+    <section class="bg-cardDark rounded-lg shadow-md flex-1 flex flex-col">
+      <div class="p-4 border-b border-white/10">
+        <h2 class="text-accentYellow font-bold text-sm tracking-wide uppercase text-center">Conflicts &amp; Alerts</h2>
+      </div>
+      <div id="conflictsContainer" class="p-4 flex-1 overflow-y-auto flex flex-col gap-4 text-sm">
+        <div class="empty">No conflicts</div>
+      </div>
+    </section>
+    <!-- END: Conflicts & Alerts -->
+
+    <!-- BEGIN: Bot Feed & Live Logs -->
+    <section class="bg-cardDark rounded-lg shadow-md flex-1 flex flex-col max-h-[40%]">
+      <div class="p-4 border-b border-white/10">
+        <h2 class="text-accentYellow font-bold text-sm tracking-wide uppercase text-center">Bot Feed &amp; Live Logs</h2>
+      </div>
+      <div id="botFeed" class="p-4 overflow-y-auto font-mono text-[10px] sm:text-xs text-textLight flex flex-col gap-1.5 leading-relaxed flex-1">
+      </div>
+      <div class="p-2 border-t border-white/10 flex gap-2">
+        <input id="botCommandInput" type="text" class="flex-1 bg-appDark border border-white/10 rounded px-2 py-1 text-xs text-white focus:border-accentYellow focus:ring-1 focus:ring-accentYellow" placeholder="Command the bot..." onkeypress="if(event.key==='Enter') sendBotCommand()">
+        <button onclick="sendBotCommand()" class="bg-btnActive text-white px-3 py-1 rounded text-xs hover:bg-white/20 transition-colors font-bold">Send</button>
+      </div>
+    </section>
+    <!-- END: Bot Feed & Live Logs -->
+
+  </div>
+  <!-- END RIGHT COLUMN -->
+
+</main>
+<!-- END: Main Content Area -->
+
+<!-- DQ Modal -->
+<div id="dqModal" class="fixed inset-0 bg-black/80 flex items-center justify-center hidden z-50">
+  <div class="bg-cardDark border border-white/10 rounded-lg p-6 flex flex-col gap-4 max-w-sm w-full mx-4 shadow-xl">
+    <h3 class="text-white font-bold text-lg text-center border-b border-white/10 pb-2">Disqualify Player</h3>
+    <p class="text-sm text-textDim text-center">Which player would you like to disqualify?</p>
+    <div class="flex gap-3 justify-center mt-2">
+      <button id="dqBtnP1" onclick="submitDq('p1')" class="flex-1 bg-red-900/50 hover:bg-red-800 text-red-200 border border-red-800 rounded py-2 transition-colors font-bold text-sm">P1</button>
+      <button id="dqBtnP2" onclick="submitDq('p2')" class="flex-1 bg-red-900/50 hover:bg-red-800 text-red-200 border border-red-800 rounded py-2 transition-colors font-bold text-sm">P2</button>
+    </div>
+    <button onclick="closeDqModal()" class="mt-2 text-textDim hover:text-white text-sm py-1.5 transition-colors font-bold">Cancel</button>
+  </div>
+</div>
+
+<script>
+function togglePanel(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.toggle('hidden');
+}
+function loadSavedStation() {
+  loadStations();
+}
+
+let tournaments=[],currentSlug=null,matches=[],stations=[],ws=null;
+
+// ── WebSocket ──
+function connectWs(){
+  const p=location.protocol==='https:'?'wss:':'ws:';
+  ws=new WebSocket(`${p}//${location.host}/ws/hub`);
+  ws.onopen=()=>{document.getElementById('dotWs').classList.replace('bg-statusRed', 'bg-statusGreen')};
+  ws.onclose=()=>{document.getElementById('dotWs').classList.replace('bg-statusGreen', 'bg-statusRed');setTimeout(connectWs,3000)};
+  ws.onmessage=(e)=>{
+    const d=JSON.parse(e.data);
+    if(d.type==='match_update')loadSets();
+    if(d.type==='conflict_update')loadConflicts();
+    if(d.type==='bot_feed')appendFeed(d.message,d.level);
+  };
+}
+
+// ── API helpers ──
+async function api(url,opts={}){const r=await fetch(url,{headers:{'Content-Type':'application/json'},...opts});return r.json()}
+
+// ── Status ──
+async function loadStatus(){
+  try{const s=await api('/api/status');
+    document.getElementById('dotStartgg').className='status-dot '+(s.startgg_api?'bg-statusGreen':'bg-statusRed');
+    document.getElementById('dotBot').className='status-dot bg-statusGreen';
+  }catch(e){document.getElementById('dotBot').className='status-dot bg-statusRed'}
+}
+
+// ── Tournaments ──
+async function loadTournaments(){
+  const d=await api('/api/tournaments');tournaments=d.tournaments||[];
+  const sel=document.getElementById('tourneySelect');sel.innerHTML='<option class="text-black" value="">[ Select Tournament ▼ ]</option>';
+  tournaments.forEach(t=>{const o=new Option(`[ ${t.name} ▼ ]`,t.slug); o.className="text-black"; sel.appendChild(o)});
+  if(currentSlug)sel.value=currentSlug;
+}
+document.getElementById('tourneySelect').onchange=e=>{currentSlug=e.target.value;if(currentSlug){loadSets();loadParticipants()}};
+async function addTournament(){
+  const s=document.getElementById('slugInput').value.trim();if(!s)return;
+  await api('/api/tournaments',{method:'POST',body:JSON.stringify({slug:s})});
+  document.getElementById('slugInput').value='';loadTournaments();
+}
+async function refreshTournament(){if(!currentSlug)return;await api(`/api/tournaments/${currentSlug}/refresh`);loadSets()}
+async function deleteTournament(){if(!currentSlug||!confirm('Remove?'))return;await api(`/api/tournaments/${currentSlug}`,{method:'DELETE'});currentSlug=null;loadTournaments()}
+
+// ── Participants ──
+async function loadParticipants(){
+  const c=document.getElementById('participantsContainer');
+  const t=tournaments.find(t=>t.slug===currentSlug);
+  if(!t||!t.raw_data){c.innerHTML='<div class="empty">No data</div>';return}
+  try{
+    const raw=JSON.parse(t.raw_data);
+    const ents=raw.mock?raw.entrants:raw.tournament?.events?.[0]?.entrants?.nodes||[];
+    if(!ents.length){c.innerHTML='<div class="empty">No participants</div>';return}
+    let h=`
+    <div class="border-b border-white/20 flex gap-4 text-sm font-medium text-textDim mb-2">
+      <button class="pb-1 text-white border-b-2 border-accentYellow">Participants</button>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-sm text-white">
+        <thead class="text-xs text-textDim uppercase bg-appDark/50">
+          <tr><th class="px-2 py-2">#</th><th class="px-2 py-2">Name</th><th class="px-2 py-2">Team</th><th class="px-2 py-2">Game</th></tr>
+        </thead>
+        <tbody>`;
+    ents.forEach((e,i)=>h+=`
+        <tr class="border-b border-white/5 hover:bg-white/5">
+          <td class="px-2 py-2">${i+1}</td>
+          <td class="px-2 py-2 font-medium">${e.name||e}</td>
+          <td class="px-2 py-2">—</td>
+          <td class="px-2 py-2 text-textDim text-xs">${t.game||'—'}</td>
+        </tr>`);
+    c.innerHTML=h+'</tbody></table></div>';
+  }catch(e){c.innerHTML='<div class="empty">Parse error</div>'}
+}
+
+// ── Sets / Match Dashboard ──
+async function loadSets(){
+  if(!currentSlug)return;
+  const d=await api(`/api/tournaments/${currentSlug}/sets`);
+  const sets=d.sets||[];
+  await loadMatches();
+  
+  const activeSets=new Set(matches.map(m=>m.set_id));
+  
+  // Handle sets already completed on Start.gg
+  const externalComplete = sets.filter(s => s.state === 3 && !activeSets.has(s.id));
+  externalComplete.forEach(s => {
+    const isDq = s.score && s.score.includes('DQ');
+    matches.push({
+      set_id: s.id,
+      p1_name: s.p1,
+      p2_name: s.p2,
+      p1_entrant_id: s.p1_eid,
+      p2_entrant_id: s.p2_eid,
+      status: isDq ? 'dq' : 'complete',
+      is_external: true,
+      round_name: s.round
+    });
+  });
+  
+  // Update dashboard rendering with the external matches included
+  renderDashboard();
+
+  const ns=document.getElementById('mdNotStarted');
+  const unassigned=sets.filter(s=> s.state !== 3 && !activeSets.has(s.id));
+  if(!unassigned.length){ns.innerHTML='<div class="empty">All sets assigned</div>';return}
+  ns.innerHTML=unassigned.map(s=>{
+    const p1str = (s.p1||'TBD').replace(/'/g,"\\'").replace(/"/g,"&quot;");
+    const p2str = (s.p2||'TBD').replace(/'/g,"\\'").replace(/"/g,"&quot;");
+    return `
+    <div onclick="openMatch('${s.id}','${p1str}','${p2str}','${s.round}','${s.p1_eid||""}','${s.p2_eid||""}')" class="flex items-center bg-[#2d3a5a] border border-[#3b4b72] rounded overflow-hidden cursor-pointer hover:bg-[#3b4b72] transition-colors">
+      <div class="bg-[#1e2740] text-[#7888af] px-3 py-2 font-mono text-xs font-bold border-r border-[#3b4b72] w-12 text-center">${s.id.replace('mock_','')}</div>
+      <div class="flex-1 px-3 py-2 text-sm font-bold text-white truncate">${s.p1||'TBD'} VS ${s.p2||'TBD'}</div>
+    </div>`}).join('');
+}
+
+function openMatch(setId,p1,p2,round,p1e,p2e){
+  if(!confirm(`Add "${p1} vs ${p2}" to active matches?`))return;
+  api('/api/active-matches',{method:'POST',body:JSON.stringify({
+    set_id:setId,tournament_slug:currentSlug,p1_name:p1,p2_name:p2,round_name:round,
+    p1_entrant_id:p1e,p2_entrant_id:p2e,status:'called',match_number:setId.replace('mock_','')
+  })}).then(()=>{loadSets();});
+}
+
+// ── Active Matches ──
+async function loadMatches(){
+  const url = '/api/active-matches' + (currentSlug ? `?tournament_slug=${currentSlug}` : '');
+  const d=await api(url);matches=d.matches||[];
+  renderMatchCards();renderDashboard();
+}
+
+function renderMatchCards(){
+  const c=document.getElementById('activeMatchCards');
+  const live=matches.filter(m=>m.status==='in_progress'||m.status==='called');
+  if(!live.length){c.innerHTML='<div class="empty col-span-full">No active matches</div>';return}
+  
+  c.innerHTML=live.map(m=>{
+    const isLive=m.station_id;
+    return `<div class="bg-appDark border border-white/10 rounded p-3 flex flex-col gap-2 ${!isLive ? 'opacity-70' : ''}">
+      <div class="flex justify-between items-center text-xs mb-1">
+        <span class="font-bold">Match#: ${m.match_number||m.set_id}</span>
+        <div class="flex items-center gap-1.5">
+          <span class="status-dot ${isLive ? 'bg-statusGreen' : 'bg-textDim'}"></span>
+          <span class="${isLive ? 'text-statusGreen' : 'text-textDim'} font-bold">LIVE ON</span>
+        </div>
+      </div>
+      <div class="flex justify-between items-center text-xs text-textDim mb-2">
+        <span>Round: ${m.round_name}</span>
+        <select onchange="assignStation('${m.set_id}',this.value)" class="bg-cardDark border border-white/20 rounded px-1 py-0.5 text-xs ${isLive ? 'text-white' : 'text-textDim'}">
+          <option value="">—</option>
+          ${stations.map(s=>`<option value="${s.id}" ${m.station_id===s.id?'selected':''}>${s.name}</option>`).join('')}
+        </select>
+      </div>
+      <div class="flex flex-col gap-1.5">
+        <div class="flex items-center justify-between bg-cardDark rounded p-1.5">
+          <div class="flex items-center gap-2">
+            <span class="text-accentYellow font-bold text-xs">P1</span>
+            <div class="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center overflow-hidden"><img src="/static/player_placeholder.svg" class="w-full h-full object-cover"></div>
+            <div class="flex flex-col">
+              <span class="text-sm font-bold leading-tight text-white">${m.p1_name}</span>
+              <span class="text-[9px] text-textDim flex items-center gap-1">🚩 [${m.p1_team||'Team'}]</span>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <button class="icon-btn px-1 py-0 border border-white/20" onclick="changeScore('${m.set_id}','p1',-1)">-</button>
+            <div class="bg-white text-black font-bold text-lg px-2 rounded leading-none flex items-center justify-center">${m.p1_score}</div>
+            <button class="icon-btn px-1 py-0 border border-white/20" onclick="changeScore('${m.set_id}','p1',1)">+</button>
+          </div>
+        </div>
+        <div class="flex items-center justify-between bg-cardDark rounded p-1.5 border border-white/5">
+          <div class="flex items-center gap-2">
+            <span class="text-accentYellow font-bold text-xs">P2</span>
+            <div class="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center overflow-hidden"><img src="/static/player_placeholder.svg" class="w-full h-full object-cover"></div>
+            <div class="flex flex-col">
+              <span class="text-sm font-bold leading-tight text-white">${m.p2_name}</span>
+              <span class="text-[9px] text-textDim flex items-center gap-1">🚩 [${m.p2_team||'Team'}]</span>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <button class="icon-btn px-1 py-0 border border-white/20" onclick="changeScore('${m.set_id}','p2',-1)">-</button>
+            <div class="bg-white text-black font-bold text-lg px-2 rounded leading-none flex items-center justify-center">${m.p2_score}</div>
+            <button class="icon-btn px-1 py-0 border border-white/20" onclick="changeScore('${m.set_id}','p2',1)">+</button>
+          </div>
+        </div>
+      </div>
+      <div class="flex justify-between items-center mt-2 pt-2 border-t border-white/10">
+        <button onclick="dqMatch('${m.set_id}', '${(m.p1_name||'TBD').replace(/'/g,"\\'").replace(/"/g,"&quot;")}', '${(m.p2_name||'TBD').replace(/'/g,"\\'").replace(/"/g,"&quot;")}')" class="icon-btn text-statusRed hover:text-red-400"><span class="font-bold">DQ</span></button>
+        <button onclick="toggleBot('${m.set_id}',${!m.bot_enabled})" class="icon-btn ${m.bot_enabled?'text-white':'text-textDim'}"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>Bot</button>
+        <button onclick="swapPlayers('${m.set_id}')" class="icon-btn ${m.swapped?'text-accentYellow':'text-white'}"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>Swap</button>
+        <button onclick="sendMatch('${m.set_id}')" class="icon-btn text-white"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>Send</button>
+        <button onclick="deleteMatch('${m.set_id}')" class="icon-btn text-textDim hover:text-red-400" title="Remove Match"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg></button>
+      </div>
+    </div>`}).join('');
+}
+
+function renderDashboard(){
+  const groups={in_progress:[],called:[],not_started:[],complete:[],dq:[]};
+  matches.forEach(m=>(groups[m.status]||groups.not_started).push(m));
+  
+  ['in_progress','called','complete'].forEach(status=>{
+    const id={in_progress:'mdInProgress',called:'mdCalled',complete:'mdComplete'}[status];
+    const styles={
+      in_progress:{bg:'bg-matchProgress/20',border:'border-matchProgress/40',text:'text-matchProgress',numBg:'bg-matchProgress/30'},
+      called:{bg:'bg-matchCalled/20',border:'border-matchCalled/40',text:'text-matchCalled',numBg:'bg-matchCalled/30'},
+      complete:{bg:'bg-appDark opacity-60',border:'border-white/10',text:'text-textDim',numBg:'bg-white/5'}
+    }[status];
+    const el=document.getElementById(id);if(!el)return;
+    const list=status==='complete'?(groups.complete||[]).concat(groups.dq||[]):(groups[status]||[]);
+    if(!list.length){el.innerHTML=`<div class="empty">—</div>`;return}
+    el.innerHTML=list.map(m=>`
+      <div class="flex items-center ${styles.bg} border ${styles.border} rounded overflow-hidden group">
+        <div class="${styles.numBg} ${styles.text} px-3 py-2 font-mono text-xs font-bold border-r ${styles.border} w-12 text-center">${m.match_number||'—'}</div>
+        <div class="flex-1 px-3 py-2 text-sm font-bold text-white truncate">${m.p1_name} VS ${m.p2_name} ${m.status==='dq'?'<span class="text-statusRed ml-2">(DQ)</span>':''}</div>
+          ${status==='complete' ?`<button onclick="resetMatch('${m.set_id}')" class="p-1 text-textDim hover:text-accentYellow" title="Reset Match on Start.gg"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg></button>`:''}
+          ${!m.is_external ? `<button onclick="deleteMatch('${m.set_id}')" class="p-1 text-textDim hover:text-statusRed" title="Delete Match Record"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg></button>` : ''}
+        </div>
+      </div>`).join('');
+  });
+}
+
+
+async function resetMatch(setId){
+  const m = matches.find(x => x.set_id === setId);
+  if(!m) return;
+  if(!confirm("Are you sure you want to RESET this match on Start.gg? This will wipe the result and immediately move it to Active Matches so you can fix it."))return;
+  
+  const res = await api(`/api/active-matches/${setId}/reset`, {method:'POST'});
+  if (res && res.error) {
+    alert(res.message);
+    return;
+  }
+  
+  await api('/api/active-matches',{method:'POST',body:JSON.stringify({
+    set_id: setId,
+    tournament_slug: currentSlug,
+    p1_name: m.p1_name,
+    p2_name: m.p2_name,
+    round_name: m.round_name,
+    p1_entrant_id: m.p1_entrant_id || '',
+    p2_entrant_id: m.p2_entrant_id || '',
+    status: 'in_progress',
+    match_number: setId.replace('mock_','')
+  })});
+  
+  loadSets();
+}
+
+async function deleteMatch(setId){
+  if(!confirm("Are you sure you want to completely remove this match from the dashboard? It will return to the 'Not Started' pool."))return;
+  await api(`/api/active-matches/${setId}`, {method:'DELETE'});
+  loadSets();
+}
+
+async function changeScore(setId,player,delta){
+  const m=matches.find(m=>m.set_id===setId);if(!m)return;
+  const key=player+'_score';const nv=Math.max(0,(m[key]||0)+delta);
+  await api(`/api/active-matches/${setId}`,{method:'PATCH',body:JSON.stringify({[key]:nv})});
+}
+async function assignStation(setId,stationId){
+  await api(`/api/active-matches/${setId}`,{method:'PATCH',body:JSON.stringify({station_id:stationId||null,status:stationId?'in_progress':'called'})});
+}
+async function swapPlayers(setId){
+  const m=matches.find(m=>m.set_id===setId);if(!m)return;
+  await api(`/api/active-matches/${setId}`,{method:'PATCH',body:JSON.stringify({swapped:!m.swapped})});
+}
+async function toggleBot(setId,val){
+  await api(`/api/active-matches/${setId}`,{method:'PATCH',body:JSON.stringify({bot_enabled:val})});
+}
+async function sendMatch(setId){
+  if(!confirm('Send results to Start.gg and close match?'))return;
+  const res = await api(`/api/active-matches/${setId}/send`,{method:'POST'});
+  if (res && res.error) {
+    alert(res.message);
+  } else if (res && res.detail) {
+    alert("Error: " + res.detail);
+  } else {
+    loadSets();
+  }
+}
+
+let currentDqSetId = null;
+function dqMatch(setId, p1Name, p2Name) {
+  currentDqSetId = setId;
+  document.getElementById('dqBtnP1').innerText = `P1 (${p1Name})`;
+  document.getElementById('dqBtnP2').innerText = `P2 (${p2Name})`;
+  document.getElementById('dqModal').classList.remove('hidden');
+}
+function closeDqModal() {
+  document.getElementById('dqModal').classList.add('hidden');
+  currentDqSetId = null;
+}
+async function submitDq(player) {
+  if(!currentDqSetId) return;
+  await api(`/api/active-matches/${currentDqSetId}/dq`,{method:'POST',body:JSON.stringify({player:player})});
+  closeDqModal();
+}
+
+// ── Stations ──
+async function loadStations(){
+  const d=await api('/api/stations');stations=d.stations||[];
+  const c=document.getElementById('stationsContainer');
+  if(!stations.length){c.innerHTML='<div class="empty col-span-full">No stations</div>';return}
+  c.innerHTML=stations.map(s=>{
+    const ovs=(s.overlays||[]).map(o=>`
+      <li class="flex justify-between items-center group border-t border-white/5 pt-2">
+        <span>${o.overlay_name}</span>
+        <div class="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button onclick="removeOverlay('${s.id}','${o.overlay_name}')" class="text-statusRed hover:text-red-400"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></button>
+          <button onclick="copyLink('${s.id}')" class="text-textDim hover:text-white"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></button>
+          <button onclick="window.open('/admin/editor?slot=${s.id}')" class="text-textDim hover:text-white"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></button>
+        </div>
+      </li>`).join('');
+    return `<div class="border border-white/20 rounded-lg p-3 bg-appDark">
+      <div class="flex justify-between items-center mb-3 pb-2 border-b border-white/10">
+        <div class="flex items-center gap-2">
+          <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+          <h3 class="font-bold text-white focus:outline-none focus:border-b" contenteditable onblur="renameStation('${s.id}',this.innerText)">${s.name}</h3>
+        </div>
+        <div class="flex gap-2 text-textDim">
+          <button onclick="window.open('/admin/editor?slot=${s.id}')" class="hover:text-white"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></button>
+          <button onclick="removeStation('${s.id}')" class="hover:text-statusRed"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path><path d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg></button>
+        </div>
+      </div>
+      <div class="text-xs text-center text-textDim mb-2">Stream Overlays</div>
+      <ul class="flex flex-col gap-2 text-sm text-white">
+        ${ovs}
+      </ul>
+      <button onclick="addOverlayToStation('${s.id}')" class="w-full mt-3 py-1.5 text-xs text-textDim hover:text-white border border-dashed border-white/20 rounded flex justify-center items-center gap-1 transition-colors">
+        <span>+ Add Overlay</span>
+      </button>
+    </div>`}).join('');
+}
+
+async function addStation(){
+  const name=prompt('Station name:');if(!name)return;
+  const id='station_'+Date.now();
+  await api('/api/stations',{method:'POST',body:JSON.stringify({id,name})});loadStations();
+}
+async function removeStation(id){if(!confirm('Remove station?'))return;await api(`/api/stations/${id}`,{method:'DELETE'});loadStations()}
+async function renameStation(id,name){await api(`/api/stations/${id}`,{method:'PATCH',body:JSON.stringify({name:name.trim()})})}
+async function addOverlayToStation(sid){
+  const ovs=await api('/api/overlays');const names=(ovs.overlays||[]).map(o=>o.name);
+  const name=prompt('Overlay name to add:\n'+names.join(', '));if(!name)return;
+  await api(`/api/stations/${sid}/overlays`,{method:'POST',body:JSON.stringify({overlay_name:name})});loadStations();
+}
+async function removeOverlay(sid,oname){await api(`/api/stations/${sid}/overlays/${oname}`,{method:'DELETE'});loadStations()}
+function copyLink(slot){navigator.clipboard.writeText(`${location.origin}/obs?slot=${slot}`);alert('OBS link copied!')}
+
+// ── Conflicts ──
+async function loadConflicts(){
+  const d=await api('/api/conflicts');const conflicts=d.conflicts||[];
+  const c=document.getElementById('conflictsContainer');
+  if(!conflicts.length){c.innerHTML='<div class="empty">No conflicts</div>';return}
+  c.innerHTML=conflicts.map(cf=>`
+    <div class="bg-appDark border border-red-500/30 rounded p-3 text-white">
+      <div class="font-bold text-red-400 mb-2">Match #${cf.set_id} - Conflict!</div>
+      <div class="ml-4 font-mono text-xs mb-3 text-textLight">
+        1-P1 claims: ${cf.p1_claim||'—'}<br/>
+        2-P2 claims: ${cf.p2_claim||'—'}
+      </div>
+      <div class="flex gap-2 justify-center text-xs">
+        <button onclick="resolveConflict(${cf.id},'accept_p1')" class="bg-white/10 hover:bg-white/20 px-2 py-1 rounded transition-colors">Accept 1</button>
+        <button onclick="resolveConflict(${cf.id},'accept_p2')" class="bg-white/10 hover:bg-white/20 px-2 py-1 rounded transition-colors">Accept 2</button>
+        <button onclick="resolveConflict(${cf.id},'dismissed')" class="bg-btnActive hover:bg-white/20 px-2 py-1 rounded transition-colors">Dismiss</button>
+      </div>
+    </div>`).join('');
+}
+async function resolveConflict(id,res){
+  await api(`/api/conflicts/${id}/resolve`,{method:'POST',body:JSON.stringify({resolution:res})});
+}
+
+// ── Bot Feed ──
+async function loadFeed(){
+  const d=await api('/api/bot-feed');const feed=d.feed||[];
+  const c=document.getElementById('botFeed');
+  c.innerHTML=feed.reverse().map(f=>`
+    <p><span class="text-textDim">[${f.timestamp?.substring(11,16)||'—'}] </span><span class="${f.level==='warn'?'text-statusRed':''}">${f.message}</span></p>
+  `).join('');
+}
+function appendFeed(msg,level){
+  const c=document.getElementById('botFeed');
+  const t=new Date().toLocaleTimeString().substring(0,5);
+  c.innerHTML+=`<p><span class="text-textDim">[${t}] </span><span class="${level==='warn'?'text-statusRed':''}">${msg}</span></p>`;
+  c.scrollTop=c.scrollHeight;
+}
+async function sendBotCommand() {
+  const inp = document.getElementById('botCommandInput');
+  const cmd = inp.value.trim();
+  if(!cmd) return;
+  inp.value = '';
+  await api('/api/bot-command', {method:'POST', body:JSON.stringify({command: cmd})});
+}
+
+// ── Init ──
+connectWs();loadStatus();loadTournaments();loadStations();loadConflicts();loadFeed();loadMatches();
+setInterval(loadStatus,30000);
+</script>
+</body>
+</html>

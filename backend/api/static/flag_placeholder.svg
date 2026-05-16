@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80">
+  <rect width="120" height="80" fill="#1a1a2e" rx="6"/>
+  <rect x="10" y="10" width="100" height="60" fill="#2d2d4e" rx="4"/>
+  <!-- Flag pole -->
+  <rect x="28" y="15" width="3" height="48" fill="#6a6a8a"/>
+  <!-- Flag waves -->
+  <path d="M 31 18 Q 55 14 79 18 Q 55 22 31 26 Z" fill="#4a4a6a"/>
+  <path d="M 31 26 Q 55 22 79 26 Q 55 30 31 34 Z" fill="#5a5a7a"/>
+  <!-- Question mark -->
+  <text x="78" y="62" font-family="Arial" font-size="28" fill="#6a6a9a" text-anchor="middle">?</text>
+</svg>
