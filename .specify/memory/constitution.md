@@ -1,50 +1,49 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+<!--
+SYNC IMPACT REPORT
+Version: 1.0.0 (Initial Draft for AI Tournament Organizer)
+Modified Principles: N/A (Initial Template population)
+Added Sections:
+  - I. Asynchronous Architecture First
+  - II. Stateful Event-Driven Agents
+  - III. Strict AI Interfaces
+  - IV. Resilient API Integrations
+  - V. Clear Observability & Real-time UI
+Removed Sections: All placeholder principles.
+Templates requiring updates:
+  - .specify/templates/plan-template.md (✅ updated conceptually / no hardcoded principle links found)
+  - .specify/templates/spec-template.md (✅)
+  - .specify/templates/tasks-template.md (✅)
+Deferred Items: None.
+-->
+# AI Tournament Organizer Bot Constitution
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### I. Asynchronous Architecture First
+All I/O bound operations (Database, API calls, Discord bot events) MUST be asynchronous using frameworks like `discord.py`, `aiosqlite`, `httpx`, and `FastAPI`. Blocking the main event loop is strictly prohibited as it will cause bot latency and missed events.
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+### II. Stateful Event-Driven Agents
+Complex workflows involving human interaction (e.g., match moderation in Discord threads) MUST use stateful agent architectures. specifically LangGraph with `MemorySaver` to persist and resume state accurately when waiting for user inputs.
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+### III. Strict AI Interfaces
+All Large Language Model (LLM) outputs intended for system logic MUST be constrained using strict schemas (e.g., Pydantic models with `structured_output`). Unstructured text parsing for critical logic or state updates is not allowed.
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+### IV. Resilient API Integrations
+All external API calls (especially Start.gg GraphQL API) MUST include proper rate-limit handling, exception catching, and retry mechanisms. The bot must fail gracefully on API timeouts without crashing the agent process.
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+### V. Clear Observability & Real-time UI
+The backend MUST aggregate logs with clear color-coding for different services (via `run.py`). The frontend (React/Vite/Tailwind) MUST provide real-time status feedback (e.g. WebSocket or polling) for all significant events without requiring manual page reloads.
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+## Development Constraints
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
-
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
-
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+- **Python Environment**: Python 3.10+ required.
+- **Frontend Stack**: React, TypeScript, Vite, Tailwind CSS.
+- **Data Persistence**: `aiosqlite` for fast, async, non-blocking local storage. No heavy databases (like Postgres) unless explicitly required for future scaling.
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+- All pull requests and feature additions must adhere to the asynchronous and stateful principles outlined above.
+- Amendments require documentation and approval before implementation.
+- Breaking changes to the database schema require a documented migration plan.
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+**Version**: 1.0.0 | **Ratified**: 2026-05-16 | **Last Amended**: 2026-05-16

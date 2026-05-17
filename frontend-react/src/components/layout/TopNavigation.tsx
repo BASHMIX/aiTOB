@@ -43,10 +43,17 @@ export function TopNavigation() {
     }
   };
 
+  const logout = useHubStore(state => state.logout);
+
   return (
     <nav className="bg-cardDark rounded-md p-3 flex flex-wrap items-center justify-between gap-4 text-sm shadow-md">
       <div className="flex items-center gap-4 font-medium text-white">
-        <a className="hover:text-accentYellow transition-colors" href="#">[Login/Logout]</a>
+        <button 
+          onClick={logout}
+          className="text-textDim hover:text-accentYellow transition-colors flex items-center gap-2"
+        >
+          <span>🚪</span> Logout
+        </button>
         <div className="flex items-center gap-2 border-l border-white/20 pl-4">
           <span>Tournament:</span>
           <select 

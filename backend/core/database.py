@@ -16,7 +16,9 @@ async def init_db():
                 country TEXT,
                 team TEXT,
                 avatar_path TEXT,
-                is_verified BOOLEAN DEFAULT FALSE
+                is_verified BOOLEAN DEFAULT FALSE,
+                registration_step TEXT DEFAULT 'startgg_linked',
+                preferred_language TEXT DEFAULT 'ar'
             )
         ''')
         await db.execute('''
@@ -35,6 +37,9 @@ async def init_db():
                 game TEXT,
                 stream_slot TEXT,
                 raw_data TEXT,
+                dq_timer_seconds INTEGER DEFAULT 600,
+                auto_dq_enabled BOOLEAN DEFAULT TRUE,
+                registration_deadline TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
@@ -78,6 +83,7 @@ async def init_db():
                 p1_name TEXT, p1_score INTEGER DEFAULT 0,
                 p2_name TEXT, p2_score INTEGER DEFAULT 0,
                 p1_entrant_id TEXT, p2_entrant_id TEXT,
+                p1_avatar TEXT, p2_avatar TEXT,
                 p1_discord TEXT, p2_discord TEXT,
                 p1_team TEXT, p2_team TEXT,
                 p1_country TEXT, p2_country TEXT,
@@ -157,6 +163,13 @@ async def init_db():
             "ALTER TABLE tournaments ADD COLUMN auto_dq_enabled BOOLEAN DEFAULT TRUE",
             # players new columns
             "ALTER TABLE players ADD COLUMN preferred_language TEXT DEFAULT 'ar'",
+            "ALTER TABLE players ADD COLUMN registration_step TEXT DEFAULT 'startgg_linked'",
+            # tournaments new columns
+            "ALTER TABLE tournaments ADD COLUMN registration_deadline TIMESTAMP",
+            "ALTER TABLE active_matches ADD COLUMN p1_avatar TEXT",
+            "ALTER TABLE active_matches ADD COLUMN p2_avatar TEXT",
+            "ALTER TABLE active_matches ADD COLUMN lobby_password TEXT",
+            "ALTER TABLE active_matches ADD COLUMN discord_thread_id TEXT",
         ]
         for m in migrations:
             try:
@@ -360,19 +373,29 @@ async def get_active_match(set_id: str):
 
 async def upsert_active_match(set_id: str, **kwargs):
     async with aiosqlite.connect(DB_PATH) as db:
+        # Get valid columns
+        valid_cols = []
+        async with db.execute("PRAGMA table_info(active_matches)") as cursor:
+            info = await cursor.fetchall()
+            valid_cols = [row[1] for row in info]
+        
+        # Filter kwargs
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_cols}
+        
         existing = None
         async with db.execute("SELECT set_id FROM active_matches WHERE set_id = ?", (set_id,)) as c:
             existing = await c.fetchone()
+            
         if existing:
-            if kwargs:
-                set_clause = ', '.join([f"{k} = ?" for k in kwargs.keys()])
-                values = list(kwargs.values()) + [set_id]
-                await db.execute(f"UPDATE active_matches SET {set_clause} WHERE set_id = ?", values)
+            if filtered_kwargs:
+                set_clause = ', '.join([f'"{k}" = ?' for k in filtered_kwargs.keys()])
+                values = list(filtered_kwargs.values()) + [set_id]
+                await db.execute(f'UPDATE active_matches SET {set_clause} WHERE set_id = ?', values)
         else:
-            kwargs['set_id'] = set_id
-            cols = ', '.join(kwargs.keys())
-            placeholders = ', '.join(['?'] * len(kwargs))
-            await db.execute(f"INSERT INTO active_matches ({cols}) VALUES ({placeholders})", list(kwargs.values()))
+            filtered_kwargs['set_id'] = set_id
+            cols = ', '.join([f'"{k}"' for k in filtered_kwargs.keys()])
+            placeholders = ', '.join(['?'] * len(filtered_kwargs))
+            await db.execute(f"INSERT INTO active_matches ({cols}) VALUES ({placeholders})", list(filtered_kwargs.values()))
         await db.commit()
 
 async def delete_active_match(set_id: str):
@@ -390,8 +413,6 @@ async def sync_active_matches(tournament_slug: str, startgg_sets: list):
             rows = await cursor.fetchall()
             local_matches = {row[0]: row[1] for row in rows}
             
-        to_delete = []
-        to_complete = []
         found_sids = set()
         
         for s in startgg_sets:
@@ -399,44 +420,73 @@ async def sync_active_matches(tournament_slug: str, startgg_sets: list):
             state = s.get("state")
             found_sids.add(sid)
             
-            if sid not in local_matches:
-                continue
-                
-            local_status = local_matches[sid]
-            
-            # 1. Match was reset or is not started on Start.gg
-            if state in [1, 4] and local_status in ['complete', 'dq']:
-                to_delete.append(sid)
-            
-            # 2. Match is complete on Start.gg
-            elif state in [3, 6] and local_status not in ['complete', 'dq']:
-                to_complete.append(sid)
-        
-        # 3. Detect Orphans (matches in DB but not on Start.gg anymore)
-        # We only do this if we received a decent number of sets (to avoid pagination issues)
-        # and we know they aren't in the list.
-        for sid in local_matches:
-            if sid not in found_sids:
-                # If we have < 500 sets, we likely have the full list from start.gg
-                # If it's missing, it's probably an orphan from a reset.
-                if len(startgg_sets) < 490: 
-                    to_delete.append(sid)
+            p1_name = s.get("p1", "TBD")
+            p2_name = s.get("p2", "TBD")
+            p1_avatar = s.get("p1_avatar")
+            p1_avatar = s.get("p1_avatar")
+            p2_avatar = s.get("p2_avatar")
+            p1_eid = s.get("p1_eid")
+            p2_eid = s.get("p2_eid")
+            # Use flattened fields from startgg_client
+            round_name = s.get("round") or s.get("fullRoundText") or ""
+            match_num = s.get("identifier")
+            phase_group = s.get("phaseGroup") or ""
 
-        if to_delete:
-            placeholders = ','.join(['?'] * len(to_delete))
-            await db.execute(f"DELETE FROM active_matches WHERE set_id IN ({placeholders})", list(set(to_delete)))
+            if sid in local_matches:
+                local_status = local_matches[sid]
+                # Update status if changed on Start.gg
+                new_status = local_status
+                if state in [3, 6] and local_status not in ['complete', 'dq']:
+                    new_status = 'complete'
+                elif state in [1, 4] and local_status in ['complete', 'dq']:
+                    new_status = 'not_started'
+                
+                await db.execute("""
+                    UPDATE active_matches SET 
+                        p1_name=?, p2_name=?, p1_avatar=?, p2_avatar=?, 
+                        round_name=?, match_number=?, phase_group=?, status=?
+                    WHERE set_id=?
+                """, (p1_name, p2_name, p1_avatar, p2_avatar, round_name, match_num, str(phase_group), new_status, sid))
+            else:
+                # Auto-add matches that are Ready (4), In Progress (2), or Called (6)
+                if state in [2, 4, 6]:
+                    status = 'called' if state == 6 else ('in_progress' if state == 2 else 'not_started')
+                    await db.execute("""
+                        INSERT INTO active_matches (
+                            set_id, tournament_slug, p1_name, p2_name, p1_avatar, p2_avatar,
+                            p1_entrant_id, p2_entrant_id, round_name, match_number, phase_group, status
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (sid, tournament_slug, p1_name, p2_name, p1_avatar, p2_avatar, p1_eid, p2_eid, round_name, match_num, str(phase_group), status))
         
-        if to_complete:
-            placeholders = ','.join(['?'] * len(to_complete))
-            await db.execute(f"UPDATE active_matches SET status = 'complete' WHERE set_id IN ({placeholders})", list(set(to_complete)))
-            
-        if to_delete or to_complete:
-            await db.commit()
+        # 3. Detect Orphans
+        if len(startgg_sets) < 490: 
+            for sid in list(local_matches.keys()):
+                if sid not in found_sids:
+                    await db.execute("DELETE FROM active_matches WHERE set_id = ?", (sid,))
+
+        await db.commit()
 
 async def delete_tournament_active_matches(slug: str):
     """Wipes all local active matches for a specific tournament."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("DELETE FROM active_matches WHERE tournament_slug = ?", (slug,))
+        await db.commit()
+
+async def delete_active_match(set_id: str):
+    """Deletes a single active match from the local database."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM active_matches WHERE set_id = ?", (set_id,))
+        await db.commit()
+
+
+async def update_active_match(match_id: str, **kwargs):
+    if not kwargs:
+        return
+    keys = ", ".join([f"{k} = ?" for k in kwargs.keys()])
+    values = list(kwargs.values())
+    values.append(match_id)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(f"UPDATE active_matches SET {keys} WHERE set_id = ?", values)
         await db.commit()
 
 async def get_player_override(entrant_id: str):
@@ -606,6 +656,15 @@ async def get_pending_hub_commands():
             "SELECT * FROM hub_commands WHERE status = 'pending' ORDER BY created_at ASC"
         ) as cursor:
             return [dict(r) for r in await cursor.fetchall()]
+async def purge_incomplete_registrations(tournament_slug: str):
+    """
+    Deletes players who haven't completed registration after the deadline.
+    For simplicity, this deletes all is_verified=FALSE players.
+    In a real scenario, you'd filter by tournament participation too.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM players WHERE is_verified = FALSE")
+        await db.commit()
 
 async def update_hub_command_status(command_id: int, status: str):
     async with aiosqlite.connect(DB_PATH) as db:

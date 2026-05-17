@@ -2,7 +2,7 @@ import { create } from 'zustand';
 
 export interface OverlayElement {
   id: string;
-  type: 'image' | 'text';
+  type: 'image' | 'text' | 'rect' | 'circle';
   visible: boolean;
   x: number;
   y: number;
@@ -13,6 +13,7 @@ export interface OverlayElement {
   fontSize?: number;
   color?: string;
   zIndex?: number;
+  borderRadius?: number;
 }
 
 interface EditorState {
@@ -27,6 +28,7 @@ interface EditorState {
   setElements: (elements: Record<string, OverlayElement>) => void;
   mergeDynamicData: (elements: Record<string, OverlayElement>) => void;
   updateElement: (id: string, updates: Partial<OverlayElement>) => void;
+  addElement: (element: OverlayElement) => void;
   deleteElement: (id: string) => void;
   restoreElement: (id: string) => void;
   setSelectedId: (id: string | null) => void;
@@ -67,6 +69,13 @@ export const useEditorStore = create<EditorState>((set) => ({
       ...state.elements,
       [id]: { ...state.elements[id], ...updates }
     }
+  })),
+  addElement: (element) => set((state) => ({
+    elements: {
+      ...state.elements,
+      [element.id]: element
+    },
+    selectedId: element.id
   })),
   deleteElement: (id) => set((state) => {
     const newElements = { ...state.elements };

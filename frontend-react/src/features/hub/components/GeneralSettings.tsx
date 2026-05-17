@@ -1,11 +1,15 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
+import { useHubStore } from '@/store/useHubStore';
 
 export function GeneralSettings() {
   const [env, setEnv] = useState<any>({});
   const [settings, setSettings] = useState<any>({});
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null);
+
+  const hubPassword = useHubStore(state => state.hubPassword);
+  const setHubPassword = useHubStore(state => state.setHubPassword);
 
   useEffect(() => {
     loadData();
@@ -132,6 +136,18 @@ export function GeneralSettings() {
                 value={env.STARTGG_CLIENT_ID || ''}
                 onChange={e => updateEnv('STARTGG_CLIENT_ID', e.target.value)}
               />
+            </div>
+
+            <div className="flex flex-col gap-1.5 pt-4 border-t border-white/5">
+              <label className="text-xs font-mono text-gray-400 uppercase tracking-widest">Local Hub Password (UI Access)</label>
+              <input 
+                className="bg-appDark border border-white/10 rounded-md px-4 py-2 text-sm text-white focus:border-accentYellow outline-none"
+                type="password"
+                value={hubPassword}
+                onChange={e => setHubPassword(e.target.value)}
+                placeholder="Enter password to authenticate with API"
+              />
+              <p className="text-[10px] text-gray-500 italic">This must match the HUB_PASSWORD in your .env file.</p>
             </div>
           </div>
 

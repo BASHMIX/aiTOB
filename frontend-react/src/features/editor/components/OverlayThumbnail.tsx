@@ -51,13 +51,14 @@ export function OverlayThumbnail({ config, isSelected, onClick, name }: OverlayT
                 top: el.y,
                 width: el.width,
                 height: el.height,
-                backgroundColor: el.type === 'text' ? 'transparent' : 'rgba(255,255,255,0.2)',
+                backgroundColor: el.type === 'text' ? 'transparent' : (el.color || 'rgba(255,255,255,0.2)'),
                 color: el.color || '#fff',
                 fontSize: `${parseInt(el.fontSize || '24') * 2}px`, // Boosted font size for visibility
                 fontWeight: 'bold',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
+                borderRadius: el.type === 'circle' ? '50%' : `${el.borderRadius || 0}px`,
                 border: el.type === 'image' ? '4px solid rgba(255,255,255,0.3)' : 'none',
                 overflow: 'hidden'
               }}

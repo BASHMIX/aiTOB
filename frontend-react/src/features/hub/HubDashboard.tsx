@@ -14,12 +14,12 @@ import axios from 'axios';
 const PREFERRED_SLUG = 'FNC1stStartGG';
 
 export function HubDashboard() {
-  const { 
-    setTournaments, 
-    setStatus, 
-    setMatches, 
-    currentSlug, 
-    setCurrentSlug 
+  const {
+    setTournaments,
+    setStatus,
+    setMatches,
+    currentSlug,
+    setCurrentSlug
   } = useHubStore();
 
   const [isRefetching, setIsRefetching] = useState(false);
@@ -28,34 +28,48 @@ export function HubDashboard() {
   const loadData = useCallback(async () => {
     setIsRefetching(true);
     try {
-      const [tourneysRes, statusRes, matchesRes, settingsRes] = await Promise.all([
+      // Critical: load tournaments & matches (these always work)
+      const [tourneysRes, matchesRes] = await Promise.all([
         axios.get('/api/tournaments'),
-        axios.get('/api/status'),
         axios.get('/api/active-matches'),
-        axios.get('/api/settings')
       ]);
 
       const tourneys = tourneysRes.data.tournaments || [];
       setTournaments(tourneys);
-      setMatches(matchesRes.data.matches || []);
-      
-      const sets = settingsRes.data.settings || {};
-      if (sets.current_theme) {
-        document.documentElement.setAttribute('data-theme', sets.current_theme);
+
+      // Only load matches if a tournament is selected
+      const slug = currentSlug || localStorage.getItem('hub_current_slug');
+      if (slug) {
+        setMatches(matchesRes.data.matches || []);
+      } else {
+        setMatches([]);
       }
 
-      setStatus({
-        startgg_api: statusRes.data.startgg_api,
-        websockets: true,
-        discord_bot: statusRes.data.discord_bot || false
-      });
-
-      // Auto-select preferred slug
-      if (!currentSlug) {
+      // Auto-select: restore from localStorage or pick first
+      if (!slug && tourneys.length > 0) {
         const preferred = tourneys.find((t: any) => t.slug?.toLowerCase() === PREFERRED_SLUG.toLowerCase());
         if (preferred) setCurrentSlug(preferred.slug);
-        else if (tourneys.length > 0) setCurrentSlug(tourneys[0].slug);
+        else setCurrentSlug(tourneys[0].slug);
       }
+
+      // Best-effort: status & settings (404 won't break anything)
+      try {
+        const statusRes = await axios.get('/api/status');
+        setStatus({
+          startgg_api: statusRes.data.startgg_api,
+          websockets: true,
+          discord_bot: statusRes.data.discord_bot || false
+        });
+      } catch { /* /api/status not available yet */ }
+
+      try {
+        const settingsRes = await axios.get('/api/settings');
+        const sets = settingsRes.data.settings || {};
+        if (sets.current_theme) {
+          document.documentElement.setAttribute('data-theme', sets.current_theme);
+        }
+      } catch { /* /api/settings not available yet */ }
+
     } catch (err) {
       console.error("Error fetching hub data", err);
     } finally {
@@ -72,7 +86,7 @@ export function HubDashboard() {
 
   useEffect(() => {
     loadData();
-  }, []); 
+  }, []);
 
   return (
     <div className="flex flex-col gap-4 h-full">
@@ -94,19 +108,19 @@ export function HubDashboard() {
         {/* Left Column (Tabs) */}
         <div className="lg:col-span-6 xl:col-span-7 flex flex-col gap-4 h-full pb-10">
           <div className="flex items-center gap-1 bg-cardDark/50 p-1 rounded-lg border border-white/5 w-fit">
-            <button 
+            <button
               onClick={() => setActiveTab('active')}
               className={`px-4 py-1.5 rounded-md text-xs font-bold transition-all ${activeTab === 'active' ? 'bg-accentYellow text-black' : 'text-textDim hover:text-white'}`}
             >
               ACTIVE
             </button>
-            <button 
+            <button
               onClick={() => setActiveTab('registration')}
               className={`px-4 py-1.5 rounded-md text-xs font-bold transition-all ${activeTab === 'registration' ? 'bg-accentYellow text-black' : 'text-textDim hover:text-white'}`}
             >
               REGISTRATION
             </button>
-            <button 
+            <button
               onClick={() => setActiveTab('system')}
               className={`px-4 py-1.5 rounded-md text-xs font-bold transition-all ${activeTab === 'system' ? 'bg-accentYellow text-black' : 'text-textDim hover:text-white'}`}
             >
@@ -138,7 +152,7 @@ export function HubDashboard() {
         <div className="lg:col-span-3 bg-cardDark rounded-lg shadow-md flex flex-col h-full border border-white/5 overflow-hidden">
           <div className="p-3 border-b border-white/10 flex items-center justify-between">
             <h2 className="text-accentYellow font-bold text-sm tracking-widest uppercase">Match Dashboard</h2>
-            <button 
+            <button
               onClick={loadData}
               disabled={isRefetching}
               className={`p-1 hover:bg-white/5 rounded transition-colors ${isRefetching ? 'animate-spin opacity-50' : ''}`}

@@ -117,7 +117,13 @@ export function ActiveMatchCard({ match }: { match: any }) {
   const sendScore = async () => {
     setSending(true);
     try {
-      await axios.post(`/api/active-matches/${match.set_id}/send`);
+      const res = await axios.post(`/api/active-matches/${match.set_id}/send`);
+      if (!res.data.error) {
+        const currentMatches = useHubStore.getState().matches;
+        setMatches(currentMatches.map(m =>
+          m.set_id === match.set_id ? { ...m, status: 'complete' as const } : m
+        ));
+      }
     } finally {
       setSending(false);
     }
@@ -125,11 +131,11 @@ export function ActiveMatchCard({ match }: { match: any }) {
 
   // Display order respects swap
   const p1 = isSwapped
-    ? { name: match.p2_name, score: match.p2_score, team: match.p2_team, cfn: match.p2_cfn, avatar_url: match.p2_avatar_url, key: 'p2' as const }
-    : { name: match.p1_name, score: match.p1_score, team: match.p1_team, cfn: match.p1_cfn, avatar_url: match.p1_avatar_url, key: 'p1' as const };
+    ? { name: match.p2_name, score: match.p2_score, team: match.p2_team, cfn: match.p2_cfn, avatar: match.p2_avatar, key: 'p2' as const }
+    : { name: match.p1_name, score: match.p1_score, team: match.p1_team, cfn: match.p1_cfn, avatar: match.p1_avatar, key: 'p1' as const };
   const p2 = isSwapped
-    ? { name: match.p1_name, score: match.p1_score, team: match.p1_team, cfn: match.p1_cfn, avatar_url: match.p1_avatar_url, key: 'p1' as const }
-    : { name: match.p2_name, score: match.p2_score, team: match.p2_team, cfn: match.p2_cfn, avatar_url: match.p2_avatar_url, key: 'p2' as const };
+    ? { name: match.p1_name, score: match.p1_score, team: match.p1_team, cfn: match.p1_cfn, avatar: match.p1_avatar, key: 'p1' as const }
+    : { name: match.p2_name, score: match.p2_score, team: match.p2_team, cfn: match.p2_cfn, avatar: match.p2_avatar, key: 'p2' as const };
 
   return (
     <div className="bg-cardDark border border-white/10 rounded-lg overflow-hidden flex flex-col shadow-md">
@@ -188,8 +194,8 @@ export function ActiveMatchCard({ match }: { match: any }) {
           <div key={label} className="flex items-center gap-2 bg-appDark rounded px-2 py-1.5">
             <span className={`${accentClass} text-black text-[10px] font-black px-1.5 py-0.5 rounded flex-shrink-0`}>{label}</span>
             <div className="w-8 h-8 rounded-full bg-white/10 overflow-hidden flex-shrink-0 border border-white/10">
-              {player.avatar_url ? (
-                <img src={player.avatar_url} alt={label} className="w-full h-full object-cover" />
+              {player.avatar ? (
+                <img src={player.avatar} alt={label} className="w-full h-full object-cover" />
               ) : (
                 <div className="w-full h-full bg-white/5 flex items-center justify-center text-textDim text-[9px]">{label}</div>
               )}

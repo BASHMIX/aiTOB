@@ -20,10 +20,12 @@ export function TournamentSettings() {
       const updatedTournaments = tourneysRes.data.tournaments || [];
       useHubStore.getState().setTournaments(updatedTournaments);
       
-      if (!currentSlug && updatedTournaments.length > 0) {
-        const added = updatedTournaments.find((t: any) => t.slug === slug);
-        if (added) setCurrentSlug(added.slug);
-        else setCurrentSlug(updatedTournaments[0].slug);
+      // Always switch to the new one
+      const added = updatedTournaments.find((t: any) => t.slug === slug);
+      if (added) {
+        setCurrentSlug(added.slug);
+      } else if (updatedTournaments.length > 0) {
+        setCurrentSlug(updatedTournaments[0].slug);
       }
       
       alert(res.data.message || "Tournament added.");
@@ -99,6 +101,19 @@ export function TournamentSettings() {
               className="bg-btnActive text-white text-xs px-3 py-1.5 rounded hover:bg-white/20 transition-colors flex items-center gap-1"
             >
               Refresh Hub
+            </button>
+            <button 
+              onClick={async () => {
+                if (!currentSlug) return;
+                try {
+                  const res = await axios.post(`/api/tournaments/${encodeURIComponent(currentSlug)}/refresh`);
+                  alert(res.data.message);
+                  globalRefresh();
+                } catch (e) { alert("Refresh failed."); }
+              }}
+              className="bg-blue-900/50 text-blue-200 border border-blue-800 text-xs px-3 py-1.5 rounded hover:bg-blue-900 transition-colors flex items-center gap-1"
+            >
+              Refresh Metadata
             </button>
             <button 
               onClick={resetHubData}

@@ -26,6 +26,8 @@ interface Match {
   is_external?: boolean;
   p1_team?: string;
   p2_team?: string;
+  p1_avatar?: string;
+  p2_avatar?: string;
   // New lifecycle fields
   is_stream_match?: boolean;
   tournament_slug?: string;
@@ -37,6 +39,8 @@ interface Match {
   called_at?: string;
   started_at?: string;
   dq_player?: string;
+  lobby_password?: string;
+  discord_thread_id?: string;
 }
 
 interface Station {
@@ -52,23 +56,34 @@ interface HubState {
   stations: Station[];
   status: { startgg_api: boolean; websockets: boolean; discord_bot: boolean };
   plannedStreamIds: string[];
+  hubPassword: string;
   setTournaments: (tournaments: Tournament[]) => void;
   setCurrentSlug: (slug: string | null) => void;
   setMatches: (matches: Match[]) => void;
   setStations: (stations: Station[]) => void;
   setStatus: (status: { startgg_api: boolean; websockets: boolean; discord_bot: boolean }) => void;
   togglePlannedStream: (setId: string) => void;
+  setHubPassword: (password: string) => void;
+  logout: () => void;
 }
 
 export const useHubStore = create<HubState>((set) => ({
   tournaments: [],
-  currentSlug: null,
+  currentSlug: localStorage.getItem('hub_current_slug'),
   matches: [],
   stations: [],
   status: { startgg_api: false, websockets: false, discord_bot: false },
   plannedStreamIds: [],
+  hubPassword: localStorage.getItem('hub_password') || '',
   setTournaments: (tournaments) => set({ tournaments }),
-  setCurrentSlug: (currentSlug) => set({ currentSlug }),
+  setCurrentSlug: (currentSlug) => {
+    if (currentSlug) localStorage.setItem('hub_current_slug', currentSlug);
+    else localStorage.removeItem('hub_current_slug');
+    set((state) => ({ 
+      currentSlug, 
+      matches: currentSlug ? state.matches : [] 
+    }));
+  },
   setMatches: (matches) => set({ matches }),
   setStations: (stations) => set({ stations }),
   setStatus: (status) => set({ status }),
@@ -77,4 +92,12 @@ export const useHubStore = create<HubState>((set) => ({
       ? state.plannedStreamIds.filter(id => id !== setId)
       : [...state.plannedStreamIds, setId]
   })),
+  setHubPassword: (hubPassword) => {
+    localStorage.setItem('hub_password', hubPassword);
+    set({ hubPassword });
+  },
+  logout: () => {
+    localStorage.removeItem('hub_password');
+    set({ hubPassword: '' });
+  }
 }));

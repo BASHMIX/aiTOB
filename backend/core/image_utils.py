@@ -1,3 +1,8 @@
+from PIL import Image
+from io import BytesIO
+import os
+import google.generativeai as genai
+
 def validate_avatar_quality(image_bytes: bytes) -> tuple[bool, str]:
     """
     Checks if the image is of sufficient resolution and not too distorted.
@@ -6,12 +11,16 @@ def validate_avatar_quality(image_bytes: bytes) -> tuple[bool, str]:
         img = Image.open(BytesIO(image_bytes))
         width, height = img.size
         
-        if width < 200 or height < 200:
-            return False, "Image resolution is too low. Please upload a larger image (at least 200x200)."
+        if width < 100 or height < 100:
+            return False, "Image resolution is too low. Please upload a larger image (at least 100x100)."
         
+        # Check size (5MB)
+        if len(image_bytes) > 5 * 1024 * 1024:
+            return False, "File size is too large. Max 5MB."
+
         # Check aspect ratio
         ratio = max(width, height) / min(width, height)
-        if ratio > 2.5:
+        if ratio > 3.0:
             return False, "The image is too narrow or too wide. Please provide a more square-like photo."
             
         return True, "OK"
@@ -22,40 +31,35 @@ async def validate_avatar_safety(image_bytes: bytes) -> tuple[bool, str]:
     """
     Uses Gemini to check if the image contains offensive or inappropriate content.
     """
-    import google.generativeai as genai
-    import os
-    
-    api_key = os.getenv("GEMINI_API_KEY")
+    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
     if not api_key:
         return True, "Safety check skipped (no API key)"
         
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    # Using a reliable model name
+    model = genai.GenerativeModel('gemini-1.5-flash')
     
     try:
-        # Construct the content for Gemini
-        # image_bytes can be passed as a dictionary with mime_type and data
         prompt = "Analyze this image for a tournament profile. Is it offensive, inappropriate, or harmful? Respond with 'SAFE' or a short reason why it is not safe."
         
+        # Note: genai library might need specific data structures for images
         response = await model.generate_content_async([
             prompt,
-            {"mime_type": "image/png", "data": image_bytes}
+            {"mime_type": "image/jpeg", "data": image_bytes}
         ])
         
         result = response.text.strip().upper()
         if "SAFE" in result:
             return True, "OK"
         else:
-            return False, f"Image rejected: {response.text}"
+            return False, response.text.strip()
     except Exception as e:
         print(f"[IMAGE] Safety check error: {e}")
-        return True, "Safety check failed to run" # Fallback to true to avoid blocking if API is down
+        return True, "Safety check failed to run" # Fallback
 
-def process_avatar(image_bytes: bytes, startgg_id: str) -> str:
+def process_avatar(image_bytes: bytes, filename_id: str) -> str:
     """
-    Accepts an image from Discord as bytes, center-crops it to a square, 
-    resizes it to 500x500 pixels, and saves it.
-    Returns the saved file path.
+    Accepts an image, center-crops it, resizes it, and saves it.
     """
     img = Image.open(BytesIO(image_bytes))
     
@@ -73,14 +77,14 @@ def process_avatar(image_bytes: bytes, startgg_id: str) -> str:
     img = img.resize((500, 500), Image.Resampling.LANCZOS)
     
     # Ensure directory exists
-    save_dir = os.path.join("backend", "assets", "avatars")
+    save_dir = os.path.join("backend", "api", "static", "avatars")
     os.makedirs(save_dir, exist_ok=True)
     
-    # Convert to RGB (standard for web/bot)
+    # Convert to RGB
     if img.mode in ('RGBA', 'P'):
         img = img.convert('RGB')
         
-    save_path = os.path.join(save_dir, f"{startgg_id}.jpg")
+    save_path = os.path.join(save_dir, f"{filename_id}.jpg")
     img.save(save_path, "JPEG", quality=90)
     
     return save_path

@@ -23,7 +23,8 @@ export function useHubSocket(onEvent: (evt: HubEvent) => void) {
     if (destroyed.current) return;
 
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    // Vite proxies /ws/hub → backend:8000
+    // Use the same host:port as the page so it works through
+    // both Vite dev proxy (:5173 → /ws → backend) and direct API access (:8000)
     const url = `${proto}://${window.location.host}/ws/hub`;
 
     const ws = new WebSocket(url);
@@ -59,7 +60,20 @@ export function useHubSocket(onEvent: (evt: HubEvent) => void) {
     return () => {
       destroyed.current = true;
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
-      wsRef.current?.close();
+      if (wsRef.current) {
+        const ws = wsRef.current;
+        ws.onopen = null;
+        ws.onclose = null;
+        ws.onerror = null;
+        ws.onmessage = null;
+        // Don't close a connecting socket — browser warns. Let it open then close.
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.close();
+        } else if (ws.readyState === WebSocket.CONNECTING) {
+          // Schedule close once it opens (avoids browser warning)
+          ws.addEventListener('open', () => ws.close(), { once: true });
+        }
+      }
     };
   }, [connect]);
 }

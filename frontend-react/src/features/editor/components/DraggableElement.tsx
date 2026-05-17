@@ -15,12 +15,23 @@ export function DraggableElement({ id, element, scale, onContextMenu }: Props) {
   if (!element.visible) return null;
 
   const isImg = element.type === 'image';
+  const isShape = element.type === 'rect' || element.type === 'circle';
   const isSelected = selectedId === id;
 
   // Render content
   let content = null;
   if (isImg) {
     content = <img src={element.src} alt="" className="w-full h-full object-contain block pointer-events-none" />;
+  } else if (isShape) {
+    content = (
+      <div 
+        className="w-full h-full"
+        style={{ 
+          backgroundColor: element.color || 'rgba(255,255,255,0.5)', 
+          borderRadius: element.type === 'circle' ? '50%' : `${element.borderRadius || 0}px`
+        }} 
+      />
+    );
   } else {
     content = (
       <div 
@@ -45,17 +56,19 @@ export function DraggableElement({ id, element, scale, onContextMenu }: Props) {
     });
   };
 
+  const hasFixedSize = isImg || isShape;
+
   return (
     <Rnd
       scale={scale}
       position={{ x: element.x, y: element.y }}
-      size={isImg ? { width: element.width || 100, height: element.height || 100 } : undefined}
+      size={hasFixedSize ? { width: element.width || 100, height: element.height || 100 } : undefined}
       onDragStop={onDragStop}
       onDragStart={() => setSelectedId(id)}
-      onResizeStop={isImg ? onResizeStop : undefined}
+      onResizeStop={hasFixedSize ? onResizeStop : undefined}
       onResizeStart={() => setSelectedId(id)}
       disableDragging={false}
-      enableResizing={isImg} // Only resize images
+      enableResizing={hasFixedSize}
       style={{ zIndex: isSelected ? 100 : (element.zIndex || 1) }}
       onMouseDown={(e: any) => {
         e.stopPropagation();

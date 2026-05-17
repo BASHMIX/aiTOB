@@ -35,6 +35,7 @@ export type MatchStatus = "waiting" | "live" | "called" | "done" | "dq";
 
 export interface MatchPlayer {
   name: string;
+  avatar?: string;
   score?: number | "DQ";
   highlight?: boolean;
   isTBD?: boolean;
@@ -88,21 +89,35 @@ const PANEL_TONE: Record<string, string> = {
   neutral: "border-[var(--border)] bg-[var(--card)]",
 };
 
-function ScoreCell({ player }: { player: MatchPlayer }) {
+function ScoreCell({ player, onUpdate }: { player: MatchPlayer; onUpdate?: (val: number) => void }) {
   const isDQ = player.score === "DQ";
+  const score = typeof player.score === 'number' ? player.score : 0;
+
   return (
     <div
-      className={`flex h-12 min-w-12 items-center justify-center px-3 text-base font-semibold border-l border-[var(--border)] text-slate-100
+      className={`flex h-12 min-w-16 items-center justify-center text-base font-semibold border-l border-[var(--border)] text-slate-100
         ${isDQ ? "text-[var(--tone-dq)]" : ""}
         ${player.highlight ? "bg-[var(--tone-send-highlight)] text-[var(--tone-send)]" : ""}
       `}
     >
-      {player.score !== undefined ? player.score : ""}
+      {onUpdate && !isDQ && (
+        <button 
+          onClick={() => onUpdate(Math.max(0, score - 1))}
+          className="w-5 h-full flex items-center justify-center hover:bg-white/5 text-xs text-gray-500"
+        >-</button>
+      )}
+      <span className="flex-1 text-center">{player.score !== undefined ? player.score : ""}</span>
+      {onUpdate && !isDQ && (
+        <button 
+          onClick={() => onUpdate(score + 1)}
+          className="w-5 h-full flex items-center justify-center hover:bg-white/5 text-xs text-gray-500"
+        >+</button>
+      )}
     </div>
   );
 }
 
-function PlayersBlock({ players }: { players: MatchData["players"] }) {
+function PlayersBlock({ players, onUpdateScore }: { players: MatchData["players"], onUpdateScore?: (p: number, val: number) => void }) {
   return (
     <div className="flex-1 overflow-hidden flex flex-col justify-center">
       {players.map((p, i) => (
@@ -110,10 +125,17 @@ function PlayersBlock({ players }: { players: MatchData["players"] }) {
           key={i}
           className={`flex items-center justify-between ${i === 0 ? "border-b border-[var(--border)]" : ""}`}
         >
-          <div className="flex-1 px-3 py-2.5 text-sm font-medium text-[var(--foreground)]">
-            {p.name}
+          <div className="flex-1 flex items-center gap-2.5 px-3 py-2.5 text-sm font-medium text-[var(--foreground)]">
+            <div className="w-6 h-6 rounded-full bg-[var(--muted)] overflow-hidden border border-[var(--border)] flex-shrink-0">
+              {p.avatar ? (
+                <img src={p.avatar} alt="" className="w-full h-full object-cover" onError={(e) => (e.currentTarget.style.display = 'none')} />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-[10px] text-[var(--muted-foreground)]">?</div>
+              )}
+            </div>
+            <span className="truncate">{p.name}</span>
           </div>
-          <ScoreCell player={p} />
+          <ScoreCell player={p} onUpdate={onUpdateScore ? (v) => onUpdateScore(i, v) : undefined} />
         </div>
       ))}
     </div>
@@ -261,7 +283,10 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
 
   return (
     <div className={`flex items-stretch overflow-hidden rounded-md border ${PANEL_TONE[meta.tone]}`}>
-      <PlayersBlock players={match.players} />
+      <PlayersBlock 
+        players={match.players} 
+        onUpdateScore={match.isLocal ? (p, v) => onAction("updateScore", match.raw, { playerIdx: p, value: v }) : undefined} 
+      />
 
       <div className="relative flex w-[260px] flex-col justify-between border-l border-[var(--border-60)] px-3 py-2">
         <span
@@ -277,7 +302,7 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
             </span>
             <span className="text-[#38bdf8]">{displayPool}</span>
           </div>
-          <div className="text-xs text-[var(--muted-foreground)] truncate">{match.round || "Round"}</div>
+          <div className="text-xs text-[var(--muted-foreground)] truncate pl-1">{match.round || "Round"}</div>
         </div>
 
         <div className="mt-2 flex items-center gap-2 flex-wrap">
@@ -285,6 +310,14 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
             <>
               {!match.isLocal && (
                 <ActionButton tone="activate" label="Activate" onClick={() => onAction("activate", match.raw)} />
+              )}
+              {match.isLocal && (
+                 <ActionButton tone="activate" label="Call Match" icon={
+                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-3.5 h-3.5">
+                     <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                     <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+                   </svg>
+                 } onClick={() => onAction("callMatch", match.raw)} />
               )}
               <button
                 type="button"
@@ -314,7 +347,19 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
           )}
 
           {match.isLocal && (
-            <ActionButton tone="reset" label="Reset" icon={<IconReset />} onClick={() => onAction("resetMatch", match.raw)} />
+            <div className="flex gap-1">
+              <ActionButton tone="reset" label="Reset" icon={<IconReset />} onClick={() => onAction("resetMatch", match.raw)} />
+              <button
+                onClick={() => onAction("removeMatch", match.raw)}
+                title="Deactivate (Local only)"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-red-900/50 bg-red-900/20 text-red-400 hover:bg-red-900/40 transition-colors"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-3.5 h-3.5">
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+              </button>
+            </div>
           )}
 
           {showTimer && (

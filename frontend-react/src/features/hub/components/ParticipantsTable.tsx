@@ -11,7 +11,7 @@ export function ParticipantsTable() {
   useEffect(() => {
     const fetchAllOverrides = async () => {
       try {
-        const res = await axios.get('/api/players/overrides');
+        const res = await axios.get('/api/tournaments/overrides/all');
         setOverrides(res.data || {});
       } catch (e) {
         console.error("Failed to fetch overrides", e);
@@ -28,12 +28,24 @@ export function ParticipantsTable() {
   let entrants = [];
   try {
     const raw = JSON.parse(currentTournament.raw_data);
-    entrants = raw.mock ? raw.entrants : raw.tournament?.events?.[0]?.entrants?.nodes || [];
+    if (raw.mock) {
+      entrants = raw.entrants || [];
+    } else {
+      // Try various paths in the Start.gg response
+      const event = raw.events?.[0] || {};
+      entrants = event.entrants?.nodes || raw.tournament?.events?.[0]?.entrants?.nodes || raw.entrants?.nodes || [];
+      
+      // If still empty but we have participants directly
+      if (entrants.length === 0 && raw.participants) {
+        entrants = raw.participants;
+      }
+    }
   } catch (e) {
-    return <div className="text-center p-5 text-textDim text-sm">Parse error</div>;
+    console.error("Parse error in ParticipantsTable", e);
+    return <div className="text-center p-5 text-textDim text-sm">Error parsing tournament data. Try "Refresh Metadata" in settings.</div>;
   }
 
-  if (entrants.length === 0) return <div className="text-center p-5 text-textDim text-sm">No participants</div>;
+  if (entrants.length === 0) return <div className="text-center p-5 text-textDim text-sm">No participants found. Try "Refresh Metadata" in settings.</div>;
 
   const handleEditClick = async (entrant: any) => {
     setEditingId(entrant.id);
@@ -58,7 +70,7 @@ export function ParticipantsTable() {
 
   const handleSave = async (id: string) => {
     try {
-      await axios.patch(`/api/players/override/${id}`, editForm);
+      await axios.patch(`/api/tournaments/override/${id}`, editForm);
       setOverrides(prev => ({ ...prev, [id]: { ...prev[id], ...editForm } }));
       setEditingId(null);
     } catch (e) {
@@ -68,9 +80,9 @@ export function ParticipantsTable() {
 
   const handleAvatarUpload = async (id: string, file: File) => {
     const formData = new FormData();
-    formData.append('file', file);
+    formData.append('avatar', file);
     try {
-      const res = await axios.post(`/api/players/avatar/${id}`, formData);
+      const res = await axios.post(`/api/tournaments/avatar/${id}`, formData);
       const newUrl = res.data.avatar_url;
       setOverrides(prev => ({ ...prev, [id]: { ...prev[id], avatar_url: newUrl } }));
     } catch (e: any) {
@@ -88,7 +100,7 @@ export function ParticipantsTable() {
         <button 
           onClick={async () => {
             if (confirm("Reset ALL overrides? This cannot be undone.")) {
-              await axios.delete('/api/players/overrides');
+              await axios.delete('/api/tournaments/overrides');
               setOverrides({});
             }
           }}
@@ -119,7 +131,7 @@ export function ParticipantsTable() {
                   <td className="px-2 py-2">
                     <div className="relative group w-8 h-8">
                       <img 
-                        src={ov.avatar_url || e.avatarUrl || '/static/player_placeholder.jpg'} 
+                        src={ov.avatar_url || (e.participants?.[0]?.user?.images?.find((img: any) => img.type === 'profile')?.url) || '/static/player_placeholder.jpg'} 
                         className="w-8 h-8 rounded-full border border-white/10 object-cover" 
                       />
                       <label className="absolute inset-0 bg-black/50 hidden group-hover:flex items-center justify-center cursor-pointer rounded-full transition-opacity">

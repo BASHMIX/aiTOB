@@ -31,7 +31,30 @@ export function EditorDashboard() {
   const fetchPresets = async () => {
     try {
       const res = await axios.get('/api/overlays');
-      setPresets(res.data);
+      const list = res.data.overlays || [];
+      const parsed = list.map((o: any) => ({
+        ...o,
+        config: typeof o.config === 'string' ? JSON.parse(o.config) : o.config
+      }));
+      console.log(`Fetched ${parsed.length} presets. Current slot: ${slot}`);
+      setPresets(parsed);
+      
+      // Load selected slot into canvas
+      const currentPreset = parsed.find((p: any) => p.name === slot);
+      console.log(`Current preset for ${slot}:`, currentPreset);
+      if (currentPreset && currentPreset.config) {
+        store.setElements(currentPreset.config.elements || {});
+        store.setGlobalSettings(
+          currentPreset.config.background_url || '', 
+          currentPreset.config.global_font_url || '', 
+          currentPreset.config.global_font_family || ''
+        );
+        store.setSelectedId(null);
+      } else if (!currentPreset) {
+        // If slot doesn't exist, clear canvas
+        store.setElements({});
+        store.setGlobalSettings('', '', '');
+      }
     } catch (e) { console.error("Failed to fetch presets"); }
   };
 
@@ -114,6 +137,17 @@ export function EditorDashboard() {
       fetchPresets(); // Refresh thumbnails
     } catch (e) {
       store.setStatusMsg('Save failed');
+    }
+  };
+
+  const handleDeletePreset = async (name: string) => {
+    if (!name || !confirm(`Delete '${name}'?`)) return;
+    try {
+      await axios.delete(`/api/overlays/${encodeURIComponent(name)}`);
+      if (slot === name) navigate('/admin/editor'); // Redirect to default if deleting current
+      fetchPresets();
+    } catch (e) {
+      alert("Delete failed");
     }
   };
 
@@ -211,6 +245,7 @@ export function EditorDashboard() {
           const name = prompt("New Preset Name:");
           if (name) navigate(`/admin/editor?slot=${encodeURIComponent(name)}`);
         }}
+        onDeletePreset={handleDeletePreset}
       />
 
       {contextMenu && (

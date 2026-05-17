@@ -45,14 +45,16 @@ def kill_port(port: int):
     """Kill any process occupying the given port."""
     try:
         import psutil
-        for proc in psutil.process_iter(['pid', 'connections']):
+        for proc in psutil.process_iter(['pid', 'name']):
             try:
-                for conn in proc.info.get('connections') or []:
+                # Use net_connections() method instead of 'connections' attribute in as_dict
+                for conn in proc.connections(kind='inet'):
                     if conn.laddr.port == port:
-                        cprint(YELLOW, "SYS", f"Killing existing process on port {port} (PID {proc.pid})")
+                        cprint(YELLOW, "SYS", f"Killing existing process {proc.info['name']} on port {port} (PID {proc.pid})")
                         proc.kill()
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
+            except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError):
                 pass
+
     except ImportError:
         cprint(RED, "SYS", "psutil not installed — skipping port cleanup")
 

@@ -26,7 +26,8 @@ function mapLocalState(status: string): MatchStatus {
     case 'not_started': return 'waiting';
     case 'in_progress': return 'live';
     case 'called': return 'called';
-    case 'complete': return 'done';
+    case 'complete':
+    case 'done': return 'done';
     case 'dq': return 'dq';
     default: return 'waiting';
   }
@@ -47,24 +48,30 @@ export function MatchDashboard() {
   const { matches, currentSlug, tournaments, stations, setMatches, plannedStreamIds, togglePlannedStream } = useHubStore();
   const [sets, setSets] = useState<any[]>([]);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
-  
+
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
 
   // ── Filter state ──
   const [hideTBD, setHideTBD] = useState(false);
   const [selectedPhaseGroup, setSelectedPhaseGroup] = useState<string>('__all__');
 
-  const showToast = (msg: string, ok = true) => {
-    setToast({ msg, ok });
+  const showToast = (msg: unknown, ok = true) => {
+    const text = typeof msg === 'string' ? msg : JSON.stringify(msg);
+    setToast({ msg: text, ok });
     setTimeout(() => setToast(null), 3000);
   };
 
   const reload = useCallback(async () => {
+    if (!currentSlug) { setMatches([]); return; }
     try {
       const res = await axios.get('/api/active-matches');
       setMatches(res.data.matches ?? []);
-    } catch (e) { console.error('reload matches', e); }
-  }, [setMatches]);
+    } catch (err: any) {
+      console.error('Action failed:', err);
+      const msg = err.response?.data?.detail || err.response?.data?.message || err.message || 'Action failed';
+      showToast(msg, false);
+    }
+  }, [setMatches, currentSlug]);
 
   const loadSets = useCallback(async () => {
     if (!currentSlug) { setSets([]); return; }
@@ -91,7 +98,8 @@ export function MatchDashboard() {
   const phaseGroups = useMemo(() => {
     const pgSet = new Set<string>();
     (sets ?? []).forEach(s => {
-      if (s?.phaseGroup) pgSet.add(s.phaseGroup);
+      const pg = s?.phaseGroup?.displayIdentifier;
+      if (pg) pgSet.add(String(pg));
     });
     return Array.from(pgSet).sort();
   }, [sets]);
@@ -102,7 +110,7 @@ export function MatchDashboard() {
   // Local matches first
   (matches ?? []).forEach(m => {
     if (!m || !m.set_id) return;
-    
+
     // Skip if wrong tournament
     if (currentSlug && m.tournament_slug && m.tournament_slug !== currentSlug) return;
 
@@ -116,8 +124,18 @@ export function MatchDashboard() {
       startedAt: m.started_at,
       calledAt: m.called_at,
       players: [
-        { name: safe(m.p1_name) || 'Unknown', score: m.p1_score != null ? Number(m.p1_score) : undefined, isTBD: isTBD(safe(m.p1_name)) },
-        { name: safe(m.p2_name) || 'Unknown', score: m.p2_score != null ? Number(m.p2_score) : undefined, isTBD: isTBD(safe(m.p2_name)) }
+        {
+          name: safe(m.p1_name) || 'Unknown',
+          avatar: m.p1_avatar,
+          score: m.p1_score != null ? Number(m.p1_score) : undefined,
+          isTBD: isTBD(safe(m.p1_name))
+        },
+        {
+          name: safe(m.p2_name) || 'Unknown',
+          avatar: m.p2_avatar,
+          score: m.p2_score != null ? Number(m.p2_score) : undefined,
+          isTBD: isTBD(safe(m.p2_name))
+        }
       ],
       raw: m,
       stationId: m.station_id,
@@ -129,36 +147,23 @@ export function MatchDashboard() {
     if (!s || !s.id) return;
     const sid = safe(s.id);
     if (matches?.some(m => safe(m?.set_id) === sid)) return;
-    
+
     const mapped = mapStartggState(s.state);
-    
-    // For Start.gg data, the score string is like "Player A 2 - Player B 1" or we can just parse it if needed.
-    // For simplicity, we just use 0 if not complete.
-    
+
     mappedMatches.push({
       id: s.identifier || shortId(s.id),
-      pool: safe(s.phaseGroup),
-      round: safe(s.round),
+      pool: safe(s.phaseGroup?.displayIdentifier),
+      round: safe(s.fullRoundText || s.round),
       status: mapped,
       isLocal: false,
       isStreamMatch: plannedStreamIds.includes(s.id),
       players: [
-        { name: safe(s.p1) || 'TBD', score: undefined, isTBD: isTBD(safe(s.p1)) },
-        { name: safe(s.p2) || 'TBD', score: undefined, isTBD: isTBD(safe(s.p2)) }
+        { name: safe(s.p1) || 'TBD', avatar: s.p1_avatar, score: undefined, isTBD: isTBD(safe(s.p1)) },
+        { name: safe(s.p2) || 'TBD', avatar: s.p2_avatar, score: undefined, isTBD: isTBD(safe(s.p2)) }
       ],
       raw: s,
     });
   });
-
-  // ── Apply filters + sorting to each group ──
-  let filtered = mappedMatches;
-  if (hideTBD) {
-    filtered = filtered.filter(r => !r.players[0].isTBD && !r.players[1].isTBD);
-  }
-  if (selectedPhaseGroup !== '__all__') {
-    filtered = filtered.filter(r => (r.pool || '') === selectedPhaseGroup);
-  }
-  filtered = sortTBDLast(filtered);
 
   // ── Action handlers ────────────────────────────────────────────────
   const handleAction = async (action: string, row: any, data?: any) => {
@@ -167,31 +172,48 @@ export function MatchDashboard() {
         await axios.post('/api/active-matches', {
           set_id: row.id, p1_name: row.p1, p2_name: row.p2,
           p1_entrant_id: row.p1_eid || '', p2_entrant_id: row.p2_eid || '',
+          p1_avatar: row.p1_avatar || '', p2_avatar: row.p2_avatar || '',
           round_name: row.round || '', tournament_slug: currentSlug || '',
           match_number: row.identifier,
-          status: 'called', p1_score: 0, p2_score: 0,
+          status: 'not_started', p1_score: 0, p2_score: 0,
           phase_group: row.phaseGroup || '',
         });
         showToast(`Activated: ${row.p1} vs ${row.p2}`);
         reload();
-      } 
+      }
+      else if (action === 'updateScore') {
+        const { playerIdx, value } = data;
+        const key = playerIdx === 0 ? 'p1_score' : 'p2_score';
+        await axios.patch(`/api/active-matches/${row.set_id || row.id}`, { [key]: value });
+        reload();
+      }
       else if (action === 'sendScore') {
-        const res = await axios.post(`/api/active-matches/${row.set_id}/send`);
+        const res = await axios.post(`/api/active-matches/${row.set_id || row.id}/send`);
         if (res.data.error) showToast(res.data.message, false);
         else { showToast('Score reported to Start.gg ✓'); reload(); }
-      } 
+      }
+      else if (action === 'callMatch') {
+        await axios.post(`/api/active-matches/${row.set_id || row.id}/call`);
+        showToast('Players called via Discord');
+        reload();
+      }
       else if (action === 'resetMatch') {
         if (!confirm(`Reset match on Start.gg and locally?`)) return;
         const res = await axios.post(`/api/active-matches/${row.set_id}/reset`);
         showToast(res.data.message || 'Reset OK');
         reload();
         loadSets();
-      } 
+      }
+      else if (action === 'removeMatch') {
+        await axios.delete(`/api/active-matches/${row.set_id || row.id}`);
+        showToast('Match removed from active status');
+        reload();
+      }
       else if (action === 'dq') {
         // data contains 'p1', 'p2', or 'both'
         await axios.post(`/api/active-matches/${row.set_id}/dq`, { player: data });
         reload();
-      } 
+      }
       else if (action === 'assignStation') {
         await axios.patch(`/api/active-matches/${row.set_id}`, {
           station_id: data,
@@ -199,39 +221,43 @@ export function MatchDashboard() {
         });
         reload();
       }
-    } catch {
-      showToast(`${action} failed`, false);
+    } catch (err: any) {
+      if (err.response?.status === 401) {
+        showToast('Session expired. Please login again.', false);
+        useHubStore.getState().logout();
+        window.location.href = '/login';
+      }       else {
+        const raw = err.response?.data?.detail || err.response?.data?.message || err.message || `${action} failed`;
+        const msg = typeof raw === 'string' ? raw : typeof raw === 'object' && raw !== null ? JSON.stringify(raw) : String(raw);
+        showToast(msg, false);
+      }
     }
   };
 
   const handleToggleStream = async (setId: string, currentVal: boolean) => {
     togglePlannedStream(setId);
+    try {
+      await axios.post(`/api/active-matches/${setId}/toggle-stream`, { is_stream_match: !currentVal });
+    } catch (e) {
+      console.error('Failed to toggle stream flag on backend', e);
+    }
   };
 
   // Get Settings for Current Tournament
   const curTourney = tournaments.find(t => t.name === currentSlug || t.slug === currentSlug); // Check slug first usually
   // Fallback to searching by slug or name since sometimes name is the identifier in URL
   const actualTourney = tournaments.find(t => t.slug === currentSlug) || curTourney;
-  
+
   const autoDqEnabled = actualTourney?.auto_dq_enabled ?? true;
   const dqTimerSeconds = actualTourney?.dq_timer_seconds ?? 600;
 
-  if (!currentSlug) {
-    return (
-      <div className="flex flex-col items-center justify-center h-64 text-center border-2 border-dashed border-white/5 rounded-xl bg-white/[0.01]">
-        <div className="w-16 h-16 rounded-full bg-accentYellow/5 flex items-center justify-center text-accentYellow/30 text-3xl mb-4">
-          🏆
-        </div>
-        <h3 className="text-white font-bold text-lg">No Tournament Selected</h3>
-        <p className="text-textDim text-sm max-w-xs mt-1 italic">
-          Please select a tournament from the dropdown menu above to manage its matches.
-        </p>
-      </div>
-    );
-  }
+  // ── Main Render ───────────────────────────────────────────────────────
+  const filtered = hideTBD ? mappedMatches.filter(m => m.players.every(p => !p.isTBD)) : mappedMatches;
+  const finalFiltered = selectedPhaseGroup !== '__all__' ? filtered.filter(r => (r.pool || '') === selectedPhaseGroup) : filtered;
+  const sorted = sortTBDLast(finalFiltered);
 
   return (
-    <div className="flex flex-col gap-6 relative">
+    <div className="flex flex-col gap-4 relative p-1">
       {/* Toast */}
       {toast && (
         <div className={`fixed top-4 right-4 z-50 px-4 py-2.5 rounded-lg shadow-2xl text-sm font-bold border
@@ -241,27 +267,27 @@ export function MatchDashboard() {
       )}
 
       {/* ── Controls / Filters Row ── */}
-      <div className="flex flex-wrap items-center gap-3 text-xs bg-[var(--card)] rounded-lg px-3 py-2 border border-[var(--border)]">
+      <div className="flex flex-wrap items-center gap-3 text-xs bg-cardDark rounded-lg px-3 py-2 border border-white/10 shadow-sm">
         {/* Hide TBD */}
         <label className="flex items-center gap-1.5 cursor-pointer select-none">
           <input
             type="checkbox"
             checked={hideTBD}
             onChange={e => setHideTBD(e.target.checked)}
-            className="w-3.5 h-3.5 rounded border-[var(--border)] bg-transparent accent-[var(--primary)]"
+            className="w-4 h-4 rounded border-white/20 bg-transparent accent-accentYellow"
           />
-          <span className="text-[var(--muted-foreground)]">Hide TBD</span>
+          <span className="text-textLight">Hide TBD</span>
         </label>
 
-        <div className="w-px h-5 bg-[var(--border)]" />
+        <div className="w-px h-5 bg-white/10" />
 
         {/* PhaseGroup Filter */}
-        <div className="flex items-center gap-1.5">
-          <span className="text-[var(--muted-foreground)]">Pool:</span>
+        <div className="flex items-center gap-2">
+          <span className="text-textDim">Pool:</span>
           <select
             value={selectedPhaseGroup}
             onChange={e => setSelectedPhaseGroup(e.target.value)}
-            className="bg-transparent border border-[var(--border)] rounded px-2 py-0.5 text-xs text-[var(--foreground)] focus:outline-none focus:border-[var(--primary)]"
+            className="bg-transparent border border-white/10 rounded px-2 py-1 text-xs text-textLight focus:outline-none focus:border-accentYellow/50"
           >
             <option value="__all__" className="text-black">All Pools</option>
             {phaseGroups.map(pg => (
@@ -271,10 +297,10 @@ export function MatchDashboard() {
         </div>
 
         {/* Match Settings (Gear Icon) */}
-        <button 
+        <button
           onClick={() => setSettingsModalOpen(true)}
           title="Match Settings"
-          className="ml-auto flex items-center justify-center p-1.5 rounded-md hover:bg-[var(--foreground)]/10 text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
+          className="ml-auto flex items-center justify-center p-1.5 rounded-md hover:bg-white/10 text-textDim hover:text-white transition-colors"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
             <circle cx="12" cy="12" r="3"></circle>
@@ -283,14 +309,16 @@ export function MatchDashboard() {
         </button>
       </div>
 
-      <MatchesList 
-        matches={filtered}
-        dqTimerSeconds={dqTimerSeconds}
-        autoDqEnabled={autoDqEnabled}
-        onAction={handleAction}
-        onToggleStream={handleToggleStream}
-        stations={stations ?? []}
-      />
+      <div className="flex-1 overflow-y-auto custom-scrollbar pr-1">
+        <MatchesList
+          matches={sorted}
+          dqTimerSeconds={dqTimerSeconds}
+          autoDqEnabled={autoDqEnabled}
+          onAction={handleAction}
+          onToggleStream={handleToggleStream}
+          stations={stations ?? []}
+        />
+      </div>
 
       {settingsModalOpen && (
         <MatchSettingsModal

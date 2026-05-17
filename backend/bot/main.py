@@ -7,12 +7,16 @@ import asyncio
 from langchain_core.tools import tool
 
 import sys
-# Add the parent directory to sys.path so we can import core
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add project root and backend to sys.path
+root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(root)
+sys.path.append(os.path.join(root, "backend"))
 from core.database import init_db, create_or_update_player, get_player
 from core.image_utils import process_avatar
-from agent.graph import process_message, app
-from agent.hub_agent import build_hub_agent
+from bot.registration import registration_manager
+from bot.messages import get_msg
+from bot.agent.graph import app, process_message
+from bot.agent.hub_agent import build_hub_agent
 
 load_dotenv()
 
@@ -36,6 +40,7 @@ async def on_ready():
         poll_hub_commands.start()
     if not update_heartbeat.is_running():
         update_heartbeat.start()
+
     print('------')
 
 @tasks.loop(seconds=10.0)
@@ -48,37 +53,32 @@ class RegistrationView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Register with Start.gg", style=discord.ButtonStyle.primary, custom_id="register_button")
+    @discord.ui.button(label="Register", style=discord.ButtonStyle.primary, custom_id="register_button")
     async def register_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         from core.database import get_connection
         discord_id = str(interaction.user.id)
-        api_base = await get_connection("API_BASE_URL", API_BASE_URL_ENV)
-        login_url = f"{api_base}/login?discord_id={discord_id}"
         
-        try:
-            await interaction.user.send(
-                f"Click the link below to link your Start.gg account:\n{login_url}\n\n"
-                f"Once you complete the authorization and see the success message, reply to this DM with your **CFN ID**."
-            )
-            await interaction.response.send_message("I've sent you a DM with the registration link!", ephemeral=True)
-        except discord.Forbidden:
-            await interaction.response.send_message("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
+        # Check if already registered
+        player = await get_player(discord_id)
+        if player and player.get("is_verified"):
+            await interaction.response.send_message(get_msg("profile_update", player.get("preferred_language", "en")), ephemeral=True)
+            return
 
-    @discord.ui.button(label="Skip Start.gg (Manual)", style=discord.ButtonStyle.secondary, custom_id="skip_startgg_button")
-    async def skip_startgg_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        discord_id = str(interaction.user.id)
+        # Initialize registration state
+        await create_or_update_player(discord_id, registration_step="startgg_linked")
+        
+        api_base = await get_connection("API_BASE_URL", API_BASE_URL_ENV)
+        login_url = f"{api_base}/api/players/login?discord_id={discord_id}"
         
         try:
-            # Mark as verified so they can bypass the OAuth step and proceed directly to CFN ID input
-            await create_or_update_player(
-                discord_id=discord_id,
-                is_verified=True
+            embed = discord.Embed(
+                title="Tournament Registration",
+                description=get_msg("welcome", "en") + "\n\n" + get_msg("startgg_prompt", "en"),
+                color=discord.Color.blue()
             )
-            await interaction.user.send(
-                "You've chosen to skip Start.gg linking for now.\n\n"
-                "To continue with manual registration, please reply to this DM with your **CFN ID**."
-            )
-            await interaction.response.send_message("I've sent you a DM with manual registration instructions!", ephemeral=True)
+            await interaction.user.send(embed=embed)
+            await interaction.user.send(login_url)
+            await interaction.response.send_message("Check your DMs!", ephemeral=True)
         except discord.Forbidden:
             await interaction.response.send_message("I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
 
@@ -134,6 +134,52 @@ async def start_match(ctx, opponent: discord.Member):
     )
     await ctx.send(f"Match thread created: {thread.mention}")
 
+@bot.command()
+async def report(ctx, p1_score: int, p2_score: int):
+    """Report match scores in a thread. Usage: !report 2 0"""
+    from core.database import get_active_matches, update_active_match, add_bot_feed
+    from core.startgg_client import get_client as get_sgg
+
+    if not isinstance(ctx.channel, discord.Thread):
+        await ctx.send("This command must be used inside a match thread.")
+        return
+
+    thread_id = str(ctx.channel.id)
+    all_matches = await get_active_matches()
+    match = next((m for m in all_matches if m.get("discord_thread_id") == thread_id), None)
+    if not match:
+        await ctx.send("No active match found for this thread.")
+        return
+
+    set_id = match["set_id"]
+    if p1_score == p2_score:
+        await ctx.send("Scores cannot be tied. Please report again.")
+        return
+
+    winner_key = "p1" if p1_score > p2_score else "p2"
+    loser_key = "p2" if winner_key == "p1" else "p1"
+    winner_id = match.get(f"{winner_key}_entrant_id")
+    if not winner_id:
+        await ctx.send("Winner entrant ID not found. Admin must report via the hub.")
+        return
+
+    await update_active_match(set_id, p1_score=p1_score, p2_score=p2_score)
+
+    sgg = get_sgg()
+    try:
+        await sgg.report_set_score_normal(set_id, winner_id, match['p1_entrant_id'], match['p2_entrant_id'], p1_score, p2_score)
+    except Exception:
+        try:
+            await sgg.report_set_winner_only(set_id, winner_id)
+        except Exception as e:
+            await ctx.send(f"Failed to report to Start.gg: {e}")
+            return
+
+    await update_active_match(set_id, status="complete")
+    await add_bot_feed(f"📝 Match {set_id} reported via Discord: {p1_score}-{p2_score}", "info")
+    await ctx.send(f"✅ Score reported to Start.gg: {p1_score}-{p2_score}")
+    await ctx.channel.edit(archived=True, locked=True)
+
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
@@ -141,66 +187,8 @@ async def on_message(message):
 
     # Check if it's a DM
     if isinstance(message.channel, discord.DMChannel):
-        discord_id = str(message.author.id)
-        player = await get_player(discord_id)
-        
-        # Ensure they have completed OAuth (verified)
-        if player and player.get('is_verified'):
-            from core.database import get_setting
-            
-            # Step 1: Preferred Language
-            # If language not set, we assume the first message is the language choice
-            if not player.get('preferred_language'):
-                text = message.content.strip().lower()
-                if text in ('1', '2', 'ar', 'en', 'arabic', 'english'):
-                    choice = 'ar' if text in ('1', 'ar', 'arabic') else 'en'
-                    await create_or_update_player(discord_id, preferred_language=choice)
-                    q_cfn = await get_setting("q_cfn_id", "Thanks! Now, please enter your CFN ID.")
-                    await message.channel.send(q_cfn)
-                else:
-                    q_lang = await get_setting("q_language", "Please choose your language:\n1. Arabic (العربية)\n2. English")
-                    await message.channel.send(q_lang)
-                return
-
-            # Step 2: Check for CFN ID
-            if not player.get('cfn_id') and not message.attachments:
-                await create_or_update_player(discord_id, cfn_id=message.content)
-                q_avatar = await get_setting("q_avatar", "Got it! Finally, please upload an image to use as your Avatar.")
-                await message.channel.send(q_avatar)
-                return
-                
-            # Step 3: Check for Avatar
-            if player.get('cfn_id') and not player.get('avatar_path') and message.attachments:
-                attachment = message.attachments[0]
-                if any(attachment.filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg']):
-                    try:
-                        from core.image_utils import validate_avatar_quality, validate_avatar_safety
-                        image_bytes = await attachment.read()
-                        
-                        # 1. Quality check
-                        ok_q, msg_q = validate_avatar_quality(image_bytes)
-                        if not ok_q:
-                            await message.channel.send(f"❌ {msg_q}")
-                            return
-                        
-                        # 2. Safety check (AI)
-                        await message.channel.send("⏳ Analyzing image for safety and quality...")
-                        ok_s, msg_s = await validate_avatar_safety(image_bytes)
-                        if not ok_s:
-                            await message.channel.send(f"❌ {msg_s}")
-                            return
-                        
-                        # 3. Process and save
-                        filename_id = player.get('startgg_id') or discord_id
-                        saved_path = process_avatar(image_bytes, filename_id)
-                        
-                        await create_or_update_player(discord_id, avatar_path=saved_path)
-                        await message.channel.send("✅ Registration complete! Your profile is ready. Welcome to the tournament.")
-                    except Exception as e:
-                        await message.channel.send(f"Error processing image: {e}")
-                else:
-                    await message.channel.send("Please upload a valid image file (.png, .jpg, .jpeg).")
-                return
+        await registration_manager.handle_dm(message)
+        return
 
     # Check if it's a Thread
     if isinstance(message.channel, discord.Thread):
@@ -230,6 +218,33 @@ async def on_message(message):
                             "Locking this thread."
                         )
                         await message.channel.edit(archived=True, locked=True)
+                        
+                        # Save to DB and report to Start.gg
+                        from core.database import save_match_result, update_active_match
+                        from core.startgg_client import get_client
+                        sgg = get_client()
+                        
+                        # We need the set_id from the graph state
+                        set_id = new_state.get("set_id")
+                        if set_id:
+                            await save_match_result(
+                                set_id=str(set_id),
+                                winner_id=str(winner_id),
+                                score=score,
+                                status="completed"
+                            )
+                            await update_active_match(str(set_id), status="completed")
+                            
+                            # Report to Start.gg (optional, maybe based on a setting)
+                            try:
+                                # We need to translate winner_discord_id to start.gg entrant_id
+                                # For now, we'll assume the graph has the entrant_id if we passed it in
+                                # But the current schema uses winner_discord_id.
+                                # TODO: Implement ID mapping for reporting
+                                pass
+                            except Exception as e:
+                                print(f"Start.gg reporting failed: {e}")
+
                         # Push to Hub bot-feed
                         try:
                             async with httpx.AsyncClient() as hc:
@@ -244,6 +259,14 @@ async def on_message(message):
                             f"⚠️ **Conflict Detected!**\n"
                             "The reported scores do not match or a dispute was found. An Admin has been pinged."
                         )
+                        # Push conflict to DB
+                        from core.database import add_conflict, update_active_match
+                        set_id = new_state.get("set_id")
+                        if set_id:
+                            # We don't have claims here yet, so we'll just mark it
+                            await add_conflict(str(set_id), "AI detected conflict", "AI detected conflict")
+                            await update_active_match(str(set_id), status="conflict")
+
                         # Push conflict to Hub
                         try:
                             async with httpx.AsyncClient() as hc:
@@ -400,6 +423,20 @@ async def poll_hub_commands():
                         continue
                 await add_bot_feed("❌ Failed to announce: MATCH_CALL_CHANNEL_ID not set or channel not found", "error")
                 await update_hub_command_status(cmd_id, 'failed')
+                continue
+
+            if cmd_text.strip().lower().startswith("call_match "):
+                set_id = cmd_text.split(" ")[1].strip()
+                from core.database import get_active_match, get_tournament
+                match = await get_active_match(set_id)
+                if match:
+                    t = await get_tournament(match['tournament_slug'])
+                    from bot.match_threads import create_match_thread
+                    await create_match_thread(bot, t, match)
+                    await add_bot_feed(f"🤖 Created match thread for {match.get('p1_name')} vs {match.get('p2_name')}", "success")
+                else:
+                    await add_bot_feed(f"❌ call_match failed: Match {set_id} not found", "error")
+                await update_hub_command_status(cmd_id, 'done')
                 continue
 
             # Run the agent for all other commands
