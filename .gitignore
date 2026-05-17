@@ -171,3 +171,10 @@ logs/
 
 # PIDs
 .pids.json
+
+# Project tooling
+.agents/
+.specify/
+
+# Documents
+*.md
