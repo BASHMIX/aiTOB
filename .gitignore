@@ -178,3 +178,5 @@ logs/
 
 # Documents
 *.md
+!specs/**/*.md
+!AGENTS.md
