@@ -6,11 +6,9 @@
 Subscribe to tournament slug for live match updates.
 
 ```javascript
-// Client connects with slug as query parameter
-new WebSocket(`ws://localhost:8000/ws/hub?slug=fnc1ststartgg`)
-
-// Server sends periodic pings
-// Client responds with pong
+// Client connects using window.location.host for proxy/direct compatibility
+const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+const ws = new WebSocket(`${protocol}//${window.location.host}/ws/hub?slug=fnc1ststartgg`)
 ```
 
 ### /ws/overlay/{slot}
@@ -18,7 +16,8 @@ Per-slot overlay broadcast for OBS browser sources.
 
 ```javascript
 // No query params needed
-new WebSocket(`ws://localhost:8000/ws/overlay/station_1`)
+const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+const ws = new WebSocket(`${protocol}//${window.location.host}/ws/overlay/station_1`)
 ```
 
 ## Event Types
