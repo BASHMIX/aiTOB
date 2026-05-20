@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useHubStore } from '@/store/useHubStore';
 import axios from 'axios';
 
@@ -27,9 +27,21 @@ const IconDQ = () => (
 );
 
 export function ActiveMatchCard({ match }: { match: any }) {
-  const { stations, matches, setMatches } = useHubStore();
+  const { stations, matches, setMatches, tournaments, currentSlug } = useHubStore();
   const [dqOpen, setDqOpen] = useState(false);
   const [sending, setSending] = useState(false);
+  const [stationOpen, setStationOpen] = useState(false);
+  const stationRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (stationRef.current && !stationRef.current.contains(event.target as Node)) {
+        setStationOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [stationRef]);
 
   const isLive = !!match.station_id;
   const isSwapped = !!match.swapped;
@@ -137,11 +149,68 @@ export function ActiveMatchCard({ match }: { match: any }) {
     ? { name: match.p1_name, score: match.p1_score, team: match.p1_team, cfn: match.p1_cfn, avatar: match.p1_avatar, key: 'p1' as const }
     : { name: match.p2_name, score: match.p2_score, team: match.p2_team, cfn: match.p2_cfn, avatar: match.p2_avatar, key: 'p2' as const };
 
+  // ── Timer Logic ──
+  const curTourney = tournaments.find(t => t.name === currentSlug || t.slug === currentSlug);
+  const actualTourney = tournaments.find(t => t.slug === currentSlug) || curTourney;
+  const dqTimerSeconds = actualTourney?.dq_timer_seconds ?? 600;
+
+  const showTimer = match.status === "in_progress" || match.status === "called";
+  const [timeDisplay, setTimeDisplay] = useState("00:00");
+  const [isTimerWarning, setIsTimerWarning] = useState(false);
+
+  // Helper to parse dates in UTC safely to avoid local timezone offset shifts
+  const parseUTCDate = (dateStr: string | undefined | null) => {
+    if (!dateStr) return 0;
+    let clean = dateStr.trim();
+    if (clean.includes(' ') && !clean.includes('T')) {
+      clean = clean.replace(' ', 'T');
+    }
+    const hasZ = clean.endsWith('Z');
+    const hasPlus = clean.includes('+');
+    const tIdx = clean.indexOf('T');
+    const hasMinusOffset = tIdx !== -1 && clean.indexOf('-', tIdx) !== -1;
+    
+    if (!hasZ && !hasPlus && !hasMinusOffset) {
+      clean = `${clean}Z`;
+    }
+    return new Date(clean).getTime();
+  };
+
+  useEffect(() => {
+    if (!showTimer) return;
+    
+    const updateTimer = () => {
+      const now = Date.now();
+      
+      if (match.status === "in_progress" && match.started_at) {
+        const started = parseUTCDate(match.started_at);
+        const diff = Math.max(0, Math.floor((now - started) / 1000));
+        const m = Math.floor(diff / 60).toString().padStart(2, '0');
+        const s = (diff % 60).toString().padStart(2, '0');
+        setTimeDisplay(`${m}:${s}`);
+        setIsTimerWarning(false);
+      } 
+      else if (match.status === "called" && match.called_at) {
+        const called = parseUTCDate(match.called_at);
+        const diff = Math.floor((now - called) / 1000);
+        const remaining = Math.max(0, dqTimerSeconds - diff);
+        const m = Math.floor(remaining / 60).toString().padStart(2, '0');
+        const s = (remaining % 60).toString().padStart(2, '0');
+        setTimeDisplay(`${m}:${s}`);
+        setIsTimerWarning(remaining <= 60 && remaining > 0);
+      }
+    };
+
+    updateTimer();
+    const iv = setInterval(updateTimer, 1000);
+    return () => clearInterval(iv);
+  }, [match.status, match.started_at, match.called_at, dqTimerSeconds, showTimer]);
+
   return (
-    <div className="bg-cardDark border border-white/10 rounded-lg overflow-hidden flex flex-col shadow-md">
+    <div id={`active-match-${match.set_id}`} className={`bg-cardDark border border-white/10 rounded-lg flex flex-col shadow-md transition-all relative ${dqOpen ? 'z-30 border-red-500/30' : 'z-10'}`}>
 
       {/* ── Header ── */}
-      <div className="flex items-center justify-between px-3 py-2 bg-appDark border-b border-white/10">
+      <div className="flex items-center justify-between px-3 py-2 bg-appDark border-b border-white/10 rounded-t-lg">
         <div className="flex items-center gap-2">
           <span className="font-bold text-white text-sm">Match#: {match.match_number || match.set_id}</span>
         </div>
@@ -150,15 +219,58 @@ export function ActiveMatchCard({ match }: { match: any }) {
           <span className={`text-[10px] font-bold ${isLive ? 'text-statusGreen' : 'text-textDim'}`}>
             {isLive ? 'LIVE ON' : 'NOT LIVE'}
           </span>
-          {/* Station dropdown */}
-          <select
-            className="ml-1 bg-appDark border border-white/20 rounded px-1.5 py-0.5 text-[10px] text-textLight focus:outline-none focus:border-accentYellow/50"
-            value={match.station_id || ''}
-            onChange={e => assignStation(e.target.value)}
-          >
-            <option value="">— station —</option>
-            {stations.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
+          {/* Custom Station Dropdown */}
+          <div className="relative" ref={stationRef}>
+            <button
+              onClick={() => setStationOpen(!stationOpen)}
+              className={`ml-1 px-2 py-0.5 rounded border text-[10px] font-bold transition-all flex items-center gap-1
+                ${match.station_id
+                  ? 'border-statusGreen/30 bg-statusGreen/10 text-statusGreen hover:bg-statusGreen/20'
+                  : 'border-white/20 bg-appDark text-textLight hover:border-white/40'
+                }`}
+            >
+              <span>{match.station_id ? stations.find(s => s.id === match.station_id)?.name || 'Station' : '— station —'}</span>
+              <span className="text-[8px] opacity-75">▼</span>
+            </button>
+            {stationOpen && (
+              <div className="absolute right-0 top-full mt-1.5 z-50 bg-cardDark border border-white/10 rounded-md shadow-2xl min-w-[160px] text-left p-1 overflow-hidden animate-slideUp">
+                <div className="px-2 py-1 text-[8px] text-textDim font-bold uppercase tracking-widest border-b border-white/5 mb-1">Assign Station</div>
+                {match.station_id && (
+                  <button
+                    onClick={() => { setStationOpen(false); assignStation(''); }}
+                    className="w-full text-left px-2.5 py-1 text-[10px] text-gray-400 hover:bg-white/5 rounded transition-colors"
+                  >
+                    — Unassign
+                  </button>
+                )}
+                {stations.length === 0 && <div className="px-2.5 py-1.5 text-[10px] text-textDim italic">No stations</div>}
+                {stations.map(s => {
+                  const isOccupied = matches.some(m => m.set_id !== match.set_id && m.station_id === s.id && (m.status === 'in_progress' || m.status === 'called'));
+                  return (
+                    <button
+                      key={s.id}
+                      disabled={isOccupied}
+                      onClick={() => { setStationOpen(false); assignStation(s.id); }}
+                      className={`w-full text-left px-2.5 py-1.5 text-[10px] transition-colors rounded flex items-center justify-between mb-0.5
+                        ${isOccupied
+                          ? "text-red-400/50 bg-red-950/10 cursor-not-allowed border border-red-900/10"
+                          : s.id === match.station_id
+                            ? "text-statusGreen bg-statusGreen/10 font-bold"
+                            : "text-gray-200 hover:bg-white/5"
+                        }`}
+                    >
+                      <span className="truncate pr-1">{s.name}</span>
+                      {isOccupied && (
+                        <span className="text-[7px] leading-none text-red-500 font-extrabold px-1 py-0.5 rounded bg-red-500/10 border border-red-500/20 flex-shrink-0">
+                          OCCUPIED
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
           {/* × Close button */}
           <button
             onClick={closeMatch}
@@ -172,15 +284,27 @@ export function ActiveMatchCard({ match }: { match: any }) {
         </div>
       </div>
 
-      {/* ── Round ── */}
-      <div className="px-3 py-1 text-[10px] text-textDim border-b border-white/5">
-        Round: <span className="text-textLight">{match.round_name || '—'}</span>
-        {match.is_stream_match && (
-          <span className="ml-2 text-blue-400 inline-flex items-center gap-0.5">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3 h-3">
-              <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
-            </svg>
-            STREAM
+      {/* ── Round / Timer ── */}
+      <div className="px-3 py-1 text-[10px] text-textDim border-b border-white/5 flex items-center justify-between bg-black/10">
+        <div className="truncate pr-2">
+          Round: <span className="text-textLight font-semibold">{match.round_name || '—'}</span>
+          {match.is_stream_match && (
+            <span className="ml-2 text-blue-400 inline-flex items-center gap-0.5 font-bold">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3 h-3">
+                <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
+              </svg>
+              STREAM
+            </span>
+          )}
+        </div>
+        {showTimer && (
+          <span className={`font-mono text-[10px] font-bold tabular-nums flex items-center gap-1 ${
+            match.status === "in_progress" 
+              ? "text-statusGreen bg-green-500/10 border border-green-500/20 px-1.5 py-0.5 rounded-sm" 
+              : (isTimerWarning ? "text-red-400 bg-red-500/10 border border-red-500/20 px-1.5 py-0.5 rounded-sm animate-pulse" : "text-yellow-400 bg-yellow-500/10 border border-yellow-500/20 px-1.5 py-0.5 rounded-sm")
+          }`}>
+            <span>{match.status === "in_progress" ? "⏱️" : "⏳"}</span>
+            <span>{timeDisplay}</span>
           </span>
         )}
       </div>
@@ -191,7 +315,7 @@ export function ActiveMatchCard({ match }: { match: any }) {
           { label: 'P1', player: p1, accentClass: 'bg-accentYellow' },
           { label: 'P2', player: p2, accentClass: 'bg-orange-600' },
         ].map(({ label, player, accentClass }) => (
-          <div key={label} className="flex items-center gap-2 bg-appDark rounded px-2 py-1.5">
+          <div key={label} className="flex items-center gap-2 bg-appDark rounded px-2 py-1.5 border border-white/5">
             <span className={`${accentClass} text-black text-[10px] font-black px-1.5 py-0.5 rounded flex-shrink-0`}>{label}</span>
             <div className="w-8 h-8 rounded-full bg-white/10 overflow-hidden flex-shrink-0 border border-white/10">
               {player.avatar ? (
@@ -222,21 +346,21 @@ export function ActiveMatchCard({ match }: { match: any }) {
       </div>
 
       {/* ── Action Bar ── */}
-      <div className="flex items-center border-t border-white/10 bg-appDark">
+      <div className="flex items-center border-t border-white/10 bg-appDark rounded-b-lg overflow-hidden">
         {/* DQ / Force */}
         <div className="relative flex-1">
           <button onClick={() => setDqOpen(o => !o)}
             className="w-full flex flex-col items-center gap-0.5 py-2 px-1 text-red-400 hover:bg-red-900/20 transition-colors"
             title="Force DQ a player">
-            <IconDQ /><span className="text-[9px] font-bold">Force</span>
+            <IconDQ /><span className="text-[9px] font-bold">Force DQ</span>
           </button>
           {dqOpen && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setDqOpen(false)} />
-              <div className="absolute left-0 bottom-full mb-1 z-50 bg-cardDark border border-red-500/40 rounded shadow-2xl min-w-[130px]">
-                <div className="px-2 py-1 text-[9px] text-red-400 font-bold border-b border-white/10 uppercase">DQ Who?</div>
-                <button onClick={() => dqPlayer('p1')} className="w-full text-left px-3 py-2 text-xs text-red-300 hover:bg-red-900/30 truncate">{match.p1_name}</button>
-                <button onClick={() => dqPlayer('p2')} className="w-full text-left px-3 py-2 text-xs text-red-300 hover:bg-red-900/30 truncate">{match.p2_name}</button>
+              <div className="absolute left-0 bottom-full mb-1.5 z-50 bg-cardDark border border-red-500/40 rounded-lg shadow-2xl min-w-[150px] p-1 overflow-hidden animate-slideUp">
+                <div className="px-2 py-1 text-[9px] text-red-400 font-bold border-b border-white/5 uppercase tracking-widest">DQ Who?</div>
+                <button onClick={() => dqPlayer('p1')} className="w-full text-left px-3 py-2 text-xs text-white hover:bg-red-500/10 rounded transition-colors truncate">{match.p1_name}</button>
+                <button onClick={() => dqPlayer('p2')} className="w-full text-left px-3 py-2 text-xs text-white hover:bg-red-500/10 rounded transition-colors truncate">{match.p2_name}</button>
               </div>
             </>
           )}

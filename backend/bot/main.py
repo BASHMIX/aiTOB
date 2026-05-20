@@ -180,6 +180,119 @@ async def report(ctx, p1_score: int, p2_score: int):
     await ctx.send(f"✅ Score reported to Start.gg: {p1_score}-{p2_score}")
     await ctx.channel.edit(archived=True, locked=True)
 
+
+async def send_score_report_dms(bot, match):
+    p1_discord = match.get("p1_discord")
+    p2_discord = match.get("p2_discord")
+    if not p1_discord and match.get("p1_entrant_id"):
+        from bot.match_threads import get_discord_id_from_startgg
+        p1_discord = await get_discord_id_from_startgg(match.get("p1_entrant_id"))
+    if not p2_discord and match.get("p2_entrant_id"):
+        from bot.match_threads import get_discord_id_from_startgg
+        p2_discord = await get_discord_id_from_startgg(match.get("p2_entrant_id"))
+    p1_name = match.get("p1_name", "TBD")
+    p2_name = match.get("p2_name", "TBD")
+    set_id = match.get("set_id")
+    if p1_discord:
+        try:
+            member = await bot.fetch_user(int(p1_discord))
+            embed = discord.Embed(
+                title="Report Your Match Score",
+                description=f"Your match against **{p2_name}** is in progress!\n\nOnce completed, please reply to this DM with:\n`score <your_score> <opponent_score>`\n(e.g., `score 2 1` if you won 2-1).",
+                color=discord.Color.blue()
+            )
+            await member.send(embed=embed)
+        except Exception as e:
+            print(f"Failed to DM P1 ({p1_discord}): {e}")
+    if p2_discord:
+        try:
+            member = await bot.fetch_user(int(p2_discord))
+            embed = discord.Embed(
+                title="Report Your Match Score",
+                description=f"Your match against **{p1_name}** is in progress!\n\nOnce completed, please reply to this DM with:\n`score <your_score> <opponent_score>`\n(e.g., `score 2 1` if you won 2-1).",
+                color=discord.Color.blue()
+            )
+            await member.send(embed=embed)
+        except Exception as e:
+            print(f"Failed to DM P2 ({p2_discord}): {e}")
+
+
+async def handle_score_report_dm(message: discord.Message):
+    discord_id = str(message.author.id)
+    content = message.content.strip()
+    import re
+    match_obj = re.search(r'^score\s+(\d+)\s+(\d+)', content, re.IGNORECASE)
+    if not match_obj:
+        await message.channel.send("❌ Invalid format. Please use: `score <your_score> <opponent_score>` (e.g. `score 2 1`).")
+        return
+    score1 = int(match_obj.group(1))
+    score2 = int(match_obj.group(2))
+    from core.database import get_player_in_progress_match, update_active_match, get_tournament, add_bot_feed
+    match = await get_player_in_progress_match(discord_id)
+    if not match:
+        await message.channel.send("❌ No active, in-progress match found for you in this tournament.")
+        return
+    set_id = match["set_id"]
+    is_p1 = (str(match.get("p1_discord")) == discord_id)
+    p1_score = score1 if is_p1 else score2
+    p2_score = score2 if is_p1 else score1
+    if p1_score == p2_score:
+        await message.channel.send("❌ Scores cannot be tied. Please report again.")
+        return
+    t = await get_tournament(match["tournament_slug"])
+    bot_manage_finish = t.get("bot_manage_finish", "off") if t else "off"
+    is_stream = match.get("is_stream_match", False)
+    if bot_manage_finish in ["on", "auto"] and not is_stream:
+        from core.startgg_client import get_client
+        sgg = get_client()
+        winner_key = "p1" if p1_score > p2_score else "p2"
+        winner_id = match.get(f"{winner_key}_entrant_id")
+        try:
+            await sgg.report_set_score_normal(set_id, winner_id, match['p1_entrant_id'], match['p2_entrant_id'], p1_score, p2_score)
+            await update_active_match(set_id, status="complete", p1_score=p1_score, p2_score=p2_score)
+            await add_bot_feed(f"🤖 Bot auto-finished match {set_id} ({match['p1_name']} {p1_score} - {p2_score} {match['p2_name']}) via player DM", "success")
+            await message.channel.send(f"✅ Match score reported and completed: {p1_score} - {p2_score}. Thanks!")
+            thread_id = match.get("discord_thread_id")
+            if thread_id:
+                try:
+                    thread = bot.get_channel(int(thread_id))
+                    if thread:
+                        await thread.send(f"✅ Match completed via DM report! Score: {match['p1_name']} **{p1_score}** - **{p2_score}** {match['p2_name']}")
+                        await thread.edit(archived=True, locked=True)
+                except Exception:
+                    pass
+        except Exception as e:
+            try:
+                await sgg.report_set_winner_only(set_id, winner_id)
+                await update_active_match(set_id, status="complete", p1_score=p1_score, p2_score=p2_score)
+                await add_bot_feed(f"🤖 Bot auto-finished match {set_id} (winner-only fallback) via player DM", "success")
+                await message.channel.send("✅ Match score reported (winner-only) and completed. Thanks!")
+                thread_id = match.get("discord_thread_id")
+                if thread_id:
+                    try:
+                        thread = bot.get_channel(int(thread_id))
+                        if thread:
+                            await thread.send(f"✅ Match completed! Winner reported via DM.")
+                            await thread.edit(archived=True, locked=True)
+                    except Exception:
+                        pass
+            except Exception as ex:
+                await add_bot_feed(f"❌ Bot failed to auto-report match {set_id} via DM: {ex}", "error")
+                await message.channel.send(f"⚠️ Failed to report score to Start.gg: {ex}. Scores saved in hub; admin will verify.")
+    else:
+        await update_active_match(set_id, p1_score=p1_score, p2_score=p2_score)
+        await add_bot_feed(f"📝 Score reported via DM for match {set_id}: {p1_score} - {p2_score} (Awaiting admin submit)", "info")
+        await message.channel.send(f"✅ Scores saved: {p1_score} - {p2_score}. Awaiting admin submit or stream broadcast.")
+        thread_id = match.get("discord_thread_id")
+        if thread_id:
+            try:
+                thread = bot.get_channel(int(thread_id))
+                if thread:
+                    await thread.send(f"📝 Scores reported via DM: {match['p1_name']} **{p1_score}** - **{p2_score}** {match['p2_name']}. Awaiting admin verification.")
+            except Exception:
+                pass
+
+
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
@@ -187,6 +300,9 @@ async def on_message(message):
 
     # Check if it's a DM
     if isinstance(message.channel, discord.DMChannel):
+        if message.content.strip().lower().startswith("score "):
+            await handle_score_report_dm(message)
+            return
         await registration_manager.handle_dm(message)
         return
 
@@ -436,6 +552,15 @@ async def poll_hub_commands():
                     await add_bot_feed(f"🤖 Created match thread for {match.get('p1_name')} vs {match.get('p2_name')}", "success")
                 else:
                     await add_bot_feed(f"❌ call_match failed: Match {set_id} not found", "error")
+                await update_hub_command_status(cmd_id, 'done')
+                continue
+
+            if cmd_text.strip().lower().startswith("dm_score_request "):
+                set_id = cmd_text.split(" ")[1].strip()
+                from core.database import get_active_match
+                match = await get_active_match(set_id)
+                if match:
+                    await send_score_report_dms(bot, match)
                 await update_hub_command_status(cmd_id, 'done')
                 continue
 

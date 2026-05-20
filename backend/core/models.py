@@ -24,6 +24,8 @@ class Tournament(BaseModel):
     raw_data: Optional[str] = None
     dq_timer_seconds: int = 600
     auto_dq_enabled: bool = True
+    bot_manage_limit: Optional[str] = "off"
+    bot_manage_finish: Optional[str] = "off"
     registration_deadline: Optional[datetime] = None
     created_at: Optional[datetime] = None
 

@@ -38,6 +38,9 @@ async def transition_match(set_id: str, to_status: str, **kwargs) -> dict:
 
     elif to_status == "in_progress":
         update_kwargs["started_at"] = datetime.datetime.utcnow().isoformat()
+        if match.get("bot_enabled", True):
+            from backend.core.database import add_hub_command
+            await add_hub_command(f"dm_score_request {set_id}")
 
     elif to_status == "not_started":
         update_kwargs["p1_score"] = 0

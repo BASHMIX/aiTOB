@@ -39,6 +39,8 @@ async def init_db():
                 raw_data TEXT,
                 dq_timer_seconds INTEGER DEFAULT 600,
                 auto_dq_enabled BOOLEAN DEFAULT TRUE,
+                bot_manage_limit TEXT DEFAULT 'off',
+                bot_manage_finish TEXT DEFAULT 'off',
                 registration_deadline TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -170,6 +172,8 @@ async def init_db():
             "ALTER TABLE active_matches ADD COLUMN p2_avatar TEXT",
             "ALTER TABLE active_matches ADD COLUMN lobby_password TEXT",
             "ALTER TABLE active_matches ADD COLUMN discord_thread_id TEXT",
+            "ALTER TABLE tournaments ADD COLUMN bot_manage_limit TEXT DEFAULT 'off'",
+            "ALTER TABLE tournaments ADD COLUMN bot_manage_finish TEXT DEFAULT 'off'",
         ]
         for m in migrations:
             try:
@@ -252,6 +256,14 @@ async def update_tournament_settings(slug: str, **kwargs):
         set_clause = ', '.join([f"{k} = ?" for k in kwargs.keys()])
         values = list(kwargs.values()) + [slug]
         await db.execute(f"UPDATE tournaments SET {set_clause} WHERE slug = ?", values)
+        if "bot_manage_limit" in kwargs:
+            limit_setting = kwargs["bot_manage_limit"]
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT set_id, round_name, phase_group FROM active_matches WHERE tournament_slug = ?", (slug,)) as cursor:
+                rows = [dict(r) for r in await cursor.fetchall()]
+            for r in rows:
+                bot_enabled = should_bot_manage_match(r["round_name"], r["phase_group"], limit_setting)
+                await db.execute("UPDATE active_matches SET bot_enabled = ? WHERE set_id = ?", (bot_enabled, r["set_id"]))
         await db.commit()
 
 async def get_tournaments():
@@ -409,6 +421,10 @@ async def sync_active_matches(tournament_slug: str, startgg_sets: list):
     Source of Truth: Start.gg
     """
     async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT bot_manage_limit FROM tournaments WHERE slug = ?", (tournament_slug,)) as t_cursor:
+            t_row = await t_cursor.fetchone()
+            bot_manage_limit = t_row[0] if t_row else "off"
+
         async with db.execute("SELECT set_id, status FROM active_matches WHERE tournament_slug = ?", (tournament_slug,)) as cursor:
             rows = await cursor.fetchall()
             local_matches = {row[0]: row[1] for row in rows}
@@ -451,12 +467,13 @@ async def sync_active_matches(tournament_slug: str, startgg_sets: list):
                 # Auto-add matches that are Ready (4), In Progress (2), or Called (6)
                 if state in [2, 4, 6]:
                     status = 'called' if state == 6 else ('in_progress' if state == 2 else 'not_started')
+                    bot_enabled = should_bot_manage_match(round_name, str(phase_group), bot_manage_limit)
                     await db.execute("""
                         INSERT INTO active_matches (
                             set_id, tournament_slug, p1_name, p2_name, p1_avatar, p2_avatar,
-                            p1_entrant_id, p2_entrant_id, round_name, match_number, phase_group, status
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (sid, tournament_slug, p1_name, p2_name, p1_avatar, p2_avatar, p1_eid, p2_eid, round_name, match_num, str(phase_group), status))
+                            p1_entrant_id, p2_entrant_id, round_name, match_number, phase_group, status, bot_enabled
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (sid, tournament_slug, p1_name, p2_name, p1_avatar, p2_avatar, p1_eid, p2_eid, round_name, match_num, str(phase_group), status, bot_enabled))
         
         # 3. Detect Orphans
         if len(startgg_sets) < 490: 
@@ -673,3 +690,36 @@ async def update_hub_command_status(command_id: int, status: str):
             (status, command_id)
         )
         await db.commit()
+
+def should_bot_manage_match(round_name: str, phase_group: str, limit_setting: str) -> bool:
+    if not limit_setting or limit_setting == "off":
+        return False
+    if limit_setting == "all" or limit_setting == "on":
+        return True
+        
+    round_lower = (round_name or "").lower()
+    phase_lower = (phase_group or "").lower()
+    limit_lower = (limit_setting or "").lower()
+    
+    if limit_lower == "top8":
+        is_top8 = "top 8" in phase_lower or "top8" in phase_lower or "final" in round_lower or "semi" in round_lower or "quarter" in round_lower
+        return not is_top8
+        
+    if limit_lower == "top16":
+        is_top16 = "top 16" in phase_lower or "top16" in phase_lower or "top 8" in phase_lower or "top8" in phase_lower or "final" in round_lower or "semi" in round_lower or "quarter" in round_lower
+        return not is_top16
+        
+    if limit_lower in phase_lower:
+        return True
+        
+    return True
+
+async def get_player_in_progress_match(discord_id: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM active_matches WHERE status = 'in_progress' AND (p1_discord = ? OR p2_discord = ?)",
+            (discord_id, discord_id)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None

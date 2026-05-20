@@ -6,7 +6,7 @@ export function ActiveMatchStatus() {
   const activeMatches = matches.filter(m => m.status === 'in_progress' || m.status === 'called' || m.status === 'not_started');
 
   return (
-    <section className="bg-cardDark rounded-lg p-4 shadow-md flex flex-col gap-3 border border-white/5">
+    <section className="bg-cardDark/50 backdrop-blur-md rounded-lg p-4 shadow-md flex flex-col gap-3 border border-white/10 relative z-10">
       <h2 className="text-accentYellow font-bold text-lg tracking-wide uppercase border-b border-white/10 pb-2">
         Active Match Status
       </h2>

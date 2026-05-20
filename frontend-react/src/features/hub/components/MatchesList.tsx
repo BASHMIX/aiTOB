@@ -1,4 +1,3 @@
-import React from "react";
 import { MatchCard, type MatchData, type MatchStatus } from "./MatchCard";
 
 export interface MatchesListProps {

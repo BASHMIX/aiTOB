@@ -7,6 +7,8 @@ interface Tournament {
   raw_data: string;
   auto_dq_enabled?: boolean;
   dq_timer_seconds?: number;
+  bot_manage_limit?: string;
+  bot_manage_finish?: string;
 }
 
 interface Match {

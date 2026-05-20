@@ -29,11 +29,17 @@ async def create_match_thread(bot, tournament, set_data):
     thread_name = f"{round_name}: {p1_name} vs {p2_name}"
     thread = await channel.create_thread(name=thread_name, type=discord.ChannelType.public_thread)
 
-    await update_active_match(set_id, discord_thread_id=str(thread.id), status="called")
-
     is_stream = set_data.get("is_stream_match", False)
     p1_discord = await get_discord_id_from_startgg(set_data.get('p1_id') or set_data.get('p1_entrant_id'))
     p2_discord = await get_discord_id_from_startgg(set_data.get('p2_id') or set_data.get('p2_entrant_id'))
+
+    await update_active_match(
+        set_id,
+        discord_thread_id=str(thread.id),
+        status="called",
+        p1_discord=p1_discord,
+        p2_discord=p2_discord
+    )
 
     mentions = []
     if p1_discord: mentions.append(f"<@{p1_discord}>")

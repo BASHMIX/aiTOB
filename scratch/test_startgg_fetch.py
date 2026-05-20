@@ -11,5 +11,5 @@ async def main():
     client = StartGGClient()
     info = await client.fetch_tournament_info("tournament/let-s-play-12") # use a real or random slug, wait I need a valid one or just let it fail gracefully
     print(info)
-
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())

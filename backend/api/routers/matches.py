@@ -17,6 +17,24 @@ router = APIRouter(tags=["matches"])
 sgg_client = get_client()
 
 
+async def auto_assign_free_station(set_id: str):
+    from backend.core.database import get_stations, get_active_matches, upsert_active_match
+    stations = await get_stations()
+    active_matches = await get_active_matches()
+    available_stations = [st for st in stations if not st.get("hidden")]
+    if not available_stations:
+        return None
+    used_station_ids = set()
+    for am in active_matches:
+        if am.get("set_id") != set_id and am.get("status") in ["not_started", "called", "in_progress"] and am.get("station_id"):
+            used_station_ids.add(am.get("station_id"))
+    for st in available_stations:
+        if st["id"] not in used_station_ids:
+            await upsert_active_match(set_id, station_id=st["id"])
+            return st["id"]
+    return None
+
+
 @router.get("/active-matches", summary="List active matches")
 async def api_active_matches(tournament_slug: str = None):
     """Return all active matches, with optional tournament_slug filter."""
@@ -72,6 +90,10 @@ async def api_call_match(set_id: str):
     result = await transition_match(set_id, "called")
     if result.get("error"):
         raise HTTPException(400, result["error"])
+    
+    if m.get("is_stream_match"):
+        await auto_assign_free_station(set_id)
+
     called_at = datetime.datetime.utcnow().isoformat()
     await add_hub_command(f"call_match {set_id}")
     await add_bot_feed(f"Players called for match: {m['p1_name']} vs {m['p2_name']}")
@@ -101,6 +123,8 @@ async def api_toggle_stream(set_id: str, body: ToggleStreamRequest):
     m = await get_active_match(set_id)
     if m:
         await upsert_active_match(set_id, is_stream_match=body.is_stream_match)
+        if body.is_stream_match and m.get("status") in ["called", "in_progress"] and not m.get("station_id"):
+            await auto_assign_free_station(set_id)
     await hub_mgr.broadcast({"type": "match_update"})
     return {"message": "Stream toggle updated", "is_stream_match": body.is_stream_match}
 
@@ -166,15 +190,19 @@ async def api_dq_match(set_id: str, body: DQRequest):
     m = await get_active_match(set_id)
     if not m:
         raise HTTPException(404)
+    dq_eid = None
     try:
         if dq_player != "both":
-            entrant_id = m.get('p1_entrant_id') if dq_player == "p1" else m.get('p2_entrant_id')
-            if entrant_id:
-                await sgg_client.mark_set_dq(set_id, entrant_id)
+            winner_eid = m.get('p2_entrant_id') if dq_player == "p1" else m.get('p1_entrant_id')
+            dq_eid = m.get('p1_entrant_id') if dq_player == "p1" else m.get('p2_entrant_id')
+            if winner_eid:
+                await sgg_client.mark_set_dq(set_id, winner_eid)
+        else:
+            dq_eid = "both"
     except Exception as e:
         print(f"Start.gg mark DQ failed: {e}")
         return {"error": True, "message": "Start.gg update failed."}
-    await transition_match(set_id, "complete", dq_player=dq_player)
+    await transition_match(set_id, "complete", dq_player=dq_eid)
     return {"message": "DQ marked"}
 
 
@@ -194,6 +222,12 @@ async def api_delete_active_match(set_id: str):
 async def api_patch_active_match(set_id: str, request: Request):
     """Update arbitrary fields on an active match (scores, swap, station, etc)."""
     d = await request.json()
+    station_id = d.get("station_id")
+    if station_id:
+        active_matches = await get_active_matches()
+        for am in active_matches:
+            if am.get("set_id") != set_id and am.get("status") in ["not_started", "called", "in_progress"] and am.get("station_id") == station_id:
+                raise HTTPException(status_code=400, detail=f"Station is already occupied by match: {am.get('p1_name')} vs {am.get('p2_name')}")
     await upsert_active_match(set_id, **d)
     await hub_mgr.broadcast({"type": "match_update"})
     return {"message": "Updated"}

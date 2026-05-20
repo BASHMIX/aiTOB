@@ -37,7 +37,7 @@ export function StationCard({ station, onReload }: { station: any, onReload: () 
   };
 
   return (
-    <div className="border border-white/20 rounded-lg p-3 bg-appDark">
+    <div id={`station-${station.id}`} className="border border-white/20 rounded-lg p-3 bg-appDark">
       <div className="flex justify-between items-center mb-3 pb-2 border-b border-white/10">
         <div className="flex items-center gap-2">
           <span className="text-white">📺</span>

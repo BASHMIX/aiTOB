@@ -52,7 +52,7 @@ export function MatchDashboard() {
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
 
   // ── Filter state ──
-  const [hideTBD, setHideTBD] = useState(false);
+  const [hideTBD, setHideTBD] = useState(true);
   const [selectedPhaseGroup, setSelectedPhaseGroup] = useState<string>('__all__');
 
   const showToast = (msg: unknown, ok = true) => {
@@ -170,15 +170,15 @@ export function MatchDashboard() {
     try {
       if (action === 'activate') {
         await axios.post('/api/active-matches', {
-          set_id: row.id, p1_name: row.p1, p2_name: row.p2,
-          p1_entrant_id: row.p1_eid || '', p2_entrant_id: row.p2_eid || '',
-          p1_avatar: row.p1_avatar || '', p2_avatar: row.p2_avatar || '',
+          set_id: row.id || row.set_id, p1_name: row.players[0].name, p2_name: row.players[1].name,
+          p1_entrant_id: row.raw?.p1_eid || '', p2_entrant_id: row.raw?.p2_eid || '',
+          p1_avatar: row.players[0].avatar || '', p2_avatar: row.players[1].avatar || '',
           round_name: row.round || '', tournament_slug: currentSlug || '',
-          match_number: row.identifier,
+          match_number: row.id,
           status: 'not_started', p1_score: 0, p2_score: 0,
-          phase_group: row.phaseGroup || '',
+          phase_group: row.pool || '',
         });
-        showToast(`Activated: ${row.p1} vs ${row.p2}`);
+        showToast(`Activated: ${row.players[0].name} vs ${row.players[1].name}`);
         reload();
       }
       else if (action === 'updateScore') {
@@ -193,7 +193,20 @@ export function MatchDashboard() {
         else { showToast('Score reported to Start.gg ✓'); reload(); }
       }
       else if (action === 'callMatch') {
-        await axios.post(`/api/active-matches/${row.set_id || row.id}/call`);
+        const targetId = row.raw?.set_id || row.raw?.id || row.set_id || row.id;
+        if (!row.isLocal) {
+          // If not activated yet, activate it first
+          await axios.post('/api/active-matches', {
+            set_id: targetId, p1_name: row.players[0].name, p2_name: row.players[1].name,
+            p1_entrant_id: row.raw?.p1_eid || '', p2_entrant_id: row.raw?.p2_eid || '',
+            p1_avatar: row.players[0].avatar || '', p2_avatar: row.players[1].avatar || '',
+            round_name: row.round || '', tournament_slug: currentSlug || '',
+            match_number: row.id,
+            status: 'not_started', p1_score: 0, p2_score: 0,
+            phase_group: row.pool || '',
+          });
+        }
+        await axios.post(`/api/active-matches/${targetId}/call`);
         showToast('Players called via Discord');
         reload();
       }
@@ -257,7 +270,7 @@ export function MatchDashboard() {
   const sorted = sortTBDLast(finalFiltered);
 
   return (
-    <div className="flex flex-col gap-4 relative p-1">
+    <div className="flex flex-col gap-4 relative p-1 flex-1 h-full overflow-hidden">
       {/* Toast */}
       {toast && (
         <div className={`fixed top-4 right-4 z-50 px-4 py-2.5 rounded-lg shadow-2xl text-sm font-bold border
@@ -322,14 +335,14 @@ export function MatchDashboard() {
 
       {settingsModalOpen && (
         <MatchSettingsModal
-          currentSlug={currentSlug}
+          currentSlug={currentSlug || ''}
           initialAutoDqEnabled={autoDqEnabled}
           initialDqTimerSeconds={dqTimerSeconds}
+          initialBotManageLimit={actualTourney?.bot_manage_limit}
+          initialBotManageFinish={actualTourney?.bot_manage_finish}
+          phaseGroups={phaseGroups}
           onClose={() => setSettingsModalOpen(false)}
           onSave={() => {
-            // Can reload tournaments from API if needed, 
-            // but for now relying on backend to update. 
-            // Let's trigger a full refresh to be safe or update local store.
             axios.get('/api/tournaments').then(r => useHubStore.getState().setTournaments(r.data.tournaments || []));
           }}
         />

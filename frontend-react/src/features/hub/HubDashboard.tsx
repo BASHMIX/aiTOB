@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { TopNavigation } from '@/components/layout/TopNavigation';
 import { TournamentSettings } from './components/TournamentSettings';
 import { ActiveMatchStatus } from './components/ActiveMatchStatus';
@@ -13,6 +13,147 @@ import axios from 'axios';
 
 const PREFERRED_SLUG = 'FNC1stStartGG';
 
+// ── ComfyUI Bezier Node Connections ─────────────────────────────────────
+function ConnectionLines() {
+  const { matches } = useHubStore();
+  const [lines, setLines] = useState<{ id: string; path: string }[]>([]);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Connection exists if match is called/live and assigned to a station
+  const activeMatches = matches.filter(
+    (m) => (m.status === 'in_progress' || m.status === 'called') && m.station_id
+  );
+
+  const calculateLines = useCallback(() => {
+    if (!containerRef.current) return;
+    const containerRect = containerRef.current.getBoundingClientRect();
+    const newLines: { id: string; path: string }[] = [];
+
+    activeMatches.forEach((m) => {
+      const matchEl = document.getElementById(`active-match-${m.set_id}`);
+      const stationEl = document.getElementById(`station-${m.station_id}`);
+
+      if (matchEl && stationEl) {
+        const mRect = matchEl.getBoundingClientRect();
+        const sRect = stationEl.getBoundingClientRect();
+
+        // Start point: bottom center of the active match card
+        const startX = (mRect.left + mRect.right) / 2 - containerRect.left;
+        const startY = mRect.bottom - containerRect.top;
+
+        // End point: top center of the station card
+        const endX = (sRect.left + sRect.right) / 2 - containerRect.left;
+        const endY = sRect.top - containerRect.top;
+
+        // Curved Bezier node connection curve (down and then up)
+        const cpY1 = startY + 60;
+        const cpY2 = endY - 60;
+        const path = `M ${startX} ${startY} C ${startX} ${cpY1}, ${endX} ${cpY2}, ${endX} ${endY}`;
+
+        newLines.push({
+          id: `${m.set_id}-${m.station_id}`,
+          path,
+        });
+      }
+    });
+
+    // Check if lines actually changed to prevent state thrashing
+    const serializedNew = JSON.stringify(newLines);
+    const serializedOld = JSON.stringify(lines);
+    if (serializedNew !== serializedOld) {
+      setLines(newLines);
+    }
+  }, [activeMatches, lines]);
+
+  useEffect(() => {
+    calculateLines();
+
+    if (!containerRef.current) return;
+    
+    // Listen to container resizing
+    const observer = new ResizeObserver(() => {
+      calculateLines();
+    });
+    observer.observe(containerRef.current);
+
+    const handleScrollOrUpdate = () => {
+      calculateLines();
+    };
+
+    // Listen to parent tab scroll container
+    const scrollEl = containerRef.current.parentElement;
+    if (scrollEl) {
+      scrollEl.addEventListener('scroll', handleScrollOrUpdate);
+    }
+    
+    window.addEventListener('resize', handleScrollOrUpdate);
+
+    // Dynamic interval polling to keep paths aligned during animation expansions
+    const iv = setInterval(calculateLines, 150);
+
+    return () => {
+      observer.disconnect();
+      if (scrollEl) {
+        scrollEl.removeEventListener('scroll', handleScrollOrUpdate);
+      }
+      window.removeEventListener('resize', handleScrollOrUpdate);
+      clearInterval(iv);
+    };
+  }, [calculateLines]);
+
+  return (
+    <div ref={containerRef} className="absolute inset-0 pointer-events-none z-20">
+      <svg className="w-full h-full absolute inset-0">
+        <defs>
+          <linearGradient id="flow-glow" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.85" />
+            <stop offset="50%" stopColor="#eab308" stopOpacity="0.85" />
+            <stop offset="100%" stopColor="#22c55e" stopOpacity="0.85" />
+          </linearGradient>
+          <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="3.5" result="blur" />
+            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+          </filter>
+        </defs>
+        {lines.map((l) => (
+          <g key={l.id}>
+            {/* Background glowing line */}
+            <path
+              d={l.path}
+              fill="none"
+              stroke="#eab308"
+              strokeWidth="5"
+              strokeOpacity="0.18"
+              filter="url(#glow)"
+            />
+            {/* Foreground node connection line with flow animation */}
+            <path
+              d={l.path}
+              fill="none"
+              stroke="url(#flow-glow)"
+              strokeWidth="2.5"
+              strokeDasharray="9,6"
+              className="comfy-flow-line"
+            />
+          </g>
+        ))}
+      </svg>
+      {/* Inline styles for the animated flow */}
+      <style>{`
+        @keyframes comfyFlow {
+          to {
+            stroke-dashoffset: -30;
+          }
+        }
+        .comfy-flow-line {
+          animation: comfyFlow 1.8s linear infinite;
+        }
+      `}</style>
+    </div>
+  );
+}
+
+// ── Main Dashboard ──────────────────────────────────────────────────────
 export function HubDashboard() {
   const {
     setTournaments,
@@ -28,7 +169,6 @@ export function HubDashboard() {
   const loadData = useCallback(async () => {
     setIsRefetching(true);
     try {
-      // Critical: load tournaments & matches (these always work)
       const [tourneysRes, matchesRes] = await Promise.all([
         axios.get('/api/tournaments'),
         axios.get('/api/active-matches'),
@@ -37,7 +177,6 @@ export function HubDashboard() {
       const tourneys = tourneysRes.data.tournaments || [];
       setTournaments(tourneys);
 
-      // Only load matches if a tournament is selected
       const slug = currentSlug || localStorage.getItem('hub_current_slug');
       if (slug) {
         setMatches(matchesRes.data.matches || []);
@@ -45,14 +184,12 @@ export function HubDashboard() {
         setMatches([]);
       }
 
-      // Auto-select: restore from localStorage or pick first
       if (!slug && tourneys.length > 0) {
         const preferred = tourneys.find((t: any) => t.slug?.toLowerCase() === PREFERRED_SLUG.toLowerCase());
         if (preferred) setCurrentSlug(preferred.slug);
         else setCurrentSlug(tourneys[0].slug);
       }
 
-      // Best-effort: status & settings (404 won't break anything)
       try {
         const statusRes = await axios.get('/api/status');
         setStatus({
@@ -60,7 +197,7 @@ export function HubDashboard() {
           websockets: true,
           discord_bot: statusRes.data.discord_bot || false
         });
-      } catch { /* /api/status not available yet */ }
+      } catch { /* ignored */ }
 
       try {
         const settingsRes = await axios.get('/api/settings');
@@ -68,7 +205,7 @@ export function HubDashboard() {
         if (sets.current_theme) {
           document.documentElement.setAttribute('data-theme', sets.current_theme);
         }
-      } catch { /* /api/settings not available yet */ }
+      } catch { /* ignored */ }
 
     } catch (err) {
       console.error("Error fetching hub data", err);
@@ -77,7 +214,6 @@ export function HubDashboard() {
     }
   }, [currentSlug, setCurrentSlug, setMatches, setStatus, setTournaments]);
 
-  // ── WebSocket Integration ──
   useHubSocket(useCallback((evt) => {
     if (evt.type === 'match_update') {
       loadData();
@@ -89,7 +225,7 @@ export function HubDashboard() {
   }, []);
 
   return (
-    <div className="flex flex-col gap-4 h-full">
+    <div className="flex flex-col gap-4 h-full relative">
       <header className="flex items-center justify-between gap-4 pb-2 border-b border-white/10">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded overflow-hidden flex items-center justify-center">
@@ -128,9 +264,10 @@ export function HubDashboard() {
             </button>
           </div>
 
-          <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
+          <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar relative">
             {activeTab === 'active' && (
-              <div className="flex flex-col gap-4 animate-fadeIn">
+              <div className="flex flex-col gap-4 relative animate-fadeIn">
+                <ConnectionLines />
                 <ActiveMatchStatus />
                 <ActiveStreamsStatus />
               </div>
@@ -169,9 +306,11 @@ export function HubDashboard() {
         {/* Right Column */}
         <div className="lg:col-span-3 xl:col-span-2 flex flex-col gap-4 h-full pr-1">
           <Conflicts />
-          <BotFeed />
         </div>
       </main>
+
+      {/* Floating collapsible Bot Feed & Logs panel */}
+      <BotFeed />
     </div>
   );
 }

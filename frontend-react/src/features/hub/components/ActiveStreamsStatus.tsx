@@ -28,7 +28,7 @@ export function ActiveStreamsStatus() {
   };
 
   return (
-    <section className="bg-cardDark rounded-lg p-4 shadow-md flex flex-col gap-3 border border-white/5">
+    <section className="bg-cardDark/50 backdrop-blur-md rounded-lg p-4 shadow-md flex flex-col gap-3 border border-white/10 relative z-10">
       <div className="flex justify-between items-center border-b border-white/10 pb-2">
         <h2 className="text-accentYellow font-bold text-lg tracking-wide uppercase">Active Streams Status</h2>
         <div className="flex gap-3 text-xs font-medium text-textDim">
@@ -36,7 +36,7 @@ export function ActiveStreamsStatus() {
           <button onClick={addStation} className="hover:text-white transition-colors">Add Station</button>
         </div>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
         {stations.length === 0 ? (
           <div className="text-center p-5 text-textDim text-sm col-span-full">No stations</div>
         ) : (
