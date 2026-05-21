@@ -69,14 +69,20 @@ async def api_create_active_match(body: CreateActiveMatchRequest):
 
 @router.post("/active-matches/{set_id}/activate",
              dependencies=[Depends(verify_hub_password)],
-             summary="Activate a match (reset to not_started)")
+             summary="Activate a match")
 async def api_activate_match(set_id: str):
-    """Reset a match to not_started state for re-use."""
+    """Activate a match (transition called to in_progress, or reset to not_started)."""
     m = await get_active_match(set_id)
     if not m:
         raise HTTPException(404)
-    await transition_match(set_id, "not_started")
-    return {"message": "Match activated"}
+    
+    current_status = m.get("status", "not_started")
+    if current_status == "called":
+        await transition_match(set_id, "in_progress")
+        return {"message": "Match activated (in progress)"}
+    else:
+        await transition_match(set_id, "not_started")
+        return {"message": "Match activated"}
 
 
 @router.post("/active-matches/{set_id}/call",

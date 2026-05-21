@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FNC Tournament Hub - Workflows & State Machines</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Plus+Jakarta+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-dark: #0f111a;
+      --bg-card: #151926;
+      --border-color: #242b3e;
+      --text-main: #f3f4f6;
+      --text-muted: #9ca3af;
+      --accent-cyan: #06b6d4;
+      --accent-green: #10b981;
+      --accent-yellow: #f59e0b;
+      --accent-purple: #8b5cf6;
+      --accent-red: #ef4444;
+      --glow-cyan: rgba(6, 182, 212, 0.15);
+      --glow-green: rgba(16, 185, 129, 0.15);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      line-height: 1.6;
+      padding: 2rem;
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 4rem;
+      position: relative;
+    }
+
+    header h1 {
+      font-family: 'Outfit', sans-serif;
+      font-size: 3rem;
+      font-weight: 800;
+      background: linear-gradient(135deg, #06b6d4 0%, #8b5cf6 50%, #10b981 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      letter-spacing: -0.03em;
+      margin-bottom: 1rem;
+    }
+
+    header p {
+      color: var(--text-muted);
+      font-size: 1.2rem;
+      max-width: 700px;
+      margin: 0 auto;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 0.25rem 0.75rem;
+      border-radius: 9999px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-top: 1rem;
+      border: 1px solid var(--border-color);
+      background-color: rgba(255, 255, 255, 0.05);
+    }
+
+    .section-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 3rem;
+    }
+
+    .card {
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 1.25rem;
+      padding: 2.5rem;
+      box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+      position: relative;
+      overflow: hidden;
+      transition: border-color 0.3s ease, box-shadow 0.3s ease;
+    }
+
+    .card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+      background: linear-gradient(90deg, transparent, var(--accent-cyan), transparent);
+      opacity: 0.5;
+    }
+
+    .card.match-card::before {
+      background: linear-gradient(90deg, transparent, var(--accent-cyan), var(--accent-purple), transparent);
+    }
+
+    .card.reg-card::before {
+      background: linear-gradient(90deg, transparent, var(--accent-green), transparent);
+    }
+
+    .card:hover {
+      border-color: rgba(6, 182, 212, 0.3);
+      box-shadow: 0 15px 40px -10px rgba(0, 0, 0, 0.7);
+    }
+
+    .card-title {
+      font-family: 'Outfit', sans-serif;
+      font-size: 1.8rem;
+      font-weight: 600;
+      margin-bottom: 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .card-title .icon {
+      width: 2rem;
+      height: 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 0.5rem;
+      font-size: 1.2rem;
+      font-weight: bold;
+    }
+
+    .match-card .icon {
+      background-color: rgba(6, 182, 212, 0.1);
+      color: var(--accent-cyan);
+    }
+
+    .reg-card .icon {
+      background-color: rgba(16, 185, 129, 0.1);
+      color: var(--accent-green);
+    }
+
+    .diagram-container {
+      background-color: rgba(15, 17, 26, 0.8);
+      border: 1px solid var(--border-color);
+      border-radius: 0.75rem;
+      padding: 1.5rem;
+      margin-bottom: 2rem;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 250px;
+    }
+
+    .mermaid {
+      background: transparent !important;
+      color: var(--text-main);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 1.5rem;
+      font-size: 0.95rem;
+    }
+
+    th, td {
+      padding: 0.75rem 1rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    th {
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      font-size: 0.8rem;
+      letter-spacing: 0.05em;
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    .state-badge {
+      display: inline-block;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      font-family: monospace;
+    }
+
+    .badge-not-started { background-color: rgba(156, 163, 175, 0.15); color: var(--text-muted); }
+    .badge-called { background-color: rgba(245, 158, 11, 0.15); color: var(--accent-yellow); }
+    .badge-in-progress { background-color: rgba(6, 182, 212, 0.15); color: var(--accent-cyan); }
+    .badge-conflict { background-color: rgba(239, 68, 68, 0.15); color: var(--accent-red); }
+    .badge-complete { background-color: rgba(16, 185, 129, 0.15); color: var(--accent-green); }
+
+    .toast-container {
+      margin-top: 2rem;
+      padding: 1rem;
+      background-color: rgba(6, 182, 212, 0.05);
+      border: 1px dashed var(--accent-cyan);
+      border-radius: 0.75rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .toast-container p {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+    }
+
+    .toast-title {
+      font-weight: 600;
+      color: var(--accent-cyan);
+    }
+
+    footer {
+      text-align: center;
+      margin-top: 5rem;
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+
+    @media (max-width: 768px) {
+      body {
+        padding: 1rem;
+      }
+      .card {
+        padding: 1.5rem;
+      }
+    }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'dark',
+      themeVariables: {
+        background: '#0f111a',
+        primaryColor: '#1f2937',
+        primaryTextColor: '#f3f4f6',
+        lineColor: '#4b5563',
+        nodeBorder: '#374151',
+        mainBkg: '#151926'
+      }
+    });
+  </script>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>FNC Tournament Hub</h1>
+      <p>Local Match and Registration Workflow Source of Truth</p>
+      <div class="badge">Connected Configuration Engine</div>
+    </header>
+
+    <div class="section-grid">
+      <!-- Match Lifecycle Section -->
+      <section class="card match-card">
+        <h2 class="card-title">
+          <span class="icon">⚔️</span> Match Lifecycle & Transitions
+        </h2>
+        <p style="color: var(--text-muted); margin-bottom: 1.5rem;">
+          This state machine manages match progress. Transitions are enforced programmatically in the backend via <code>transition_match()</code>.
+        </p>
+
+        <div class="diagram-container">
+          <pre class="mermaid">
+          stateDiagram-v2
+              [*] --> not_started
+              
+              not_started --> called : Admin Calls Match / Auto-Call
+              
+              called --> in_progress : Both Players Ready
+              called --> complete : Auto-DQ Timer Expires (Failed Ready)
+              called --> not_started : Reset/Uncall
+              
+              in_progress --> complete : Scores Match (AI Ref / Admin Override)
+              in_progress --> conflict : Mismatched Score Report
+              in_progress --> not_started : Reset
+              
+              conflict --> complete : Admin Resolves Dispute
+              conflict --> not_started : Reset
+              
+              complete --> not_started : Reset Match
+          </pre>
+        </div>
+
+        <h3>State Mapping & Transition Details</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>Allowed Next States</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="state-badge badge-not-started">not_started</span></td>
+              <td><code>called</code></td>
+              <td>Initial start.gg sync state. Match is ready to be assigned to a station and called.</td>
+            </tr>
+            <tr>
+              <td><span class="state-badge badge-called">called</span></td>
+              <td><code>in_progress</code>, <code>complete</code>, <code>not_started</code></td>
+              <td>Summoned players to station. Creates match thread, starts 10m auto-DQ check.</td>
+            </tr>
+            <tr>
+              <td><span class="state-badge badge-in-progress">in_progress</span></td>
+              <td><code>complete</code>, <code>conflict</code>, <code>not_started</code></td>
+              <td>Both checked in. Lobby active, waiting for players to report scores.</td>
+            </tr>
+            <tr>
+              <td><span class="state-badge badge-conflict">conflict</span></td>
+              <td><code>complete</code>, <code>not_started</code></td>
+              <td>Scores reported by players disagree. Halts auto-referee, alerts admins to resolve.</td>
+            </tr>
+            <tr>
+              <td><span class="state-badge badge-complete">complete</span></td>
+              <td><code>not_started</code></td>
+              <td>Terminal match state. Score registered locally and reported back to start.gg.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- Player Registration Section -->
+      <section class="card reg-card">
+        <h2 class="card-title">
+          <span class="icon">👤</span> Player Registration Sequence
+        </h2>
+        <p style="color: var(--text-muted); margin-bottom: 1.5rem;">
+          Bilingual Discord DM registration sequence. Tracks complete profile onboarding before validating tournament entries.
+        </p>
+
+        <div class="diagram-container">
+          <pre class="mermaid">
+          sequenceDiagram
+              actor Player as Discord Player
+              participant Bot as Discord Bot
+              participant DB as SQLite Database
+              participant API as FastAPI Backend
+
+              Player->>Bot: Click "Register" in active channel
+              Bot->>DB: Create player with step "startgg_linked" (unverified)
+              Bot->>Player: DM Welcome Embed + start.gg OAuth login URL
+              Player->>API: Link start.gg profile via Web OAuth
+              API->>DB: Save startgg_id & gamer_tag
+              Player->>Bot: Choose Preferred Language (EN/AR) in DMs
+              Bot->>DB: Save preferred_language, advance step to "cfn_entered"
+              Player->>Bot: Provide Capcom Fighter Network (CFN) ID
+              Bot->>DB: Save cfn_id, advance step to "avatar_uploaded"
+              Player->>Bot: Send Avatar Image file
+              Bot->>API: Process avatar image size & safety
+              API->>DB: Save avatar_url & mark is_verified = TRUE
+              Bot->>Player: Send Registration Confirmation DM
+          </pre>
+        </div>
+
+        <h3>Registration Step Sequence</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Step Name</th>
+              <th>Database Representation</th>
+              <th>Action Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>1. Link Start.gg</strong></td>
+              <td><code>registration_step = 'startgg_linked'</code></td>
+              <td>Redirects user to the FastAPI endpoint to associate start.gg profile.</td>
+            </tr>
+            <tr>
+              <td><strong>2. Select Language</strong></td>
+              <td><code>preferred_language = 'ar' / 'en'</code></td>
+              <td>Saves user choice for customized messages in EN or AR.</td>
+            </tr>
+            <tr>
+              <td><strong>3. Input CFN ID</strong></td>
+              <td><code>cfn_id = 'input_value'</code></td>
+              <td>Associates user CFN ID for in-game lobbies and overlay visual streams.</td>
+            </tr>
+            <tr>
+              <td><strong>4. Upload Avatar</strong></td>
+              <td><code>avatar_path = 'saved_path'</code></td>
+              <td>Player uploads image. Backend checks safety, processes size, updates field.</td>
+            </tr>
+            <tr>
+              <td><strong>5. Verified</strong></td>
+              <td><code>is_verified = TRUE</code></td>
+              <td>Saves record. Verified players can be checked into active brackets.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+    </div>
+
+    <div class="toast-container">
+      <div>
+        <span class="toast-title">💡 Connected Configuration Note</span>
+        <p>The state machine and allowed transitions rendered above are driven dynamically by the local <code>docs/workflows.json</code> configuration. Modify that JSON to add new states or change transition paths in the app engine.</p>
+      </div>
+    </div>
+
+    <footer>
+      <p>AI Tournament Organizer Bot — Workflows Documentation Page</p>
+    </footer>
+  </div>
+</body>
+</html>

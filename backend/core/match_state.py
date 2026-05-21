@@ -5,12 +5,41 @@ from backend.core.startgg_client import get_client
 from backend.core.database import get_active_match, upsert_active_match, update_active_match, add_bot_feed
 from backend.api.ws_manager import manager as hub_mgr
 
+import json
+import os
+
 VALID_TRANSITIONS = {
     "not_started": ["called"],
     "called":       ["in_progress", "complete", "not_started"],
-    "in_progress":  ["complete", "not_started"],
+    "in_progress":  ["complete", "conflict", "not_started"],
+    "conflict":     ["complete", "not_started"],
     "complete":     ["not_started"],
 }
+
+def load_workflow_transitions():
+    global VALID_TRANSITIONS
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        root_dir = os.path.dirname(os.path.dirname(current_dir))
+        json_path = os.path.join(root_dir, "docs", "workflows.json")
+        
+        if os.path.exists(json_path):
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                match_workflow = data.get("match_workflow", {})
+                states = match_workflow.get("states", {})
+                
+                new_transitions = {}
+                for state, config in states.items():
+                    new_transitions[state] = config.get("allowed_next", [])
+                
+                if new_transitions:
+                    VALID_TRANSITIONS = new_transitions
+    except Exception as e:
+        print(f"Warning: Failed to load workflow configuration from docs/workflows.json: {e}")
+
+# Initial load
+load_workflow_transitions()
 
 def validate_transition(from_status: str, to_status: str) -> bool:
     allowed = VALID_TRANSITIONS.get(from_status, [])

@@ -3,7 +3,7 @@ import { ActiveMatchCard } from './ActiveMatchCard';
 
 export function ActiveMatchStatus() {
   const { matches } = useHubStore();
-  const activeMatches = matches.filter(m => m.status === 'in_progress' || m.status === 'called' || m.status === 'not_started');
+  const activeMatches = matches.filter(m => m.status === 'in_progress' || m.status === 'called');
 
   return (
     <section className="bg-cardDark/50 backdrop-blur-md rounded-lg p-4 shadow-md flex flex-col gap-3 border border-white/10 relative z-10">

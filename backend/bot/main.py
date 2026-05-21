@@ -142,6 +142,130 @@ async def start_match(ctx, opponent: discord.Member):
     )
     await ctx.send(f"Match thread created: {thread.mention}")
 
+@bot.group(name="workflow", invoke_without_command=True)
+async def workflow_group(ctx):
+    """View match and tournament workflow information."""
+    await ctx.send(
+        "ℹ️ **Workflow Command Usage**:\n"
+        "• `!workflow rules` - Show state machine rules & registration flow steps.\n"
+        "• `!workflow status` - Show active matches and their current workflow states.\n"
+        "• `!workflow validate <set_id>` - Check allowed next transitions for a match."
+    )
+
+@workflow_group.command(name="rules")
+async def workflow_rules(ctx):
+    """Show the configured workflow rules from workflows.json."""
+    import json
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        root_dir = os.path.dirname(current_dir)
+        json_path = os.path.join(root_dir, "docs", "workflows.json")
+        
+        if not os.path.exists(json_path):
+            await ctx.send("❌ `docs/workflows.json` not found.")
+            return
+            
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            
+        embed = discord.Embed(
+            title="🎯 FNC Workflow Configuration Rules",
+            color=discord.Color.blue(),
+            description="Driven by dynamic `docs/workflows.json` configuration."
+        )
+        
+        # Match States
+        match_wf = data.get("match_workflow", {}).get("states", {})
+        match_desc = []
+        for state, config in match_wf.items():
+            allowed = ", ".join([f"`{s}`" for s in config.get("allowed_next", [])])
+            match_desc.append(f"• **`{state}`**: {config.get('description')}\n  ↳ Transitions to: {allowed or '*None*'}")
+            
+        embed.add_field(
+            name="⚔️ Match State Transitions",
+            value="\n".join(match_desc),
+            inline=False
+        )
+        
+        # Registration Steps
+        reg_wf = data.get("registration_workflow", {}).get("steps", {})
+        sorted_steps = sorted(reg_wf.items(), key=lambda x: x[1].get("index", 0))
+        reg_desc = []
+        for step, config in sorted_steps:
+            reg_desc.append(f"{config.get('index')}. **`{step}`**: {config.get('description')}")
+            
+        embed.add_field(
+            name="👤 Registration Progression Flow",
+            value="\n".join(reg_desc),
+            inline=False
+        )
+        
+        await ctx.send(embed=embed)
+    except Exception as e:
+        await ctx.send(f"❌ Failed to load or display rules: {e}")
+
+@workflow_group.command(name="status")
+async def workflow_status(ctx):
+    """Show current states of all active matches."""
+    from core.database import get_active_matches
+    matches = await get_active_matches()
+    
+    if not matches:
+        await ctx.send("ℹ️ No active matches in the system right now.")
+        return
+        
+    embed = discord.Embed(
+        title="📊 Active Match Workflow Status",
+        color=discord.Color.purple()
+    )
+    
+    # Group by state
+    from collections import defaultdict
+    by_state = defaultdict(list)
+    for m in matches:
+        by_state[m.get("status", "not_started")].append(m)
+        
+    for state, state_matches in by_state.items():
+        match_list = []
+        for m in state_matches:
+            match_list.append(f"• Set `{m.get('set_id')}`: {m.get('p1_name')} vs {m.get('p2_name')} (Station: `{m.get('station_id') or 'None'}`)")
+        
+        embed.add_field(
+            name=f"State: `{state}` ({len(state_matches)})",
+            value="\n".join(match_list) if match_list else "*None*",
+            inline=False
+        )
+        
+    await ctx.send(embed=embed)
+
+@workflow_group.command(name="validate")
+async def workflow_validate(ctx, set_id: str):
+    """Validate transition pathways for a match."""
+    from core.database import get_active_match
+    match = await get_active_match(set_id)
+    if not match:
+        await ctx.send(f"❌ Match with set ID `{set_id}` not found.")
+        return
+        
+    from backend.core.match_state import VALID_TRANSITIONS
+    current_status = match.get("status", "not_started")
+    allowed = VALID_TRANSITIONS.get(current_status, [])
+    allowed_str = ", ".join([f"`{s}`" for s in allowed])
+    
+    embed = discord.Embed(
+        title=f"🔍 Match Transition Validation: Set {set_id}",
+        color=discord.Color.green()
+    )
+    embed.add_field(name="Match", value=f"{match.get('p1_name')} vs {match.get('p2_name')}", inline=False)
+    embed.add_field(name="Current Workflow State", value=f"`{current_status}`", inline=True)
+    embed.add_field(name="Allowed Next Transitions", value=allowed_str or "*None*", inline=True)
+    
+    # Check start.gg status if synchronizing
+    sgg_url = f"https://start.gg/admin/set/{set_id}"
+    embed.description = f"[Manage set on Start.gg]({sgg_url})"
+    
+    await ctx.send(embed=embed)
+
 @bot.command()
 async def report(ctx, p1_score: int, p2_score: int):
     """Report match scores in a thread. Usage: !report 2 0"""

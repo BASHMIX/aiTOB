@@ -1,0 +1,50 @@
+{
+  "match_workflow": {
+    "states": {
+      "not_started": {
+        "description": "Match is created or reset, waiting to be called.",
+        "allowed_next": ["called"]
+      },
+      "called": {
+        "description": "Players have been summoned to a station, waiting for both to check in.",
+        "allowed_next": ["in_progress", "complete", "not_started"]
+      },
+      "in_progress": {
+        "description": "Both players checked in, lobby is active, match is actively being played.",
+        "allowed_next": ["complete", "conflict", "not_started"]
+      },
+      "conflict": {
+        "description": "Players reported different scores, waiting for admin resolution.",
+        "allowed_next": ["complete", "not_started"]
+      },
+      "complete": {
+        "description": "Match is finished, scores verified, results reported to Start.gg.",
+        "allowed_next": ["not_started"]
+      }
+    }
+  },
+  "registration_workflow": {
+    "steps": {
+      "startgg_linked": {
+        "index": 1,
+        "description": "Player initiated registration and linked their Start.gg profile."
+      },
+      "language_selected": {
+        "index": 2,
+        "description": "Player selected preferred language (English or Arabic)."
+      },
+      "cfn_entered": {
+        "index": 3,
+        "description": "Player entered their CFN (Capcom Fighter Network) ID."
+      },
+      "avatar_uploaded": {
+        "index": 4,
+        "description": "Player uploaded their avatar image."
+      },
+      "verified": {
+        "index": 5,
+        "description": "Player is fully verified and registration is complete."
+      }
+    }
+  }
+}

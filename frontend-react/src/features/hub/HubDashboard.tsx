@@ -48,7 +48,9 @@ function ConnectionLines() {
         // Curved Bezier node connection curve (down and then up)
         const cpY1 = startY + 60;
         const cpY2 = endY - 60;
-        const path = `M ${startX} ${startY} C ${startX} ${cpY1}, ${endX} ${cpY2}, ${endX} ${endY}`;
+        // Avoid exactly 0-width bounding boxes which break SVG gradients and filters in some browsers
+        const adjustedEndX = Math.abs(startX - endX) < 0.1 ? endX + 0.1 : endX;
+        const path = `M ${startX} ${startY} C ${startX} ${cpY1}, ${adjustedEndX} ${cpY2}, ${adjustedEndX} ${endY}`;
 
         newLines.push({
           id: `${m.set_id}-${m.station_id}`,

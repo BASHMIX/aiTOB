@@ -543,6 +543,27 @@ async def delete_active_match(set_id: str):
 async def update_active_match(match_id: str, **kwargs):
     if not kwargs:
         return
+
+    # Check if status is being updated and validate it
+    if "status" in kwargs:
+        new_status = kwargs["status"]
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute("SELECT status FROM active_matches WHERE set_id = ?", (match_id,)) as c:
+                    row = await c.fetchone()
+                    if row:
+                        old_status = row["status"]
+                        if old_status and old_status != new_status:
+                            from backend.core.match_state import validate_transition
+                            if not validate_transition(old_status, new_status):
+                                await add_bot_feed(
+                                    f"⚠️ Non-standard transition detected: {old_status} ➔ {new_status} for match {match_id}",
+                                    "warn"
+                                )
+        except Exception as e:
+            print(f"Error validating status transition: {e}")
+
     keys = ", ".join([f"{k} = ?" for k in kwargs.keys()])
     values = list(kwargs.values())
     values.append(match_id)
