@@ -11,13 +11,24 @@ const safe = (val: unknown): string => (val != null ? String(val) : '');
 const shortId = (val: unknown) => safe(val).substring(0, 8) || '—';
 const isTBD = (name: string) => !name || name === 'TBD' || name === 'Unknown';
 
+// Start.gg ActivityState → local MatchStatus
+// 1 = CREATED   (ready to run, not yet called) → waiting
+// 2 = ACTIVE    (in progress)                  → live
+// 3 = COMPLETED (done)                         → done
+// 4 = READY     (reset / ready again)          → waiting
+// 5 = INVALID   (bye / void)                   → done (filtered out visually)
+// 6 = CALLED    (players summoned to station)  → called
+// 7 = QUEUED    (queued, not yet called)        → waiting
 function mapStartggState(state: unknown): MatchStatus {
   switch (Number(state)) {
-    case 1: case 4: return 'waiting'; // 4 is Reset
-    case 2: return 'live';
-    case 3: return 'done';
-    case 6: return 'dq';
-    default: return 'called';
+    case 1: return 'waiting';  // CREATED
+    case 2: return 'live';     // ACTIVE
+    case 3: return 'done';     // COMPLETED
+    case 4: return 'waiting';  // READY (reset)
+    case 5: return 'done';     // INVALID (bye) — rendered as done, filtered in UI
+    case 6: return 'called';   // CALLED
+    case 7: return 'waiting';  // QUEUED
+    default: return 'waiting';
   }
 }
 
@@ -168,9 +179,13 @@ export function MatchDashboard() {
   // ── Action handlers ────────────────────────────────────────────────
   const handleAction = async (action: string, row: any, data?: any) => {
     try {
+      // Resolve the actual set_id — for local matches use raw.set_id, for Start.gg-only use raw.id
+      const setId: string = String(row.raw?.set_id || row.raw?.id || row.set_id || row.id || '');
+
       if (action === 'activate') {
+        if (!setId) { showToast('Cannot activate: missing set ID', false); return; }
         await axios.post('/api/active-matches', {
-          set_id: row.id || row.set_id, p1_name: row.players[0].name, p2_name: row.players[1].name,
+          set_id: setId, p1_name: row.players[0].name, p2_name: row.players[1].name,
           p1_entrant_id: row.raw?.p1_eid || '', p2_entrant_id: row.raw?.p2_eid || '',
           p1_avatar: row.players[0].avatar || '', p2_avatar: row.players[1].avatar || '',
           round_name: row.round || '', tournament_slug: currentSlug || '',
@@ -184,20 +199,20 @@ export function MatchDashboard() {
       else if (action === 'updateScore') {
         const { playerIdx, value } = data;
         const key = playerIdx === 0 ? 'p1_score' : 'p2_score';
-        await axios.patch(`/api/active-matches/${row.set_id || row.id}`, { [key]: value });
+        await axios.patch(`/api/active-matches/${setId}`, { [key]: value });
         reload();
       }
       else if (action === 'sendScore') {
-        const res = await axios.post(`/api/active-matches/${row.set_id || row.id}/send`);
+        const res = await axios.post(`/api/active-matches/${setId}/send`);
         if (res.data.error) showToast(res.data.message, false);
         else { showToast('Score reported to Start.gg ✓'); reload(); }
       }
       else if (action === 'callMatch') {
-        const targetId = row.raw?.set_id || row.raw?.id || row.set_id || row.id;
+        if (!setId) { showToast('Cannot call match: missing set ID', false); return; }
         if (!row.isLocal) {
           // If not activated yet, activate it first
           await axios.post('/api/active-matches', {
-            set_id: targetId, p1_name: row.players[0].name, p2_name: row.players[1].name,
+            set_id: setId, p1_name: row.players[0].name, p2_name: row.players[1].name,
             p1_entrant_id: row.raw?.p1_eid || '', p2_entrant_id: row.raw?.p2_eid || '',
             p1_avatar: row.players[0].avatar || '', p2_avatar: row.players[1].avatar || '',
             round_name: row.round || '', tournament_slug: currentSlug || '',
@@ -206,29 +221,31 @@ export function MatchDashboard() {
             phase_group: row.pool || '',
           });
         }
-        await axios.post(`/api/active-matches/${targetId}/call`);
+        await axios.post(`/api/active-matches/${setId}/call`);
         showToast('Players called via Discord');
         reload();
       }
       else if (action === 'resetMatch') {
         if (!confirm(`Reset match on Start.gg and locally?`)) return;
-        const res = await axios.post(`/api/active-matches/${row.set_id}/reset`);
+        const res = await axios.post(`/api/active-matches/${setId}/reset`);
         showToast(res.data.message || 'Reset OK');
         reload();
         loadSets();
       }
       else if (action === 'removeMatch') {
-        await axios.delete(`/api/active-matches/${row.set_id || row.id}`);
+        if (!setId) { showToast('Cannot remove: missing set ID', false); return; }
+        await axios.delete(`/api/active-matches/${setId}`);
         showToast('Match removed from active status');
         reload();
       }
       else if (action === 'dq') {
+        if (!setId) { showToast('Cannot DQ: missing set ID', false); return; }
         // data contains 'p1', 'p2', or 'both'
-        await axios.post(`/api/active-matches/${row.set_id}/dq`, { player: data });
+        await axios.post(`/api/active-matches/${setId}/dq`, { player: data });
         reload();
       }
       else if (action === 'assignStation') {
-        await axios.patch(`/api/active-matches/${row.set_id}`, {
+        await axios.patch(`/api/active-matches/${setId}`, {
           station_id: data,
           status: data ? 'in_progress' : 'called'
         });
@@ -248,9 +265,11 @@ export function MatchDashboard() {
   };
 
   const handleToggleStream = async (setId: string, currentVal: boolean) => {
-    togglePlannedStream(setId);
+    const actualSetId = String(setId || '');
+    if (!actualSetId) return;
+    togglePlannedStream(actualSetId);
     try {
-      await axios.post(`/api/active-matches/${setId}/toggle-stream`, { is_stream_match: !currentVal });
+      await axios.post(`/api/active-matches/${actualSetId}/toggle-stream`, { is_stream_match: !currentVal });
     } catch (e) {
       console.error('Failed to toggle stream flag on backend', e);
     }

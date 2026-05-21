@@ -16,7 +16,7 @@ from core.image_utils import process_avatar
 from bot.registration import registration_manager
 from bot.messages import get_msg
 from bot.agent.graph import app, process_message
-from bot.agent.hub_agent import build_hub_agent
+from bot.agent.hub_agent import build_hub_agent, build_hub_agent_async
 
 load_dotenv()
 
@@ -32,10 +32,18 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
 async def on_ready():
+    global hub_agent
     await init_db()
-    print(f"✅ Bot is online and connected to Discord as {bot.user}")
+    print(f"\u2705 Bot is online and connected to Discord as {bot.user}")
     from core.database import add_bot_feed
     await add_bot_feed(f"Bot online and connected to Discord as {bot.user.name}", "info")
+    # If hub_agent wasn't built at import time (no env key), build it now from DB
+    if hub_agent is None:
+        try:
+            hub_agent = await build_hub_agent_async(hub_tools)
+            print("[BOT] Hub agent initialized from DB API key")
+        except Exception as e:
+            print(f"[BOT] Warning: Hub agent could not be initialized: {e}")
     if not poll_hub_commands.is_running():
         poll_hub_commands.start()
     if not update_heartbeat.is_running():
@@ -455,7 +463,7 @@ async def create_discord_thread_tool(p1_discord_id: str, p2_discord_id: str, mat
     return f"Successfully created thread {thread.id}."
 
 hub_tools = [get_active_matches_tool, get_players_tool, create_discord_thread_tool]
-hub_agent = build_hub_agent(hub_tools)
+hub_agent = build_hub_agent(hub_tools)  # fast-path: uses env key if present
 
 MATCH_CALL_CHANNEL_ID = os.getenv("MATCH_CALL_CHANNEL_ID", "")
 

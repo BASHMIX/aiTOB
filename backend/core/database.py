@@ -397,7 +397,7 @@ async def upsert_active_match(set_id: str, **kwargs):
         existing = None
         async with db.execute("SELECT set_id FROM active_matches WHERE set_id = ?", (set_id,)) as c:
             existing = await c.fetchone()
-            
+
         if existing:
             if filtered_kwargs:
                 set_clause = ', '.join([f'"{k}" = ?' for k in filtered_kwargs.keys()])
@@ -415,10 +415,36 @@ async def delete_active_match(set_id: str):
         await db.execute("DELETE FROM active_matches WHERE set_id = ?", (set_id,))
         await db.commit()
 
+
+# ── Start.gg ActivityState integer → local status ────────────────────────────────
+# 1 = CREATED   → not_started  (created, awaiting call)
+# 2 = ACTIVE    → in_progress  (match is being played)
+# 3 = COMPLETED → complete     (done)
+# 4 = READY     → not_started  (reset / ready again)
+# 5 = INVALID   → skip         (bye / invalid set)
+# 6 = CALLED    → called       (players summoned to station)
+# 7 = QUEUED    → not_started  (queued, not yet called)
+_SGG_STATE_MAP = {
+    1: 'not_started',
+    2: 'in_progress',
+    3: 'complete',
+    4: 'not_started',
+    # 5 = INVALID — skip entirely
+    6: 'called',
+    7: 'not_started',
+}
+
+# States that are terminal on Start.gg (sync always wins)
+_SGG_TERMINAL = {3}       # COMPLETED
+# States that should auto-add to hub when Start.gg reports them
+_SGG_AUTO_ADD = {1, 2, 6, 7}  # CREATED, ACTIVE, CALLED, QUEUED
+
+
 async def sync_active_matches(tournament_slug: str, startgg_sets: list):
     """
-    Synchronizes local active_matches with startgg states.
-    Source of Truth: Start.gg
+    Synchronizes local active_matches with Start.gg states.
+    Source of Truth: Start.gg — Start.gg ActivityState always wins for terminal states.
+    Hub-only metadata (station, is_stream_match, scores) is preserved.
     """
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT bot_manage_limit FROM tournaments WHERE slug = ?", (tournament_slug,)) as t_cursor:
@@ -428,57 +454,75 @@ async def sync_active_matches(tournament_slug: str, startgg_sets: list):
         async with db.execute("SELECT set_id, status FROM active_matches WHERE tournament_slug = ?", (tournament_slug,)) as cursor:
             rows = await cursor.fetchall()
             local_matches = {row[0]: row[1] for row in rows}
-            
+
         found_sids = set()
-        
+
         for s in startgg_sets:
             sid = str(s.get("id"))
             state = s.get("state")
             found_sids.add(sid)
-            
-            p1_name = s.get("p1", "TBD")
-            p2_name = s.get("p2", "TBD")
-            p1_avatar = s.get("p1_avatar")
+
+            # Skip INVALID (bye/DQ sets that Start.gg marks 5)
+            if state == 5:
+                continue
+
+            p1_name  = s.get("p1", "TBD")
+            p2_name  = s.get("p2", "TBD")
             p1_avatar = s.get("p1_avatar")
             p2_avatar = s.get("p2_avatar")
-            p1_eid = s.get("p1_eid")
-            p2_eid = s.get("p2_eid")
-            # Use flattened fields from startgg_client
-            round_name = s.get("round") or s.get("fullRoundText") or ""
-            match_num = s.get("identifier")
+            p1_eid   = s.get("p1_eid")
+            p2_eid   = s.get("p2_eid")
+            round_name  = s.get("round") or s.get("fullRoundText") or ""
+            match_num   = s.get("identifier")
             phase_group = s.get("phaseGroup") or ""
+
+            sgg_status = _SGG_STATE_MAP.get(state)  # None if unknown state
 
             if sid in local_matches:
                 local_status = local_matches[sid]
-                # Update status if changed on Start.gg
-                new_status = local_status
-                if state in [3, 6] and local_status not in ['complete', 'dq']:
+                # Determine new status:
+                # • If Start.gg says COMPLETED → always sync (source of truth)
+                # • If Start.gg says READY/CREATED/QUEUED and we had a hub state → keep hub state
+                #   unless local is already complete/dq (reset scenario)
+                if state == 3:  # COMPLETED—terminal, Start.gg wins
                     new_status = 'complete'
-                elif state in [1, 4] and local_status in ['complete', 'dq']:
+                elif state == 4 and local_status in ('complete', 'dq'):  # READY = reset on Start.gg
                     new_status = 'not_started'
-                
+                elif sgg_status and local_status in ('not_started',):  # upgrade from not_started
+                    new_status = sgg_status
+                else:
+                    new_status = local_status  # keep hub-managed state
+
                 await db.execute("""
-                    UPDATE active_matches SET 
-                        p1_name=?, p2_name=?, p1_avatar=?, p2_avatar=?, 
+                    UPDATE active_matches SET
+                        p1_name=?, p2_name=?, p1_avatar=?, p2_avatar=?,
+                        p1_entrant_id=COALESCE(NULLIF(p1_entrant_id,''), ?),
+                        p2_entrant_id=COALESCE(NULLIF(p2_entrant_id,''), ?),
                         round_name=?, match_number=?, phase_group=?, status=?
                     WHERE set_id=?
-                """, (p1_name, p2_name, p1_avatar, p2_avatar, round_name, match_num, str(phase_group), new_status, sid))
+                """, (p1_name, p2_name, p1_avatar, p2_avatar,
+                       p1_eid, p2_eid,
+                       round_name, match_num, str(phase_group), new_status, sid))
             else:
-                # Auto-add matches that are Ready (4), In Progress (2), or Called (6)
-                if state in [2, 4, 6]:
-                    status = 'called' if state == 6 else ('in_progress' if state == 2 else 'not_started')
+                # Auto-add matches that Start.gg has put in an active state
+                if state in _SGG_AUTO_ADD:
+                    new_status = _SGG_STATE_MAP[state]
                     bot_enabled = should_bot_manage_match(round_name, str(phase_group), bot_manage_limit)
                     await db.execute("""
                         INSERT INTO active_matches (
                             set_id, tournament_slug, p1_name, p2_name, p1_avatar, p2_avatar,
-                            p1_entrant_id, p2_entrant_id, round_name, match_number, phase_group, status, bot_enabled
+                            p1_entrant_id, p2_entrant_id, round_name, match_number, phase_group,
+                            status, bot_enabled
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (sid, tournament_slug, p1_name, p2_name, p1_avatar, p2_avatar, p1_eid, p2_eid, round_name, match_num, str(phase_group), status, bot_enabled))
-        
-        # 3. Detect Orphans
-        if len(startgg_sets) < 490: 
+                    """, (sid, tournament_slug, p1_name, p2_name, p1_avatar, p2_avatar,
+                           p1_eid, p2_eid, round_name, match_num, str(phase_group),
+                           new_status, bot_enabled))
+
+        # Remove orphans — only if Start.gg returned a full page (not truncated)
+        if len(startgg_sets) < 490:
             for sid in list(local_matches.keys()):
                 if sid not in found_sids:
+                    # Orphan: set no longer in Start.gg bracket — remove from hub
                     await db.execute("DELETE FROM active_matches WHERE set_id = ?", (sid,))
 
         await db.commit()

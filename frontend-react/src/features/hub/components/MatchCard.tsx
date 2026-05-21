@@ -369,7 +369,7 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
               )}
               <button
                 type="button"
-                onClick={() => onToggleStream(match.raw?.id || match.id, !!match.isStreamMatch)}
+                onClick={() => onToggleStream(String(match.raw?.set_id || match.raw?.id || match.id || ''), !!match.isStreamMatch)}
                 aria-label="Toggle Stream Q"
                 title="Toggle stream indicators"
                 className={`inline-flex h-8 w-10 items-center justify-center rounded-md border transition-all ${
@@ -380,6 +380,7 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
               >
                 <IconPlay />
               </button>
+
             </>
           )}
           
