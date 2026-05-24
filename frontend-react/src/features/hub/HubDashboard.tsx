@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { TopNavigation } from '@/components/layout/TopNavigation';
 import { TournamentSettings } from './components/TournamentSettings';
 import { ActiveMatchStatus } from './components/ActiveMatchStatus';
@@ -20,9 +20,11 @@ function ConnectionLines() {
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Connection exists if match is called/live and assigned to a station
-  const activeMatches = matches.filter(
-    (m) => (m.status === 'in_progress' || m.status === 'called') && m.station_id
-  );
+  const activeMatches = useMemo(() => {
+    return matches.filter(
+      (m) => (m.status === 'in_progress' || m.status === 'called') && m.station_id
+    );
+  }, [matches]);
 
   const calculateLines = useCallback(() => {
     if (!containerRef.current) return;
@@ -60,12 +62,16 @@ function ConnectionLines() {
     });
 
     // Check if lines actually changed to prevent state thrashing
-    const serializedNew = JSON.stringify(newLines);
-    const serializedOld = JSON.stringify(lines);
-    if (serializedNew !== serializedOld) {
-      setLines(newLines);
-    }
-  }, [activeMatches, lines]);
+    setLines(prevLines => {
+      if (prevLines.length !== newLines.length) return newLines;
+      for (let i = 0; i < newLines.length; i++) {
+        if (prevLines[i].id !== newLines[i].id || prevLines[i].path !== newLines[i].path) {
+          return newLines;
+        }
+      }
+      return prevLines;
+    });
+  }, [activeMatches]);
 
   useEffect(() => {
     calculateLines();
