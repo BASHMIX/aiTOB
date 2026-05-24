@@ -626,12 +626,14 @@ async def handle_msg_command(cmd_text: str) -> str:
     p1 = parts[0].strip()
     p2 = parts[1].strip()
 
-    if not MATCH_CALL_CHANNEL_ID:
-        return "❌ MATCH_CALL_CHANNEL_ID not configured in .env"
+    from core.database import get_setting, get_connection
+    channel_id = await get_connection("MATCH_CALL_CHANNEL_ID") or await get_setting("MATCH_CALL_CHANNEL_ID") or MATCH_CALL_CHANNEL_ID
+    if not channel_id:
+        return "❌ MATCH_CALL_CHANNEL_ID not configured in .env or DB"
 
-    channel = bot.get_channel(int(MATCH_CALL_CHANNEL_ID))
+    channel = bot.get_channel(int(channel_id))
     if not channel:
-        return f"❌ Could not find Discord channel with ID {MATCH_CALL_CHANNEL_ID}"
+        return f"❌ Could not find Discord channel with ID {channel_id}"
 
     # Send Arabic match call
     call_msg = f"📢 يرجى من اللاعبين **{p1}** و **{p2}** تأكيد الحضور للمباراة الخاصة بكم الآن."
@@ -662,8 +664,10 @@ async def poll_hub_commands():
 
             if cmd_text.strip().lower().startswith("announce "):
                 msg_to_send = cmd_text[9:].strip()
-                if MATCH_CALL_CHANNEL_ID:
-                    channel = bot.get_channel(int(MATCH_CALL_CHANNEL_ID))
+                from core.database import get_setting, get_connection
+                channel_id = await get_connection("MATCH_CALL_CHANNEL_ID") or await get_setting("MATCH_CALL_CHANNEL_ID") or MATCH_CALL_CHANNEL_ID
+                if channel_id:
+                    channel = bot.get_channel(int(channel_id))
                     if channel:
                         await channel.send(msg_to_send)
                         await add_bot_feed(f"📢 Announced to Discord: {msg_to_send}", "success")

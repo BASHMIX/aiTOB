@@ -1,15 +1,17 @@
 import { useState } from 'react';
-import { Save, Edit3, Check, X, Image as ImageIcon, Type, Link as LinkIcon } from 'lucide-react';
+import { Save, Edit3, Check, X, Image as ImageIcon, Type, Link as LinkIcon, Undo, Redo } from 'lucide-react';
 import { useEditorStore } from '@/store/useEditorStore';
 
 interface TopBarProps {
   slot: string;
+  stationId: string;
   onRename: (newName: string) => void;
   onSave: () => void;
+  onLoadClick: () => void;
   status: string;
 }
 
-export function TopBar({ slot, onRename, onSave, status }: TopBarProps) {
+export function TopBar({ slot, stationId, onRename, onSave, onLoadClick, status }: TopBarProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [newName, setNewName] = useState(slot);
   const store = useEditorStore();
@@ -17,6 +19,12 @@ export function TopBar({ slot, onRename, onSave, status }: TopBarProps) {
   const handleRename = () => {
     onRename(newName);
     setIsEditing(false);
+  };
+
+  const copyOBSLink = () => {
+    const obsUrl = `${window.location.origin}/obs?slot=${stationId}`;
+    navigator.clipboard.writeText(obsUrl);
+    alert(`Station OBS URL copied successfully!\n${obsUrl}`);
   };
 
   return (
@@ -87,6 +95,45 @@ export function TopBar({ slot, onRename, onSave, status }: TopBarProps) {
 
       <div className="flex items-center gap-4 flex-shrink-0">
         <span className="text-xs text-textDim font-medium animate-pulse">{status}</span>
+        
+        {/* Undo / Redo controls */}
+        <div className="flex items-center gap-1 bg-[#1a1a1a] rounded-full p-1 border border-white/5">
+          <button 
+            onClick={() => store.undo()} 
+            disabled={store.past.length === 0}
+            className={`p-1.5 rounded-full hover:bg-white/10 transition-colors ${store.past.length === 0 ? 'text-white/20 cursor-not-allowed' : 'text-[#00ffcc] hover:text-white'}`}
+            title="Undo"
+          >
+            <Undo size={14} />
+          </button>
+          <button 
+            onClick={() => store.redo()} 
+            disabled={store.future.length === 0}
+            className={`p-1.5 rounded-full hover:bg-white/10 transition-colors ${store.future.length === 0 ? 'text-white/20 cursor-not-allowed' : 'text-[#00ffcc] hover:text-white'}`}
+            title="Redo"
+          >
+            <Redo size={14} />
+          </button>
+        </div>
+
+        <button 
+          onClick={copyOBSLink}
+          className="flex items-center gap-2 bg-accentYellow/20 hover:bg-accentYellow/30 text-accentYellow border border-accentYellow/40 px-4 py-1.5 rounded-full text-sm font-bold transition-all hover:scale-105 active:scale-95"
+          title="Copy static OBS link for this station"
+        >
+          <LinkIcon size={16} />
+          Copy OBS Link
+        </button>
+
+        <button 
+          onClick={onLoadClick}
+          className="flex items-center gap-2 bg-[#333] hover:bg-[#444] text-white border border-white/20 px-4 py-1.5 rounded-full text-sm font-bold transition-all hover:scale-105 active:scale-95"
+          title="Load a saved overlay template onto this station"
+        >
+          <ImageIcon size={16} />
+          Load Slide
+        </button>
+
         <button 
           onClick={onSave}
           className="flex items-center gap-2 bg-statusGreen/20 hover:bg-statusGreen/30 text-statusGreen border border-statusGreen/40 px-4 py-1.5 rounded-full text-sm font-bold transition-all hover:scale-105 active:scale-95"

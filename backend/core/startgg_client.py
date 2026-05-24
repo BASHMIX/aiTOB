@@ -51,8 +51,8 @@ class StartGGClient:
         # Ensure we have a token (fetch from DB if needed)
         token = self.token
         if not token:
-            from backend.core.database import get_setting
-            token = await get_setting("STARTGG_API_TOKEN")
+            from backend.core.database import get_setting, get_connection
+            token = await get_setting("STARTGG_API_TOKEN") or await get_connection("STARTGG_API_TOKEN")
         
         if not token:
             raise Exception("Start.gg API Token not configured")
@@ -103,7 +103,7 @@ class StartGGClient:
               videogame {
                 name
               }
-              entrants(page: 1, perPage: 250) {
+              entrants(query: {page: 1, perPage: 250}) {
                 nodes {
                   id
                   name

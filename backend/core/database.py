@@ -174,6 +174,8 @@ async def init_db():
             "ALTER TABLE active_matches ADD COLUMN discord_thread_id TEXT",
             "ALTER TABLE tournaments ADD COLUMN bot_manage_limit TEXT DEFAULT 'off'",
             "ALTER TABLE tournaments ADD COLUMN bot_manage_finish TEXT DEFAULT 'off'",
+            # stations new columns
+            "ALTER TABLE stations ADD COLUMN active_overlay TEXT",
         ]
         for m in migrations:
             try:
@@ -219,6 +221,11 @@ async def get_player(discord_id: str):
 
 # ── Overlays ───────────────────────────────────────────────────────────────
 async def save_overlay(name: str, config: str):
+    if not isinstance(config, str):
+        try:
+            config = json.dumps(config)
+        except Exception as e:
+            print(f"Error serializing overlay config: {e}")
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute('''
             INSERT INTO overlays (name, config) VALUES (?, ?)
@@ -325,6 +332,17 @@ async def update_station(station_id: str, **kwargs):
         values = list(kwargs.values()) + [station_id]
         await db.execute(f"UPDATE stations SET {set_clause} WHERE id = ?", values)
         await db.commit()
+
+async def update_station_active_overlay(station_id: str, overlay_name: str | None):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE stations SET active_overlay = ? WHERE id = ?", (overlay_name, station_id))
+        await db.commit()
+
+async def get_station_active_overlay(station_id: str) -> str | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT active_overlay FROM stations WHERE id = ?", (station_id,)) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else None
 
 async def delete_station(station_id: str):
     async with aiosqlite.connect(DB_PATH) as db:

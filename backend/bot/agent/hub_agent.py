@@ -13,8 +13,13 @@ async def _get_api_key() -> str:
         root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
         if root not in sys.path:
             sys.path.append(root)
-        from backend.core.database import get_setting
-        key = await get_setting("GOOGLE_API_KEY") or await get_setting("GEMINI_API_KEY")
+        from backend.core.database import get_setting, get_connection
+        key = (
+            await get_setting("GOOGLE_API_KEY")
+            or await get_setting("GEMINI_API_KEY")
+            or await get_connection("GOOGLE_API_KEY")
+            or await get_connection("GEMINI_API_KEY")
+        )
         if key:
             return key
     except Exception:

@@ -25,12 +25,12 @@ export function AssetManager({ onSelect }: { onSelect: (url: string) => void }) 
 
     setUploading(true);
     try {
-      await axios.post('/api/assets/upload', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
-      });
+      await axios.post('/api/assets/upload', formData);
       fetchAssets();
-    } catch (e) {
-      alert("Upload failed");
+    } catch (err: any) {
+      console.error("Asset upload failed:", err);
+      const errMsg = err.response?.data?.detail || "Upload failed";
+      alert(errMsg);
     } finally {
       setUploading(false);
     }

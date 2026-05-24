@@ -14,6 +14,17 @@ export interface OverlayElement {
   color?: string;
   zIndex?: number;
   borderRadius?: number;
+  
+  // Advanced typography & styling properties
+  fontWeight?: 'normal' | 'bold';
+  fontStyle?: 'normal' | 'italic';
+  textAlign?: 'left' | 'center' | 'right';
+  strokeWidth?: number;
+  strokeColor?: string;
+  shadowColor?: string;
+  shadowBlur?: number;
+  shadowOffsetX?: number;
+  shadowOffsetY?: number;
 }
 
 interface EditorState {
@@ -24,6 +35,14 @@ interface EditorState {
   selectedId: string | null;
   statusMsg: string;
   clipboardStyle: Partial<OverlayElement> | null;
+  activeMatch: any | null;
+  
+  // History states
+  past: Record<string, OverlayElement>[];
+  future: Record<string, OverlayElement>[];
+  takeSnapshot: () => void;
+  undo: () => void;
+  redo: () => void;
   
   setElements: (elements: Record<string, OverlayElement>) => void;
   mergeDynamicData: (elements: Record<string, OverlayElement>) => void;
@@ -35,6 +54,7 @@ interface EditorState {
   setGlobalSettings: (bg: string, fontUrl: string, fontFamily: string) => void;
   setStatusMsg: (msg: string) => void;
   setClipboardStyle: (style: Partial<OverlayElement> | null) => void;
+  setActiveMatch: (match: any | null) => void;
 }
 
 export const useEditorStore = create<EditorState>((set) => ({
@@ -45,13 +65,42 @@ export const useEditorStore = create<EditorState>((set) => ({
   selectedId: null,
   statusMsg: 'Not connected',
   clipboardStyle: null,
+  activeMatch: null,
+  past: [],
+  future: [],
+
+  takeSnapshot: () => set((state) => ({
+    past: [...state.past, JSON.parse(JSON.stringify(state.elements))].slice(-50),
+    future: []
+  })),
+  undo: () => set((state) => {
+    if (state.past.length === 0) return {};
+    const previous = state.past[state.past.length - 1];
+    const newPast = state.past.slice(0, state.past.length - 1);
+    return {
+      past: newPast,
+      future: [JSON.parse(JSON.stringify(state.elements)), ...state.future],
+      elements: previous,
+      selectedId: null
+    };
+  }),
+  redo: () => set((state) => {
+    if (state.future.length === 0) return {};
+    const next = state.future[0];
+    const newFuture = state.future.slice(1);
+    return {
+      past: [...state.past, JSON.parse(JSON.stringify(state.elements))],
+      future: newFuture,
+      elements: next,
+      selectedId: null
+    };
+  }),
 
   setElements: (elements) => set({ elements }),
   mergeDynamicData: (incomingElements) => set((state) => {
     const newElements = { ...state.elements };
     for (const key in incomingElements) {
       if (newElements[key]) {
-        // Only update content properties, preserving layout (x, y, width, height, zIndex)
         newElements[key] = {
           ...newElements[key],
           text: incomingElements[key].text,
@@ -70,22 +119,31 @@ export const useEditorStore = create<EditorState>((set) => ({
       [id]: { ...state.elements[id], ...updates }
     }
   })),
-  addElement: (element) => set((state) => ({
-    elements: {
-      ...state.elements,
-      [element.id]: element
-    },
-    selectedId: element.id
-  })),
+  addElement: (element) => set((state) => {
+    const currentClone = JSON.parse(JSON.stringify(state.elements));
+    return {
+      past: [...state.past, currentClone].slice(-50),
+      future: [],
+      elements: {
+        ...state.elements,
+        [element.id]: element
+      },
+      selectedId: element.id
+    };
+  }),
   deleteElement: (id) => set((state) => {
+    const currentClone = JSON.parse(JSON.stringify(state.elements));
     const newElements = { ...state.elements };
     delete newElements[id];
     return {
+      past: [...state.past, currentClone].slice(-50),
+      future: [],
       elements: newElements,
       selectedId: state.selectedId === id ? null : state.selectedId
     };
   }),
   restoreElement: (id) => set((state) => {
+    const currentClone = JSON.parse(JSON.stringify(state.elements));
     const defaultTemplates: Record<string, OverlayElement> = {
       p1_name: { id: 'p1_name', type: 'text', x: 400, y: 950, fontSize: 48, color: '#ffffff', text: 'Player 1', visible: true },
       p2_name: { id: 'p2_name', type: 'text', x: 1520, y: 950, fontSize: 48, color: '#ffffff', text: 'Player 2', visible: true },
@@ -101,12 +159,13 @@ export const useEditorStore = create<EditorState>((set) => ({
       p2_flag: { id: 'p2_flag', type: 'image', x: 1670, y: 980, width: 120, height: 80, src: '/static/flag_placeholder.png', visible: true },
     };
     
-    // If it exists but is hidden, just unhide it. Otherwise, pull from defaults.
     const newEl = state.elements[id] 
       ? { ...state.elements[id], visible: true } 
       : (defaultTemplates[id] || { id, type: 'text', x: 960, y: 540, fontSize: 24, color: '#ffffff', text: 'New Text', visible: true });
       
     return {
+      past: [...state.past, currentClone].slice(-50),
+      future: [],
       elements: { ...state.elements, [id]: newEl as OverlayElement },
       selectedId: id
     };
@@ -116,5 +175,6 @@ export const useEditorStore = create<EditorState>((set) => ({
     background_url, global_font_url, global_font_family
   }),
   setStatusMsg: (statusMsg) => set({ statusMsg }),
-  setClipboardStyle: (style) => set({ clipboardStyle: style })
+  setClipboardStyle: (style) => set({ clipboardStyle: style }),
+  setActiveMatch: (activeMatch) => set({ activeMatch })
 }));

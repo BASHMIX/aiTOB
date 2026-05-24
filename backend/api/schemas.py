@@ -75,6 +75,10 @@ class AddStationOverlayRequest(BaseModel):
     overlay_name: str
 
 
+class SetActiveOverlayRequest(BaseModel):
+    overlay_name: Optional[str] = None
+
+
 class PatchSettingsRequest(BaseModel):
     settings: dict[str, str]
 

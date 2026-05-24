@@ -179,17 +179,18 @@ export function HubDashboard() {
       const tourneys = tourneysRes.data.tournaments || [];
       setTournaments(tourneys);
 
-      const slug = currentSlug || localStorage.getItem('hub_current_slug');
+      let slug = currentSlug || localStorage.getItem('hub_current_slug');
+      if (!slug && tourneys.length > 0) {
+        const preferred = tourneys.find((t: any) => t.slug?.toLowerCase() === PREFERRED_SLUG.toLowerCase());
+        const defaultSlug = preferred ? preferred.slug : tourneys[0].slug;
+        setCurrentSlug(defaultSlug);
+        slug = defaultSlug;
+      }
+
       if (slug) {
         setMatches(matchesRes.data.matches || []);
       } else {
         setMatches([]);
-      }
-
-      if (!slug && tourneys.length > 0) {
-        const preferred = tourneys.find((t: any) => t.slug?.toLowerCase() === PREFERRED_SLUG.toLowerCase());
-        if (preferred) setCurrentSlug(preferred.slug);
-        else setCurrentSlug(tourneys[0].slug);
       }
 
       try {

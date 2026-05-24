@@ -19,3 +19,12 @@ async def api_save_overlay(body: SaveOverlayRequest):
     """Create or update an OBS overlay by name with its full config."""
     await save_overlay(body.name, body.config)
     return {"message": "Saved"}
+
+
+@router.delete("/{name}",
+               dependencies=[Depends(verify_hub_password)],
+               summary="Delete an overlay configuration")
+async def api_delete_overlay(name: str):
+    """Delete a saved OBS overlay configuration by name."""
+    await delete_overlay(name)
+    return {"message": "Deleted"}

@@ -48,8 +48,8 @@ async def api_create_player(body: CreatePlayerRequest):
 @router.get("/login/auth", summary="OAuth login link for Start.gg")
 async def login(discord_id: str):
     """Redirect user to Start.gg OAuth authorization page."""
-    from backend.core.database import get_setting
-    client_id = await get_setting("STARTGG_CLIENT_ID")
+    from backend.core.database import get_setting, get_connection
+    client_id = await get_setting("STARTGG_CLIENT_ID") or await get_connection("STARTGG_CLIENT_ID")
     api_base = os.getenv("API_BASE_URL", "http://localhost:8000")
     redirect_uri = f"{api_base}/api/players/callback"
     return RedirectResponse(

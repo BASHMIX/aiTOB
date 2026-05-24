@@ -88,9 +88,16 @@ async def overlay_websocket_endpoint(websocket: WebSocket, slot: str):
     await ws_manager.connect_overlay(websocket, slot)
     
     # Send initial state from DB
-    from backend.core.database import get_overlays
+    from backend.core.database import get_overlays, get_stations
+    stations = await get_stations()
+    station = next((s for s in stations if s["id"] == slot), None)
+    
+    overlay_name = slot
+    if station and station.get("active_overlay"):
+        overlay_name = station["active_overlay"]
+        
     overlays_list = await get_overlays()
-    current = next((o for o in overlays_list if o["name"] == slot), None)
+    current = next((o for o in overlays_list if o["name"] == overlay_name), None)
     if current and current.get("config"):
         config = current["config"]
         if isinstance(config, str):

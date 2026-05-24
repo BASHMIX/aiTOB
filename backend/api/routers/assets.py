@@ -4,7 +4,7 @@ from backend.api.auth import verify_hub_password
 
 router = APIRouter(tags=["assets"])
 
-STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "static")
+STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static")
 ASSETS_DIR = os.path.join(STATIC_DIR, "assets")
 
 os.makedirs(ASSETS_DIR, exist_ok=True)

@@ -28,8 +28,13 @@ async def _get_llm():
         root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
         if root not in sys.path:
             sys.path.append(root)
-        from backend.core.database import get_setting
-        api_key = await get_setting("GOOGLE_API_KEY") or await get_setting("GEMINI_API_KEY")
+        from backend.core.database import get_setting, get_connection
+        api_key = (
+            await get_setting("GOOGLE_API_KEY")
+            or await get_setting("GEMINI_API_KEY")
+            or await get_connection("GOOGLE_API_KEY")
+            or await get_connection("GEMINI_API_KEY")
+        )
     except Exception:
         pass
 

@@ -53,7 +53,7 @@ async def api_add_tournament(body: AddTournamentRequest):
     return {"message": f"Tournament {info.get('name')} added successfully.", "slug": slug}
 
 
-@router.get("/{slug}/sets", summary="Fetch sets for a tournament")
+@router.get("/{slug:path}/sets", summary="Fetch sets for a tournament")
 async def api_get_sets(slug: str):
     """Fetch all bracket sets from Start.gg and sync active matches."""
     t = await get_tournament(slug)
@@ -67,7 +67,7 @@ async def api_get_sets(slug: str):
     return {"sets": sets}
 
 
-@router.post("/{slug}/reset-hub",
+@router.post("/{slug:path}/reset-hub",
              dependencies=[Depends(verify_hub_password)],
              summary="Reset all hub matches for a tournament")
 async def api_reset_tournament_hub(slug: str):
@@ -77,7 +77,7 @@ async def api_reset_tournament_hub(slug: str):
     return {"message": "Hub matches reset", "ok": True}
 
 
-@router.delete("/{slug}",
+@router.delete("/{slug:path}",
                dependencies=[Depends(verify_hub_password)],
                summary="Delete a tournament")
 async def api_delete_tournament(slug: str):
@@ -86,7 +86,7 @@ async def api_delete_tournament(slug: str):
     return {"message": "Deleted"}
 
 
-@router.post("/{slug}/refresh",
+@router.post("/{slug:path}/refresh",
              dependencies=[Depends(verify_hub_password)],
              summary="Refresh tournament data from Start.gg")
 async def api_refresh_tournament(slug: str):
@@ -107,7 +107,7 @@ async def api_refresh_tournament(slug: str):
     return {"message": "Tournament data refreshed.", "ok": True}
 
 
-@router.patch("/{slug}/settings",
+@router.patch("/{slug:path}/settings",
               dependencies=[Depends(verify_hub_password)],
               summary="Update tournament settings")
 async def api_update_tournament_settings(slug: str, request: Request):
