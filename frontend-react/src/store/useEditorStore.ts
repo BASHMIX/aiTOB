@@ -70,7 +70,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   future: [],
 
   takeSnapshot: () => set((state) => ({
-    past: [...state.past, JSON.parse(JSON.stringify(state.elements))].slice(-50),
+    past: [...state.past, structuredClone(state.elements)].slice(-50),
     future: []
   })),
   undo: () => set((state) => {
@@ -79,7 +79,7 @@ export const useEditorStore = create<EditorState>((set) => ({
     const newPast = state.past.slice(0, state.past.length - 1);
     return {
       past: newPast,
-      future: [JSON.parse(JSON.stringify(state.elements)), ...state.future],
+      future: [structuredClone(state.elements), ...state.future],
       elements: previous,
       selectedId: null
     };
@@ -89,7 +89,7 @@ export const useEditorStore = create<EditorState>((set) => ({
     const next = state.future[0];
     const newFuture = state.future.slice(1);
     return {
-      past: [...state.past, JSON.parse(JSON.stringify(state.elements))],
+      past: [...state.past, structuredClone(state.elements)],
       future: newFuture,
       elements: next,
       selectedId: null
@@ -120,7 +120,7 @@ export const useEditorStore = create<EditorState>((set) => ({
     }
   })),
   addElement: (element) => set((state) => {
-    const currentClone = JSON.parse(JSON.stringify(state.elements));
+    const currentClone = structuredClone(state.elements);
     return {
       past: [...state.past, currentClone].slice(-50),
       future: [],
@@ -132,7 +132,7 @@ export const useEditorStore = create<EditorState>((set) => ({
     };
   }),
   deleteElement: (id) => set((state) => {
-    const currentClone = JSON.parse(JSON.stringify(state.elements));
+    const currentClone = structuredClone(state.elements);
     const newElements = { ...state.elements };
     delete newElements[id];
     return {
@@ -143,7 +143,7 @@ export const useEditorStore = create<EditorState>((set) => ({
     };
   }),
   restoreElement: (id) => set((state) => {
-    const currentClone = JSON.parse(JSON.stringify(state.elements));
+    const currentClone = structuredClone(state.elements);
     const defaultTemplates: Record<string, OverlayElement> = {
       p1_name: { id: 'p1_name', type: 'text', x: 400, y: 950, fontSize: 48, color: '#ffffff', text: 'Player 1', visible: true },
       p2_name: { id: 'p2_name', type: 'text', x: 1520, y: 950, fontSize: 48, color: '#ffffff', text: 'Player 2', visible: true },
