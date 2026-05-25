@@ -2,7 +2,7 @@ from fastapi import APIRouter, Request, HTTPException, Depends
 import datetime
 from backend.core.database import (
     get_active_matches, get_active_match, upsert_active_match, delete_active_match,
-    get_all_player_overrides, add_bot_feed, add_hub_command
+    get_all_player_overrides, add_bot_feed, add_hub_command, get_match_occupying_station
 )
 from backend.core.startgg_client import get_client
 from backend.core.match_state import transition_match
@@ -230,10 +230,12 @@ async def api_patch_active_match(set_id: str, request: Request):
     d = await request.json()
     station_id = d.get("station_id")
     if station_id:
-        active_matches = await get_active_matches()
-        for am in active_matches:
-            if am.get("set_id") != set_id and am.get("status") in ["not_started", "called", "in_progress"] and am.get("station_id") == station_id:
-                raise HTTPException(status_code=400, detail=f"Station is already occupied by match: {am.get('p1_name')} vs {am.get('p2_name')}")
+        occupying = await get_match_occupying_station(station_id, exclude_set_id=set_id)
+        if occupying:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Station is already occupied by match: {occupying.get('p1_name')} vs {occupying.get('p2_name')}"
+            )
     await upsert_active_match(set_id, **d)
     await hub_mgr.broadcast({"type": "match_update"})
     return {"message": "Updated"}

@@ -132,8 +132,23 @@ export function DraggableElement({ id, element, scale, onContextMenu }: Props) {
     updateElement(id, { x: Math.round(d.x), y: Math.round(d.y) });
   };
 
+  // Update store coordinates in real-time while dragging to prevent controlled input snapback on re-renders
+  const onDrag = (_e: any, d: any) => {
+    updateElement(id, { x: Math.round(d.x), y: Math.round(d.y) });
+  };
+
   // Snap resizing to precise integers to prevent coordinate drift
   const onResizeStop = (_e: any, _direction: any, ref: any, _delta: any, position: any) => {
+    updateElement(id, {
+      width: Math.round(parseInt(ref.style.width, 10)),
+      height: Math.round(parseInt(ref.style.height, 10)),
+      x: Math.round(position.x),
+      y: Math.round(position.y)
+    });
+  };
+
+  // Update store width/height/coordinates in real-time while resizing to keep inputs and bounding box in sync
+  const onResize = (_e: any, _direction: any, ref: any, _delta: any, position: any) => {
     updateElement(id, {
       width: Math.round(parseInt(ref.style.width, 10)),
       height: Math.round(parseInt(ref.style.height, 10)),
@@ -147,32 +162,24 @@ export function DraggableElement({ id, element, scale, onContextMenu }: Props) {
 
   return (
     <Rnd
-      key={`${id}_${Math.round(element.x)}_${Math.round(element.y)}_${Math.round(element.width || 0)}_${Math.round(element.height || 0)}`}
+      key={id}
       scale={scale}
       position={{ x: Math.round(element.x), y: Math.round(element.y) }}
       size={hasFixedSize ? { width: Math.round(element.width || 250), height: Math.round(element.height || 60) } : undefined}
+      onDrag={onDrag}
       onDragStop={onDragStop}
       onDragStart={() => { store.takeSnapshot(); setSelectedId(id); }}
+      onResize={hasFixedSize ? onResize : undefined}
       onResizeStop={hasFixedSize ? onResizeStop : undefined}
       onResizeStart={() => { store.takeSnapshot(); setSelectedId(id); }}
       disableDragging={false}
       enableResizing={hasFixedSize}
       style={{ zIndex: isSelected ? 100 : (element.zIndex || 1) }}
-      onMouseDown={(e: any) => {
-        e.stopPropagation();
-        setSelectedId(id);
-      }}
-      onClick={(e: any) => {
-        e.stopPropagation();
+      onMouseDown={() => {
         setSelectedId(id);
       }}
       className={`select-none text-center box-border ${isSelected ? 'outline-dashed outline-2 outline-[#00ffcc]' : ''}`}
-      bounds={{ 
-        left: 0, 
-        top: 0, 
-        right: 1920 - Math.round(element.width || 250), 
-        bottom: 1080 - Math.round(element.height || 60) 
-      } as any}
+      bounds="parent"
       dragGrid={[1, 1]}
       resizeGrid={[1, 1]}
     >

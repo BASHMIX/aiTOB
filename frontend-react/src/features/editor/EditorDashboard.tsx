@@ -168,19 +168,32 @@ export function EditorDashboard() {
     };
   }, [stationId]);
 
-  // Scaling logic
+  // Scaling logic using ResizeObserver to ensure stable measurement on initial paint and reflows
   useEffect(() => {
     if (!autoScale) return;
+    const container = containerRef.current;
+    if (!container) return;
+
     const handleResize = () => {
-      if (containerRef.current) {
-        const { clientWidth, clientHeight } = containerRef.current;
+      const { clientWidth, clientHeight } = container;
+      if (clientWidth > 100 && clientHeight > 100) {
         const newScale = Math.min((clientWidth - 100) / 1920, (clientHeight - 100) / 1080);
         setScale(newScale);
       }
     };
+
     handleResize();
+
+    const observer = new ResizeObserver(() => {
+      handleResize();
+    });
+    observer.observe(container);
+
     window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', handleResize);
+    };
   }, [autoScale]);
 
   const handlePush = async () => {
@@ -301,6 +314,27 @@ export function EditorDashboard() {
     if (store.clipboardStyle) {
       store.updateElement(id, store.clipboardStyle);
       store.setStatusMsg("Style Pasted 📋");
+    }
+  };
+
+  const copyPosition = (id: string) => {
+    const el = store.elements[id];
+    if (el) {
+      store.setClipboardPosition({
+        x: el.x,
+        y: el.y,
+      });
+      store.setStatusMsg("Position Copied 📍");
+    }
+  };
+
+  const pastePosition = (id: string) => {
+    if (store.clipboardPosition) {
+      store.updateElement(id, {
+        x: store.clipboardPosition.x,
+        y: store.clipboardPosition.y,
+      });
+      store.setStatusMsg("Position Pasted 📍");
     }
   };
 
@@ -497,6 +531,11 @@ export function EditorDashboard() {
           <button className="w-full text-left px-4 py-2 hover:bg-accentYellow hover:text-black" onClick={() => copyStyle(contextMenu.id)}>Copy Style</button>
           {store.clipboardStyle && (
             <button className="w-full text-left px-4 py-2 hover:bg-accentYellow hover:text-black" onClick={() => pasteStyle(contextMenu.id)}>Paste Style</button>
+          )}
+          <div className="h-px bg-white/10 my-1" />
+          <button className="w-full text-left px-4 py-2 hover:bg-accentYellow hover:text-black" onClick={() => copyPosition(contextMenu.id)}>Copy Position</button>
+          {store.clipboardPosition && (
+            <button className="w-full text-left px-4 py-2 hover:bg-accentYellow hover:text-black" onClick={() => pastePosition(contextMenu.id)}>Paste Position</button>
           )}
         </div>
       )}

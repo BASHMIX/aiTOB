@@ -268,9 +268,12 @@ async def update_tournament_settings(slug: str, **kwargs):
             db.row_factory = aiosqlite.Row
             async with db.execute("SELECT set_id, round_name, phase_group FROM active_matches WHERE tournament_slug = ?", (slug,)) as cursor:
                 rows = [dict(r) for r in await cursor.fetchall()]
+            update_data = []
             for r in rows:
                 bot_enabled = should_bot_manage_match(r["round_name"], r["phase_group"], limit_setting)
-                await db.execute("UPDATE active_matches SET bot_enabled = ? WHERE set_id = ?", (bot_enabled, r["set_id"]))
+                update_data.append((bot_enabled, r["set_id"]))
+            if update_data:
+                await db.executemany("UPDATE active_matches SET bot_enabled = ? WHERE set_id = ?", update_data)
         await db.commit()
 
 async def get_tournaments():
@@ -400,6 +403,24 @@ async def get_active_match(set_id: str):
         async with db.execute("SELECT * FROM active_matches WHERE set_id = ?", (set_id,)) as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else None
+
+async def get_match_occupying_station(station_id: str, exclude_set_id: str = None) -> dict | None:
+    query = """
+        SELECT * FROM active_matches 
+        WHERE station_id = ? 
+          AND status IN ('not_started', 'called', 'in_progress')
+    """
+    params = [station_id]
+    if exclude_set_id:
+        query += " AND set_id != ?"
+        params.append(exclude_set_id)
+        
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(query, params) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
 
 async def upsert_active_match(set_id: str, **kwargs):
     async with aiosqlite.connect(DB_PATH) as db:

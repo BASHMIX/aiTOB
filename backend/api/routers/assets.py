@@ -1,5 +1,6 @@
 import os
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from fastapi.concurrency import run_in_threadpool
 from backend.api.auth import verify_hub_password
 
 router = APIRouter(tags=["assets"])
@@ -32,8 +33,11 @@ async def upload_asset(file: UploadFile = File(...)):
     file_path = os.path.join(ASSETS_DIR, filename)
 
     try:
-        with open(file_path, "wb") as f:
-            f.write(await file.read())
+        content = await file.read()
+        def write_file():
+            with open(file_path, "wb") as f:
+                f.write(content)
+        await run_in_threadpool(write_file)
         return {"name": filename, "url": f"/static/assets/{filename}"}
     except Exception as e:
         raise HTTPException(500, str(e))

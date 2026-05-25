@@ -35,6 +35,7 @@ interface EditorState {
   selectedId: string | null;
   statusMsg: string;
   clipboardStyle: Partial<OverlayElement> | null;
+  clipboardPosition: { x: number, y: number } | null;
   activeMatch: any | null;
   
   // History states
@@ -54,6 +55,7 @@ interface EditorState {
   setGlobalSettings: (bg: string, fontUrl: string, fontFamily: string) => void;
   setStatusMsg: (msg: string) => void;
   setClipboardStyle: (style: Partial<OverlayElement> | null) => void;
+  setClipboardPosition: (pos: { x: number, y: number } | null) => void;
   setActiveMatch: (match: any | null) => void;
 }
 
@@ -65,6 +67,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   selectedId: null,
   statusMsg: 'Not connected',
   clipboardStyle: null,
+  clipboardPosition: null,
   activeMatch: null,
   past: [],
   future: [],
@@ -176,5 +179,6 @@ export const useEditorStore = create<EditorState>((set) => ({
   }),
   setStatusMsg: (statusMsg) => set({ statusMsg }),
   setClipboardStyle: (style) => set({ clipboardStyle: style }),
+  setClipboardPosition: (pos) => set({ clipboardPosition: pos }),
   setActiveMatch: (activeMatch) => set({ activeMatch })
 }));
