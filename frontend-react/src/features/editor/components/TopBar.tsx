@@ -117,6 +117,14 @@ export function TopBar({ slot, stationId, onRename, onSave, onLoadClick, status 
         </div>
 
         <button 
+          onClick={() => window.dispatchEvent(new Event('play-slide-preview'))}
+          className="flex items-center gap-2 bg-[#00ffcc]/20 hover:bg-[#00ffcc]/30 text-[#00ffcc] border border-[#00ffcc]/40 px-4 py-1.5 rounded-full text-sm font-bold transition-all hover:scale-105 active:scale-95"
+          title="Play PowerPoint slide animation sequence for all elements"
+        >
+          ▶ Play Slide
+        </button>
+
+        <button 
           onClick={copyOBSLink}
           className="flex items-center gap-2 bg-accentYellow/20 hover:bg-accentYellow/30 text-accentYellow border border-accentYellow/40 px-4 py-1.5 rounded-full text-sm font-bold transition-all hover:scale-105 active:scale-95"
           title="Copy static OBS link for this station"

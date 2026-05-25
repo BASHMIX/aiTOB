@@ -1,5 +1,22 @@
 import { create } from 'zustand';
 
+export interface AnimationSettings {
+  animationType: 'none' | 'fly-in' | 'float-in' | 'fade-in';
+  direction: 'bottom' | 'bottom-left' | 'left' | 'top-left' | 'top' | 'top-right' | 'right' | 'bottom-right' | 'in-place';
+  duration: number; // in ms
+  delay: number; // in ms
+  loop: number; // -1 (forever), 0 (none), n (repeat count)
+  tweenType: 'linear' | 'ease-in' | 'ease-out' | 'ease-in-out' | 'bounce' | 'back-out' | 'elastic';
+  playOn: 'IN' | 'BOTH' | 'OUT';
+  trigger: 'on-load' | 'with-prev' | 'after-prev';
+  revealStyle?: 'all' | 'word' | 'letter';
+  revealScale?: number;
+  scoreGlitch?: boolean;
+  glitchScale?: number;
+  idleAnimation?: 'none' | 'bobbing' | 'pulsing' | 'hovering' | 'spinning';
+  idleIntensity?: number;
+}
+
 export interface OverlayElement {
   id: string;
   type: 'image' | 'text' | 'rect' | 'circle';
@@ -25,6 +42,9 @@ export interface OverlayElement {
   shadowBlur?: number;
   shadowOffsetX?: number;
   shadowOffsetY?: number;
+  
+  // Animation settings
+  animation?: AnimationSettings;
 }
 
 interface EditorState {
