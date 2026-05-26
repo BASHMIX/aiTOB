@@ -116,65 +116,74 @@ export function MatchDashboard() {
   }, [sets]);
 
   // ── Build mapped matches ─────────────────────────────────────
-  const mappedMatches: MatchData[] = [];
+  const mappedMatches = useMemo(() => {
+    const result: MatchData[] = [];
+    const localSetIds = new Set<string>();
 
-  // Local matches first
-  (matches ?? []).forEach(m => {
-    if (!m || !m.set_id) return;
+    // Local matches first
+    (matches ?? []).forEach(m => {
+      if (!m || !m.set_id) return;
 
-    // Skip if wrong tournament
-    if (currentSlug && m.tournament_slug && m.tournament_slug !== currentSlug) return;
+      localSetIds.add(safe(m.set_id));
 
-    mappedMatches.push({
-      id: safe(m.match_number) || shortId(m.set_id),
-      pool: safe(m.phase_group),
-      round: safe(m.round_name),
-      status: mapLocalState(m.status),
-      isLocal: true,
-      isStreamMatch: plannedStreamIds.includes(m.set_id) || !!m.is_stream_match,
-      startedAt: m.started_at,
-      calledAt: m.called_at,
-      players: [
-        {
-          name: safe(m.p1_name) || 'Unknown',
-          avatar: m.p1_avatar,
-          score: m.p1_score != null ? Number(m.p1_score) : undefined,
-          isTBD: isTBD(safe(m.p1_name))
-        },
-        {
-          name: safe(m.p2_name) || 'Unknown',
-          avatar: m.p2_avatar,
-          score: m.p2_score != null ? Number(m.p2_score) : undefined,
-          isTBD: isTBD(safe(m.p2_name))
-        }
-      ],
-      raw: m,
-      stationId: m.station_id,
+      // Skip if wrong tournament
+      if (currentSlug && m.tournament_slug && m.tournament_slug !== currentSlug) return;
+
+      result.push({
+        id: safe(m.match_number) || shortId(m.set_id),
+        pool: safe(m.phase_group),
+        round: safe(m.round_name),
+        status: mapLocalState(m.status),
+        isLocal: true,
+        isStreamMatch: plannedStreamIds.includes(m.set_id) || !!m.is_stream_match,
+        startedAt: m.started_at,
+        calledAt: m.called_at,
+        players: [
+          {
+            name: safe(m.p1_name) || 'Unknown',
+            avatar: m.p1_avatar,
+            score: m.p1_score != null ? Number(m.p1_score) : undefined,
+            isTBD: isTBD(safe(m.p1_name))
+          },
+          {
+            name: safe(m.p2_name) || 'Unknown',
+            avatar: m.p2_avatar,
+            score: m.p2_score != null ? Number(m.p2_score) : undefined,
+            isTBD: isTBD(safe(m.p2_name))
+          }
+        ],
+        raw: m,
+        stationId: m.station_id,
+      });
     });
-  });
 
-  // Start.gg sets (not already local)
-  (sets ?? []).forEach(s => {
-    if (!s || !s.id) return;
-    const sid = safe(s.id);
-    if (matches?.some(m => safe(m?.set_id) === sid)) return;
+    // Start.gg sets (not already local)
+    (sets ?? []).forEach(s => {
+      if (!s || !s.id) return;
+      const sid = safe(s.id);
 
-    const mapped = mapStartggState(s.state);
+      // O(1) check using Set instead of O(n) Array.some
+      if (localSetIds.has(sid)) return;
 
-    mappedMatches.push({
-      id: s.identifier || shortId(s.id),
-      pool: safe(s.phaseGroup?.displayIdentifier),
-      round: safe(s.fullRoundText || s.round),
-      status: mapped,
-      isLocal: false,
-      isStreamMatch: plannedStreamIds.includes(s.id),
-      players: [
-        { name: safe(s.p1) || 'TBD', avatar: s.p1_avatar, score: undefined, isTBD: isTBD(safe(s.p1)) },
-        { name: safe(s.p2) || 'TBD', avatar: s.p2_avatar, score: undefined, isTBD: isTBD(safe(s.p2)) }
-      ],
-      raw: s,
+      const mapped = mapStartggState(s.state);
+
+      result.push({
+        id: s.identifier || shortId(s.id),
+        pool: safe(s.phaseGroup?.displayIdentifier),
+        round: safe(s.fullRoundText || s.round),
+        status: mapped,
+        isLocal: false,
+        isStreamMatch: plannedStreamIds.includes(s.id),
+        players: [
+          { name: safe(s.p1) || 'TBD', avatar: s.p1_avatar, score: undefined, isTBD: isTBD(safe(s.p1)) },
+          { name: safe(s.p2) || 'TBD', avatar: s.p2_avatar, score: undefined, isTBD: isTBD(safe(s.p2)) }
+        ],
+        raw: s,
+      });
     });
-  });
+
+    return result;
+  }, [matches, sets, currentSlug, plannedStreamIds]);
 
   // ── Action handlers ────────────────────────────────────────────────
   const handleAction = async (action: string, row: any, data?: any) => {
@@ -284,9 +293,11 @@ export function MatchDashboard() {
   const dqTimerSeconds = actualTourney?.dq_timer_seconds ?? 600;
 
   // ── Main Render ───────────────────────────────────────────────────────
-  const filtered = hideTBD ? mappedMatches.filter(m => m.players.every(p => !p.isTBD)) : mappedMatches;
-  const finalFiltered = selectedPhaseGroup !== '__all__' ? filtered.filter(r => (r.pool || '') === selectedPhaseGroup) : filtered;
-  const sorted = sortTBDLast(finalFiltered);
+  const sorted = useMemo(() => {
+    const filtered = hideTBD ? mappedMatches.filter(m => m.players.every(p => !p.isTBD)) : mappedMatches;
+    const finalFiltered = selectedPhaseGroup !== '__all__' ? filtered.filter(r => (r.pool || '') === selectedPhaseGroup) : filtered;
+    return sortTBDLast(finalFiltered);
+  }, [mappedMatches, hideTBD, selectedPhaseGroup]);
 
   return (
     <div className="flex flex-col gap-4 relative p-1 flex-1 h-full overflow-hidden">
