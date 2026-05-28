@@ -147,6 +147,11 @@ async def init_db():
                 value TEXT
             )
         ''')
+
+        # ⚡ Bolt: Add database indexes to improve query performance for common lookups
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_active_matches_tournament_slug ON active_matches(tournament_slug)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_active_matches_status ON active_matches(status)")
+
         # ── Safe migrations (add new columns if missing) ─────────────────
         migrations = [
             # active_matches new columns
