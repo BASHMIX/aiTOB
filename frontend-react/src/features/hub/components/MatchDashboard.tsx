@@ -116,16 +116,18 @@ export function MatchDashboard() {
   }, [sets]);
 
   // ── Build mapped matches ─────────────────────────────────────
-  const mappedMatches: MatchData[] = [];
+  // BOLT OPTIMIZATION: Memoize expensive match mapping to prevent unnecessary re-computations on every render
+  const mappedMatches: MatchData[] = useMemo(() => {
+    const mapped: MatchData[] = [];
 
-  // Local matches first
+    // Local matches first
   (matches ?? []).forEach(m => {
     if (!m || !m.set_id) return;
 
     // Skip if wrong tournament
     if (currentSlug && m.tournament_slug && m.tournament_slug !== currentSlug) return;
 
-    mappedMatches.push({
+    mapped.push({
       id: safe(m.match_number) || shortId(m.set_id),
       pool: safe(m.phase_group),
       round: safe(m.round_name),
@@ -159,13 +161,14 @@ export function MatchDashboard() {
     const sid = safe(s.id);
     if (matches?.some(m => safe(m?.set_id) === sid)) return;
 
-    const mapped = mapStartggState(s.state);
+    const mappedStatus = mapStartggState(s.state);
 
-    mappedMatches.push({
+    mapped.push({
       id: s.identifier || shortId(s.id),
       pool: safe(s.phaseGroup?.displayIdentifier),
       round: safe(s.fullRoundText || s.round),
-      status: mapped,
+      status: mappedStatus,
+
       isLocal: false,
       isStreamMatch: plannedStreamIds.includes(s.id),
       players: [
@@ -175,6 +178,9 @@ export function MatchDashboard() {
       raw: s,
     });
   });
+
+    return mapped;
+  }, [matches, sets, currentSlug, plannedStreamIds]);
 
   // ── Action handlers ────────────────────────────────────────────────
   const handleAction = async (action: string, row: any, data?: any) => {
