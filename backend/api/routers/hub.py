@@ -13,6 +13,7 @@ from backend.api.schemas import (
 
 router = APIRouter(tags=["hub"])
 
+_auto_dispatcher_cache = None
 
 @router.post(
     "/auth/verify",
@@ -153,7 +154,10 @@ async def api_get_status():
         except Exception:
             pass
 
-    dispatcher_on = (await get_setting("auto_dispatch_master_switch", "off") or "off").lower() == "on"
+    global _auto_dispatcher_cache
+    if _auto_dispatcher_cache is None:
+        _auto_dispatcher_cache = (await get_setting("auto_dispatch_master_switch", "off") or "off").lower() == "on"
+    dispatcher_on = _auto_dispatcher_cache
 
     # Check the Discord Bot state from the active WebSocket connection!
     from backend.api.ws_manager import manager as ws_manager
@@ -215,6 +219,8 @@ async def api_set_dispatcher_master(body: DispatcherMasterRequest):
     """
     new_state = "on" if body.enabled else "off"
     await set_setting("auto_dispatch_master_switch", new_state)
+    global _auto_dispatcher_cache
+    _auto_dispatcher_cache = new_state == "on"
     # Clear stop-signaled flags so re-enabling re-emits Top-N notices if applicable.
     if body.enabled:
         from backend.core.database import get_tournaments
