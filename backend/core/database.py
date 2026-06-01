@@ -176,6 +176,18 @@ async def init_db():
         # IF NOT EXISTS → idempotent; speeds up list / poll / OBS-telemetry reads.
         await db.execute("CREATE INDEX IF NOT EXISTS idx_active_matches_tournament_slug ON active_matches(tournament_slug)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_active_matches_status ON active_matches(status)")
+
+        # Performance Indexes for common queries with ORDER BY created_at
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_active_matches_tournament_created ON active_matches(tournament_slug, created_at)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_active_matches_created_at ON active_matches(created_at)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_active_matches_station_id ON active_matches(station_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_tournaments_created_at ON tournaments(created_at DESC)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_match_results_tournament_created ON match_results(tournament_slug, created_at DESC)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_match_results_created_at ON match_results(created_at DESC)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_planned_streams_tournament_created ON planned_streams(tournament_slug, created_at DESC)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_planned_streams_created_at ON planned_streams(created_at DESC)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_conflicts_resolved_created ON conflicts(resolved, created_at DESC)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_hub_commands_status_created ON hub_commands(status, created_at ASC)")
         # ── Safe migrations (add new columns if missing) ─────────────────
         migrations = [
             # active_matches new columns
