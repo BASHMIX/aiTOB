@@ -32,14 +32,14 @@ class ConnectionManager:
             self.active_connections.remove(websocket)
         
         # Remove from all subscriptions
-        for slug in list(self.subscriptions.keys()):
-            if websocket in self.subscriptions[slug]:
-                self.subscriptions[slug].remove(websocket)
+        for conns in self.subscriptions.values():
+            if websocket in conns:
+                conns.remove(websocket)
         
         # Remove from overlays
-        for slot in list(self.overlay_connections.keys()):
-            if websocket in self.overlay_connections[slot]:
-                self.overlay_connections[slot].remove(websocket)
+        for conns in self.overlay_connections.values():
+            if websocket in conns:
+                conns.remove(websocket)
 
         if websocket == self.bot_connection:
             self.bot_connection = None
