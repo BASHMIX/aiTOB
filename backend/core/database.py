@@ -831,10 +831,10 @@ async def sync_active_matches(tournament_slug: str, provider_sets: list[Provider
                            new_status, bot_enabled, is_stream, station_id))
 
         # Remove orphans — since provider.fetch_sets retrieves all paginated sets, orphan list is complete
-        for sid in list(local_matches.keys()):
-            if sid not in found_sids:
-                # Orphan: set no longer in provider bracket — remove from hub
-                await db.execute("DELETE FROM active_matches WHERE set_id = ?", (sid,))
+        orphans = [(sid,) for sid in local_matches.keys() if sid not in found_sids]
+        if orphans:
+            # Orphan: set no longer in provider bracket — remove from hub
+            await db.executemany("DELETE FROM active_matches WHERE set_id = ?", orphans)
 
         await db.commit()
 
