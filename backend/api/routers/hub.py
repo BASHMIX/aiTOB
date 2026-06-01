@@ -143,7 +143,6 @@ async def api_get_status():
     conns = await get_all_connections()
 
     startgg_token = settings.get("STARTGG_API_TOKEN") or conns.get("STARTGG_API_TOKEN")
-    discord_token = settings.get("DISCORD_BOT_TOKEN") or conns.get("DISCORD_BOT_TOKEN")
 
     token_scope_status = settings.get("token_scope_status")
     token_scope = None
