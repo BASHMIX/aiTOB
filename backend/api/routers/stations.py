@@ -1,8 +1,9 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends
+from collections import defaultdict
 from backend.core.database import (
     get_stations, create_station, update_station, delete_station,
     add_station_overlay, remove_station_overlay, get_station_overlays,
-    update_station_active_overlay
+    get_all_station_overlays, update_station_active_overlay
 )
 from backend.api.auth import verify_hub_password
 from backend.api.schemas import (
@@ -16,8 +17,15 @@ router = APIRouter(tags=["stations"])
 async def api_get_stations():
     """Return all configured stream/station setups with their overlays. Auto-seeding default overlay if none exists."""
     stations = await get_stations()
+
+    # Pre-fetch all overlays to avoid N+1 query
+    all_overlays = await get_all_station_overlays()
+    overlays_by_station = defaultdict(list)
+    for overlay in all_overlays:
+        overlays_by_station[overlay["station_id"]].append(overlay)
+
     for st in stations:
-        overlays = await get_station_overlays(st["id"])
+        overlays = overlays_by_station.get(st["id"], [])
         if not overlays:
             # Auto-seed a default overlay configuration for the station (Requirement 2 & 5 defaults)
             default_name = f"{st['id']}_default"

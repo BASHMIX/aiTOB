@@ -559,6 +559,15 @@ async def delete_station(station_id: str):
         await db.commit()
 
 # ── Station Overlays ───────────────────────────────────────────────────────
+async def get_all_station_overlays():
+    """Fetch all station overlays to avoid N+1 queries when loading stations."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM station_overlays ORDER BY station_id, sort_order"
+        ) as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
+
 async def get_station_overlays(station_id: str):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
