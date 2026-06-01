@@ -138,7 +138,6 @@ async def api_get_status():
     """Verify operational and connection statuses for database, websockets, and credentials scope. Requires admin password authentication."""
     from backend.core.database import get_all_connections, get_all_settings
     import json
-    import datetime
     settings = await get_all_settings()
     conns = await get_all_connections()
 
