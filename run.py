@@ -134,7 +134,7 @@ signal.signal(signal.SIGTERM, signal_handler)
 
 # ── Main ──────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    cprint(GREEN, "SYS", f"Starting AI Tournament Organizer…")
+    cprint(GREEN, "SYS", "Starting AI Tournament Organizer…")
     cprint(GREEN, "SYS", f"Python: {PYTHON}")
     cprint(GREEN, "SYS", f"Root:   {ROOT}")
     print()
@@ -171,10 +171,10 @@ if __name__ == "__main__":
     with open(PIDS_FILE, "w") as f:
         json.dump(pids, f)
 
-    cprint(GREEN, "SYS", f"All services started. PIDs saved to .pids.json")
-    cprint(GREEN, "SYS", f"Admin Hub  -> http://localhost:8000/admin/hub")
-    cprint(GREEN, "SYS", f"Editor     -> http://localhost:8000/admin/editor")
-    cprint(GREEN, "SYS", f"OBS        -> http://localhost:8000/obs")
+    cprint(GREEN, "SYS", "All services started. PIDs saved to .pids.json")
+    cprint(GREEN, "SYS", "Admin Hub  -> http://localhost:8000/admin/hub")
+    cprint(GREEN, "SYS", "Editor     -> http://localhost:8000/admin/editor")
+    cprint(GREEN, "SYS", "OBS        -> http://localhost:8000/obs")
     cprint(YELLOW, "SYS", "Press Ctrl+C to stop all services.")
     print()
 

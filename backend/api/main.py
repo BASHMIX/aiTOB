@@ -8,7 +8,7 @@ import sys
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend.core.database import init_db, get_setting, set_setting
+from backend.core.database import init_db, get_setting, get_all_settings, set_setting
 from backend.api.ws_manager import manager as ws_manager
 from backend.api.routers.players import router as players_router
 from backend.api.routers.matches import router as matches_router
@@ -133,8 +133,9 @@ async def startup_event():
     await init_db()
     # Migration of env to DB
     important_vars = ["STARTGG_API_TOKEN", "DISCORD_BOT_TOKEN", "GOOGLE_API_KEY", "HUB_PASSWORD"]
+    all_settings = await get_all_settings()
     for v in important_vars:
-        db_val = await get_setting(v)
+        db_val = all_settings.get(v)
         env_val = os.getenv(v)
         if not db_val and env_val:
             await set_setting(v, env_val)
