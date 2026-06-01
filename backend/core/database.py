@@ -6,6 +6,17 @@ from backend.core.contracts.tournament_types import ProviderSet, ProviderSetStat
 
 DB_PATH = os.getenv("DB_PATH", "backend/core/database.sqlite")
 
+_table_columns_cache = {}
+
+async def _get_table_columns(db: aiosqlite.Connection, table_name: str) -> set[str]:
+    """Retrieves and caches the column names for a given table to safely validate kwargs."""
+    if table_name not in _table_columns_cache:
+        async with db.execute(f"PRAGMA table_info({table_name})") as cursor:
+            rows = await cursor.fetchall()
+            _table_columns_cache[table_name] = {row[1] for row in rows}
+    return _table_columns_cache[table_name]
+
+
 async def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     async with aiosqlite.connect(DB_PATH) as db:
@@ -316,6 +327,11 @@ async def update_tournament_settings(slug: str, **kwargs):
     if not kwargs:
         return
     async with aiosqlite.connect(DB_PATH) as db:
+        valid_columns = await _get_table_columns(db, "tournaments")
+        invalid_keys = [k for k in kwargs.keys() if k not in valid_columns]
+        if invalid_keys:
+            raise ValueError(f"Invalid columns in update_tournament_settings: {invalid_keys}")
+
         set_clause = ', '.join([f"{k} = ?" for k in kwargs.keys()])
         values = list(kwargs.values()) + [slug]
         await db.execute(f"UPDATE tournaments SET {set_clause} WHERE slug = ?", values)
@@ -536,6 +552,11 @@ async def update_station(station_id: str, **kwargs):
     if not kwargs:
         return
     async with aiosqlite.connect(DB_PATH) as db:
+        valid_columns = await _get_table_columns(db, "stations")
+        invalid_keys = [k for k in kwargs.keys() if k not in valid_columns]
+        if invalid_keys:
+            raise ValueError(f"Invalid columns in update_station: {invalid_keys}")
+
         set_clause = ', '.join([f"{k} = ?" for k in kwargs.keys()])
         values = list(kwargs.values()) + [station_id]
         await db.execute(f"UPDATE stations SET {set_clause} WHERE id = ?", values)
@@ -875,10 +896,16 @@ async def update_active_match(match_id: str, **kwargs):
         except Exception as e:
             print(f"Error validating status transition: {e}")
 
-    keys = ", ".join([f"{k} = ?" for k in kwargs.keys()])
-    values = list(kwargs.values())
-    values.append(match_id)
     async with aiosqlite.connect(DB_PATH) as db:
+        valid_columns = await _get_table_columns(db, "active_matches")
+        invalid_keys = [k for k in kwargs.keys() if k not in valid_columns]
+        if invalid_keys:
+            raise ValueError(f"Invalid columns in update_active_match: {invalid_keys}")
+
+        keys = ", ".join([f"{k} = ?" for k in kwargs.keys()])
+        values = list(kwargs.values())
+        values.append(match_id)
+
         await db.execute(f"UPDATE active_matches SET {keys} WHERE set_id = ?", values)
         await db.commit()
 
