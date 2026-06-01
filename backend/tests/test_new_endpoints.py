@@ -1,8 +1,14 @@
 import pytest
 from fastapi.testclient import TestClient
 from backend.api.main import app
+from backend.core.database import init_db
+import asyncio
 
 client = TestClient(app)
+
+@pytest.fixture(autouse=True)
+def setup_db():
+    asyncio.run(init_db())
 
 def test_hub_command_requires_auth():
     # POST /api/hub/command without password must fail with 401 Unauthorized

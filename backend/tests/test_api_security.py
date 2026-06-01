@@ -1,8 +1,14 @@
 import pytest
 from fastapi.testclient import TestClient
 from backend.api.main import app
+from backend.core.database import init_db
+import asyncio
 
 client = TestClient(app)
+
+@pytest.fixture(autouse=True)
+def setup_db():
+    asyncio.run(init_db())
 
 def test_sensitive_endpoints_require_auth():
     # Sensitive GET reads must return 401 Unauthorized
