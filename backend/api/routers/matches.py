@@ -415,12 +415,18 @@ async def api_patch_active_match(set_id: str, body: PatchActiveMatchRequest):
 )
 async def api_get_conflicts():
     """Retrieve all match results that have conflicting player score claims. Accessible without authentication."""
-    from backend.core.database import get_conflicts
+    from backend.core.database import get_conflicts, get_active_matches_by_set_ids
     conflicts = await get_conflicts()
     # Enrich each conflict with the live match's player names + entrant IDs so the
     # dashboard can render named "Choose Winner" buttons that post a winner_id.
+
+    set_ids = list({cf.get("set_id") for cf in conflicts if cf.get("set_id")})
+    active_matches = await get_active_matches_by_set_ids(set_ids)
+    matches_by_set_id = {m["set_id"]: m for m in active_matches}
+
     for cf in conflicts:
-        m = await get_active_match(cf.get("set_id")) if cf.get("set_id") else None
+        set_id = cf.get("set_id")
+        m = matches_by_set_id.get(set_id) if set_id else None
         if m:
             cf["p1_name"] = m.get("p1_name")
             cf["p2_name"] = m.get("p2_name")

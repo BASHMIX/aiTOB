@@ -609,6 +609,16 @@ async def get_active_match(set_id: str):
             row = await cursor.fetchone()
             return dict(row) if row else None
 
+async def get_active_matches_by_set_ids(set_ids: list[str]) -> list[dict]:
+    if not set_ids:
+        return []
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        placeholders = ','.join('?' * len(set_ids))
+        query = f"SELECT * FROM active_matches WHERE set_id IN ({placeholders})"
+        async with db.execute(query, set_ids) as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
+
 async def get_match_occupying_station(station_id: str, exclude_set_id: str = None) -> dict | None:
     query = """
         SELECT * FROM active_matches 
