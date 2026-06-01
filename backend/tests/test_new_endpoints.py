@@ -1,8 +1,10 @@
-import pytest
 from fastapi.testclient import TestClient
 from backend.api.main import app
 
 client = TestClient(app)
+import pytest
+from backend.api.main import app
+
 
 def test_hub_command_requires_auth():
     # POST /api/hub/command without password must fail with 401 Unauthorized
