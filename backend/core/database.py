@@ -253,17 +253,26 @@ async def create_or_update_player(discord_id: str, **kwargs):
     if not kwargs:
         return
     async with aiosqlite.connect(DB_PATH) as db:
+        valid_cols = []
+        async with db.execute("PRAGMA table_info(players)") as cursor:
+            valid_cols = [row[1] for row in await cursor.fetchall()]
+
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_cols}
+        if not filtered_kwargs:
+            return
+
         async with db.execute("SELECT discord_id FROM players WHERE discord_id = ?", (discord_id,)) as cursor:
             exists = await cursor.fetchone()
         if not exists:
-            columns = ['discord_id'] + list(kwargs.keys())
-            placeholders = ['?'] * len(columns)
-            values = [discord_id] + list(kwargs.values())
-            query = f"INSERT INTO players ({', '.join(columns)}) VALUES ({', '.join(placeholders)})"
+            columns = ['discord_id'] + list(filtered_kwargs.keys())
+            cols_str = ', '.join([f'"{c}"' for c in columns])
+            placeholders = ', '.join(['?'] * len(columns))
+            values = [discord_id] + list(filtered_kwargs.values())
+            query = f"INSERT INTO players ({cols_str}) VALUES ({placeholders})"
             await db.execute(query, values)
         else:
-            set_clause = ', '.join([f"{k} = ?" for k in kwargs.keys()])
-            values = list(kwargs.values()) + [discord_id]
+            set_clause = ', '.join([f'"{k}" = ?' for k in filtered_kwargs.keys()])
+            values = list(filtered_kwargs.values()) + [discord_id]
             query = f"UPDATE players SET {set_clause} WHERE discord_id = ?"
             await db.execute(query, values)
         await db.commit()
@@ -316,10 +325,18 @@ async def update_tournament_settings(slug: str, **kwargs):
     if not kwargs:
         return
     async with aiosqlite.connect(DB_PATH) as db:
-        set_clause = ', '.join([f"{k} = ?" for k in kwargs.keys()])
-        values = list(kwargs.values()) + [slug]
+        valid_cols = []
+        async with db.execute("PRAGMA table_info(tournaments)") as cursor:
+            valid_cols = [row[1] for row in await cursor.fetchall()]
+
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_cols}
+        if not filtered_kwargs:
+            return
+
+        set_clause = ', '.join([f'"{k}" = ?' for k in filtered_kwargs.keys()])
+        values = list(filtered_kwargs.values()) + [slug]
         await db.execute(f"UPDATE tournaments SET {set_clause} WHERE slug = ?", values)
-        if "bot_manage_limit" in kwargs:
+        if "bot_manage_limit" in filtered_kwargs:
             limit_setting = kwargs["bot_manage_limit"]
             db.row_factory = aiosqlite.Row
             async with db.execute("SELECT set_id, round_name, phase_group FROM active_matches WHERE tournament_slug = ?", (slug,)) as cursor:
@@ -536,8 +553,16 @@ async def update_station(station_id: str, **kwargs):
     if not kwargs:
         return
     async with aiosqlite.connect(DB_PATH) as db:
-        set_clause = ', '.join([f"{k} = ?" for k in kwargs.keys()])
-        values = list(kwargs.values()) + [station_id]
+        valid_cols = []
+        async with db.execute("PRAGMA table_info(stations)") as cursor:
+            valid_cols = [row[1] for row in await cursor.fetchall()]
+
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_cols}
+        if not filtered_kwargs:
+            return
+
+        set_clause = ', '.join([f'"{k}" = ?' for k in filtered_kwargs.keys()])
+        values = list(filtered_kwargs.values()) + [station_id]
         await db.execute(f"UPDATE stations SET {set_clause} WHERE id = ?", values)
         await db.commit()
 
@@ -875,10 +900,19 @@ async def update_active_match(match_id: str, **kwargs):
         except Exception as e:
             print(f"Error validating status transition: {e}")
 
-    keys = ", ".join([f"{k} = ?" for k in kwargs.keys()])
-    values = list(kwargs.values())
-    values.append(match_id)
     async with aiosqlite.connect(DB_PATH) as db:
+        valid_cols = []
+        async with db.execute("PRAGMA table_info(active_matches)") as cursor:
+            valid_cols = [row[1] for row in await cursor.fetchall()]
+
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_cols}
+        if not filtered_kwargs:
+            return
+
+        keys = ", ".join([f'"{k}" = ?' for k in filtered_kwargs.keys()])
+        values = list(filtered_kwargs.values())
+        values.append(match_id)
+
         await db.execute(f"UPDATE active_matches SET {keys} WHERE set_id = ?", values)
         await db.commit()
 
