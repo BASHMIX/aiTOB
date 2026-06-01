@@ -128,10 +128,10 @@
 
 ### Implementation for User Story 4
 
-- [ ] T041 [US4] Implement admin agent at `backend/bot/agent/admin_agent.py` — LangGraph agent with tools: `get_active_matches`, `get_players`, `create_discord_thread`, `post_announcement`; use Pydantic structured output per Constitution Principles II & III
-- [ ] T042 [US4] Implement structured command parser in `backend/api/routers/hub.py` — parse `msg <P1> vs <P2>`, `announce <msg>`, `call_match <id>` commands; route to bot actions per FR-009
-- [ ] T043 [US4] Implement hub command API endpoint in `backend/api/routers/hub.py` — POST `/api/hub/command` that routes to either the NL agent (T041) or structured command parser (T042) and returns response per FR-008
-- [ ] T044 [US4] Implement agent chat UI at `frontend-react/src/features/hub/AgentChat.tsx` — chat input, response display, command history, loading states; submit to `/api/hub/command` endpoint
+- [x] T041 [US4] Implement admin agent at `backend/bot/agent/admin_agent.py` — LangGraph agent with tools: `get_active_matches`, `get_players`, `create_discord_thread`, `post_announcement`; use Pydantic structured output per Constitution Principles II & III
+- [x] T042 [US4] Implement structured command parser in `backend/api/routers/hub.py` — parse `msg <P1> vs <P2>`, `announce <msg>`, `call_match <id>` commands; route to bot actions per FR-009
+- [x] T043 [US4] Implement hub command API endpoint in `backend/api/routers/hub.py` — POST `/api/hub/command` that routes to either the NL agent (T041) or structured command parser (T042) and returns response per FR-008
+- [x] T044 [US4] Implement agent chat UI at `frontend-react/src/features/hub/AgentChat.tsx` — chat input, response display, command history, loading states; submit to `/api/hub/command` endpoint
 
 **Checkpoint**: User Story 4 complete — admins can issue NL and structured commands from the Hub
 
@@ -147,11 +147,11 @@
 
 ### Implementation for User Story 5
 
-- [ ] T045 [P] [US5] Implement OBS overlay data endpoint at `backend/api/routers/overlays.py` — GET `/obs/{overlay_name}/data` returns current match data as JSON; GET `/obs/{overlay_name}` returns rendered HTML page per contracts/api-endpoints.md (no auth required)
-- [ ] T046 [P] [US5] Create OBS overlay HTML template at `backend/api/templates/overlay.html` — Jinja2 template with player names, avatars, scores, team/country info; auto-refreshes via JS polling or WebSocket
-- [ ] T047 [US5] Implement overlay CRUD API endpoints in `backend/api/routers/overlays.py` — GET `/api/overlays`, POST `/api/overlays`, DELETE `/api/overlays/{name}` per contracts/api-endpoints.md
-- [ ] T048 [US5] Implement overlay editor page at `frontend-react/src/features/editor/OverlayEditor.tsx` — visual drag/resize editor using `react-rnd` for overlay element positioning; save config to API per FR-010
-- [ ] T049 [US5] Implement station management in `backend/api/routers/overlays.py` — GET `/api/stations`, POST `/api/stations`, DELETE `/api/stations/{id}`; link overlays to stations per contracts/api-endpoints.md
+- [x] T045 [P] [US5] Implement OBS overlay data endpoint at `backend/api/routers/overlays.py` — GET `/obs/{overlay_name}/data` returns current match data as JSON; GET `/obs/{overlay_name}` returns rendered HTML page per contracts/api-endpoints.md (no auth required)
+- [x] T046 [P] [US5] Create OBS overlay HTML template at `backend/api/templates/overlay.html` — Jinja2 template with player names, avatars, scores, team/country info; auto-refreshes via JS polling or WebSocket
+- [x] T047 [US5] Implement overlay CRUD API endpoints in `backend/api/routers/overlays.py` — GET `/api/overlays`, POST `/api/overlays`, DELETE `/api/overlays/{name}` per contracts/api-endpoints.md
+- [x] T048 [US5] Implement overlay editor page at `frontend-react/src/features/editor/OverlayEditor.tsx` — visual drag/resize editor using `react-rnd` for overlay element positioning; save config to API per FR-010
+- [x] T049 [US5] Implement station management in `backend/api/routers/overlays.py` — GET `/api/stations`, POST `/api/stations`, DELETE `/api/stations/{id}`; link overlays to stations per contracts/api-endpoints.md
 
 **Checkpoint**: User Story 5 complete — streamers have customizable live overlays for OBS
 
@@ -161,14 +161,14 @@
 
 **Purpose**: Improvements that affect multiple user stories
 
-- [ ] T050 [P] Add comprehensive error handling across all API routers — consistent error response format, proper HTTP status codes, meaningful error messages
+- [x] T050 [P] Add comprehensive error handling across all API routers — consistent error response format, proper HTTP status codes, meaningful error messages
 - [x] T051 [P] Add structured logging across backend services — use Python `logging` module with color-coded output per Constitution Principle V
 - [x] T052 Implement WebSocket reconnection logic in Hub — graceful reconnection avoiding `ECONNABORTED` states
 - [x] T053 [P] Add tournament settings API endpoint at `backend/api/routers/tournaments.py` — PATCH `/api/tournaments/{slug}/settings`
 - [x] T054 [P] Add connections and global settings API endpoints — Settings UI fully implemented; Start.gg token dynamically loaded
 - [x] T055 [Fix] Consolidate router topology and data schemas — Relocated Player Overrides to Tournament router for reliability, fixed GraphQL flattening 500 errors, and fixed avatar form field mappings.
-- [ ] T056 [US2] Create AI referee accuracy evaluation harness — add a test suite that feeds 100+ mock chat scenarios (including edge cases like player jokes, conflicts, and malformed scores) to the LangGraph referee and validates extraction against expected results to verify >95% accuracy (SC-004)
-- [ ] T057 Run quickstart.md validation — execute full setup flow, verify all services start, create a test tournament, register two players, complete a match end-to-end
+- [x] T056 [US2] Create AI referee accuracy evaluation harness — add a test suite that feeds 100+ mock chat scenarios (including edge cases like player jokes, conflicts, and malformed scores) to the LangGraph referee and validates extraction against expected results to verify >95% accuracy (SC-004)
+- [x] T057 Run quickstart.md validation — execute full setup flow, verify all services start, create a test tournament, register two players, complete a match end-to-end
 
 ---
 

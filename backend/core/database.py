@@ -1,6 +1,8 @@
 import aiosqlite
 import os
 import json
+from typing import Optional
+from backend.core.contracts.tournament_types import ProviderSet, ProviderSetState, ProviderEntrant
 
 DB_PATH = os.getenv("DB_PATH", "backend/core/database.sqlite")
 
@@ -147,6 +149,28 @@ async def init_db():
                 value TEXT
             )
         ''')
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS planned_streams (
+                set_id          TEXT PRIMARY KEY,
+                tournament_slug TEXT NOT NULL,
+                stream_id       TEXT,
+                note            TEXT,
+                created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        # Bio-code verification pending state. One row per discord_id at most.
+        # Used when start.gg OAuth is unavailable: player edits their start.gg
+        # bio to include `code`, then runs /verify-confirm which compares.
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS pending_verifications (
+                discord_id   TEXT PRIMARY KEY,
+                startgg_slug TEXT NOT NULL,
+                code         TEXT NOT NULL,
+                expires_at   TIMESTAMP NOT NULL,
+                attempts     INTEGER DEFAULT 0,
+                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
         # ── Safe migrations (add new columns if missing) ─────────────────
         migrations = [
             # active_matches new columns
@@ -176,6 +200,25 @@ async def init_db():
             "ALTER TABLE tournaments ADD COLUMN bot_manage_finish TEXT DEFAULT 'off'",
             # stations new columns
             "ALTER TABLE stations ADD COLUMN active_overlay TEXT",
+            # start.gg stream queue support — maps local station to a provider stream
+            "ALTER TABLE stations ADD COLUMN startgg_stream_id TEXT",
+            # cached provider stream list per tournament (JSON: [{id,name,source,game}])
+            "ALTER TABLE tournaments ADD COLUMN streams_json TEXT",
+            # Station gear-modal fields
+            "ALTER TABLE stations ADD COLUMN stream_url TEXT",                # optional override for display URL
+            "ALTER TABLE stations ADD COLUMN bot_enabled BOOLEAN DEFAULT 1", # default for matches on this station
+            "ALTER TABLE stations ADD COLUMN hidden BOOLEAN DEFAULT 0",      # ensure column exists (was only in CREATE TABLE)
+            # Auto-dispatcher (per-tournament; defaults OFF so existing tournaments are unaffected)
+            "ALTER TABLE tournaments ADD COLUMN auto_dispatch_enabled BOOLEAN DEFAULT 0",
+            "ALTER TABLE tournaments ADD COLUMN auto_dispatch_concurrency INTEGER DEFAULT 1",
+            "ALTER TABLE tournaments ADD COLUMN auto_dispatch_stop_at INTEGER DEFAULT 8",
+            # TO override for the activity guard — when ON, fetch_sets loads
+            # matches even for tournaments/phases that aren't ACTIVE on start.gg.
+            "ALTER TABLE tournaments ADD COLUMN ignore_activity_guard BOOLEAN DEFAULT 0",
+            # Reachability / Emergency-fallback workflow per match
+            "ALTER TABLE active_matches ADD COLUMN auto_dq_disarmed BOOLEAN DEFAULT 0",
+            # AI Discord conflict-investigation summary (one-line dispute synopsis)
+            "ALTER TABLE conflicts ADD COLUMN ai_summary TEXT",
         ]
         for m in migrations:
             try:
@@ -183,6 +226,14 @@ async def init_db():
                 await db.commit()
             except Exception:
                 pass  # Column already exists
+
+        # One-shot cleanup: purge any "preview_*" rows that earlier builds
+        # inserted into active_matches before we filtered them out at sync
+        # time. Preview sets are unresolved bracket placeholders that can't
+        # be mutated on start.gg, so they have no business in the actionable
+        # list. Idempotent — no-ops on a clean DB.
+        await db.execute("DELETE FROM active_matches WHERE set_id LIKE 'preview%'")
+        await db.commit()
 
         # Seed default stations if empty
         async with db.execute("SELECT COUNT(*) FROM stations") as c:
@@ -292,6 +343,155 @@ async def get_tournament(slug: str):
 async def delete_tournament(slug: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("DELETE FROM tournaments WHERE slug = ?", (slug,))
+        await db.commit()
+
+
+async def set_tournament_streams(slug: str, streams: list):
+    """Persist the start.gg stream list for a tournament as JSON.
+
+    `streams` is a list of dicts with keys: id, name, source, game.
+    """
+    payload = json.dumps(streams or [])
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE tournaments SET streams_json = ? WHERE slug = ?", (payload, slug))
+        await db.commit()
+
+
+async def get_tournament_streams(slug: str) -> list:
+    """Return the cached start.gg stream list for a tournament."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT streams_json FROM tournaments WHERE slug = ?", (slug,)) as cursor:
+            row = await cursor.fetchone()
+    if not row or not row[0]:
+        return []
+    try:
+        return json.loads(row[0])
+    except Exception:
+        return []
+
+
+async def get_station_stream_id(station_id: str) -> str | None:
+    """Return the start.gg streamId mapped to a local station, or None."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT startgg_stream_id FROM stations WHERE id = ?", (station_id,)) as cursor:
+            row = await cursor.fetchone()
+    return (row[0] if row else None) or None
+
+
+async def get_station_by_stream_id(stream_id: str) -> dict | None:
+    """Find the local station mapped to a given start.gg streamId, or None."""
+    if not stream_id:
+        return None
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM stations WHERE startgg_stream_id = ? LIMIT 1", (stream_id,)) as cursor:
+            row = await cursor.fetchone()
+    return dict(row) if row else None
+
+
+# ── Planned Streams ──────────────────────────────────────────────────────
+async def add_planned_stream(set_id: str, tournament_slug: str,
+                             stream_id: str | None = None, note: str | None = None):
+    """Mark a (potentially preview) set for inclusion on stream once it goes live."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute('''
+            INSERT INTO planned_streams (set_id, tournament_slug, stream_id, note)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(set_id) DO UPDATE SET
+                tournament_slug=excluded.tournament_slug,
+                stream_id=excluded.stream_id,
+                note=excluded.note
+        ''', (set_id, tournament_slug, stream_id, note))
+        await db.commit()
+
+
+async def remove_planned_stream(set_id: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM planned_streams WHERE set_id = ?", (set_id,))
+        await db.commit()
+
+
+async def list_planned_streams(tournament_slug: str | None = None) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        if tournament_slug:
+            q = "SELECT * FROM planned_streams WHERE tournament_slug = ? ORDER BY created_at DESC"
+            args: tuple = (tournament_slug,)
+        else:
+            q = "SELECT * FROM planned_streams ORDER BY created_at DESC"
+            args = ()
+        async with db.execute(q, args) as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
+
+
+async def get_planned_stream(set_id: str) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM planned_streams WHERE set_id = ?", (set_id,)) as cursor:
+            row = await cursor.fetchone()
+    return dict(row) if row else None
+
+
+# ── Pending Bio-Code Verifications ──────────────────────────────────────
+import datetime as _dt
+
+
+async def create_pending_verification(discord_id: str, startgg_slug: str,
+                                       code: str, ttl_seconds: int = 300):
+    """Create or replace a pending bio-code verification for this Discord user."""
+    expires = (_dt.datetime.utcnow() + _dt.timedelta(seconds=ttl_seconds)).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO pending_verifications (discord_id, startgg_slug, code, expires_at, attempts) "
+            "VALUES (?, ?, ?, ?, 0) "
+            "ON CONFLICT(discord_id) DO UPDATE SET "
+            "  startgg_slug=excluded.startgg_slug, code=excluded.code, "
+            "  expires_at=excluded.expires_at, attempts=0, created_at=CURRENT_TIMESTAMP",
+            (discord_id, startgg_slug, code, expires)
+        )
+        await db.commit()
+
+
+async def get_pending_verification(discord_id: str) -> dict | None:
+    """Return the pending verification, or None if missing/expired."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM pending_verifications WHERE discord_id = ?",
+            (discord_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    try:
+        expires = _dt.datetime.fromisoformat(d["expires_at"])
+        if _dt.datetime.utcnow() > expires:
+            return None
+    except Exception:
+        return None
+    return d
+
+
+async def increment_verification_attempts(discord_id: str) -> int:
+    """Increment attempts counter; return new value. Used to rate-limit retries."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE pending_verifications SET attempts = attempts + 1 WHERE discord_id = ?",
+            (discord_id,)
+        )
+        await db.commit()
+        async with db.execute(
+            "SELECT attempts FROM pending_verifications WHERE discord_id = ?",
+            (discord_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+    return int(row[0]) if row else 0
+
+
+async def delete_pending_verification(discord_id: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM pending_verifications WHERE discord_id = ?", (discord_id,))
         await db.commit()
 
 # ── Match Results ──────────────────────────────────────────────────────────
@@ -456,34 +656,31 @@ async def delete_active_match(set_id: str):
 
 
 # ── Start.gg ActivityState integer → local status ────────────────────────────────
-# 1 = CREATED   → not_started  (created, awaiting call)
-# 2 = ACTIVE    → in_progress  (match is being played)
-# 3 = COMPLETED → complete     (done)
-# 4 = READY     → not_started  (reset / ready again)
-# 5 = INVALID   → skip         (bye / invalid set)
-# 6 = CALLED    → called       (players summoned to station)
-# 7 = QUEUED    → not_started  (queued, not yet called)
-_SGG_STATE_MAP = {
-    1: 'not_started',
-    2: 'in_progress',
-    3: 'complete',
-    4: 'not_started',
-    # 5 = INVALID — skip entirely
-    6: 'called',
-    7: 'not_started',
+# Canonical state mapping from ProviderSetState to local DB status
+_PROVIDER_STATE_TO_LOCAL = {
+    ProviderSetState.NOT_STARTED:  'not_started',
+    ProviderSetState.CALLED:       'called',
+    ProviderSetState.IN_PROGRESS:  'in_progress',
+    ProviderSetState.COMPLETE:     'complete',
+    ProviderSetState.QUEUED:       'not_started',
 }
 
-# States that are terminal on Start.gg (sync always wins)
-_SGG_TERMINAL = {3}       # COMPLETED
-# States that should auto-add to hub when Start.gg reports them
-_SGG_AUTO_ADD = {1, 2, 6, 7}  # CREATED, ACTIVE, CALLED, QUEUED
+_TERMINAL_STATES = {ProviderSetState.COMPLETE}
+_AUTO_ADD_STATES = {
+    ProviderSetState.NOT_STARTED,
+    ProviderSetState.IN_PROGRESS,
+    ProviderSetState.CALLED,
+    ProviderSetState.QUEUED,
+}
 
 
-async def sync_active_matches(tournament_slug: str, startgg_sets: list):
+async def sync_active_matches(tournament_slug: str, provider_sets: list[ProviderSet]):
     """
-    Synchronizes local active_matches with Start.gg states.
-    Source of Truth: Start.gg — Start.gg ActivityState always wins for terminal states.
+    Synchronizes local active_matches with provider-agnostic ProviderSet objects.
+    Source of Truth: provider — provider complete state always wins for terminal states.
     Hub-only metadata (station, is_stream_match, scores) is preserved.
+    Also promotes planned-stream entries: sets in planned_streams get
+    is_stream_match=TRUE and (if a stream_id is set) a matching station assigned.
     """
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT bot_manage_limit FROM tournaments WHERE slug = ?", (tournament_slug,)) as t_cursor:
@@ -494,75 +691,145 @@ async def sync_active_matches(tournament_slug: str, startgg_sets: list):
             rows = await cursor.fetchall()
             local_matches = {row[0]: row[1] for row in rows}
 
+        # Preload planned-stream wishlist for this tournament: {set_id: stream_id_or_None}
+        async with db.execute(
+            "SELECT set_id, stream_id FROM planned_streams WHERE tournament_slug = ?",
+            (tournament_slug,)
+        ) as cursor:
+            planned = {row[0]: row[1] for row in await cursor.fetchall()}
+
+        # Preload station-by-stream map for fast lookup during promotion.
+        async with db.execute(
+            "SELECT id, startgg_stream_id FROM stations WHERE startgg_stream_id IS NOT NULL AND startgg_stream_id != ''"
+        ) as cursor:
+            station_by_stream = {row[1]: row[0] for row in await cursor.fetchall()}
+
+        # Preload startgg_id → discord_id map so we can fill p1_discord/p2_discord
+        # at sync time. Without this, the Reachability Check is always "unreachable"
+        # because the lookup only fires inside create_match_thread, which is too late
+        # for the dispatcher's pre-call gating logic.
+        async with db.execute(
+            "SELECT startgg_id, discord_id FROM players WHERE startgg_id IS NOT NULL AND startgg_id != ''"
+        ) as cursor:
+            discord_by_startgg = {str(row[0]): str(row[1]) for row in await cursor.fetchall()}
+
+        def _resolve_discord(entrant: Optional[ProviderEntrant]) -> Optional[str]:
+            uid = entrant.user_id if entrant else None
+            return discord_by_startgg.get(str(uid)) if uid else None
+
         found_sids = set()
 
-        for s in startgg_sets:
-            sid = str(s.get("id"))
-            state = s.get("state")
+        for ps in provider_sets:
+            sid = ps.id
             found_sids.add(sid)
 
-            # Skip INVALID (bye/DQ sets that Start.gg marks 5)
-            if state == 5:
+            # Skip INVALID (bye/DQ sets)
+            if ps.state == ProviderSetState.INVALID:
                 continue
 
-            p1_name  = s.get("p1", "TBD")
-            p2_name  = s.get("p2", "TBD")
-            p1_avatar = s.get("p1_avatar")
-            p2_avatar = s.get("p2_avatar")
-            p1_eid   = s.get("p1_eid")
-            p2_eid   = s.get("p2_eid")
-            round_name  = s.get("round") or s.get("fullRoundText") or ""
-            match_num   = s.get("identifier")
-            phase_group = s.get("phaseGroup") or ""
+            # Skip start.gg preview sets — IDs like "preview_xxxxx" reference
+            # unresolved bracket placeholders that can't be mutated. Tracking
+            # them in active_matches leads to actionable UI cards that fail at
+            # send/call time. They remain visible in the bracket view because
+            # that data comes from provider.fetch_sets directly, not from here.
+            if str(sid).startswith("preview"):
+                continue
 
-            sgg_status = _SGG_STATE_MAP.get(state)  # None if unknown state
+            p1_name  = ps.entrant1.name if ps.entrant1 else "TBD"
+            p2_name  = ps.entrant2.name if ps.entrant2 else "TBD"
+            p1_avatar = ps.entrant1.avatar_url if ps.entrant1 else None
+            p2_avatar = ps.entrant2.avatar_url if ps.entrant2 else None
+            p1_eid   = ps.entrant1.id if ps.entrant1 else None
+            p2_eid   = ps.entrant2.id if ps.entrant2 else None
+            round_name  = ps.round_name
+            match_num   = ps.identifier
+            phase_group = ps.phase_group
+
+            provider_status = _PROVIDER_STATE_TO_LOCAL.get(ps.state)
 
             if sid in local_matches:
                 local_status = local_matches[sid]
                 # Determine new status:
-                # • If Start.gg says COMPLETED → always sync (source of truth)
-                # • If Start.gg says READY/CREATED/QUEUED and we had a hub state → keep hub state
-                #   unless local is already complete/dq (reset scenario)
-                if state == 3:  # COMPLETED—terminal, Start.gg wins
+                # • If provider says COMPLETE → always sync (source of truth)
+                # • If provider says NOT_STARTED and local was complete/dq → reset scenario
+                # • If local is not_started, upgrade to provider_status
+                if ps.state in _TERMINAL_STATES:
                     new_status = 'complete'
-                elif state == 4 and local_status in ('complete', 'dq'):  # READY = reset on Start.gg
+                elif ps.state == ProviderSetState.NOT_STARTED and local_status in ('complete', 'dq'):
                     new_status = 'not_started'
-                elif sgg_status and local_status in ('not_started',):  # upgrade from not_started
-                    new_status = sgg_status
+                elif provider_status and local_status == 'not_started':
+                    new_status = provider_status
                 else:
                     new_status = local_status  # keep hub-managed state
 
+                # Resolve discord IDs from current player table on every sync.
+                # COALESCE keeps an existing value (e.g. set by a later OAuth) but
+                # backfills the column the moment a player verifies.
+                p1_discord = _resolve_discord(ps.entrant1)
+                p2_discord = _resolve_discord(ps.entrant2)
                 await db.execute("""
                     UPDATE active_matches SET
                         p1_name=?, p2_name=?, p1_avatar=?, p2_avatar=?,
                         p1_entrant_id=COALESCE(NULLIF(p1_entrant_id,''), ?),
                         p2_entrant_id=COALESCE(NULLIF(p2_entrant_id,''), ?),
+                        p1_discord=COALESCE(NULLIF(p1_discord,''), ?),
+                        p2_discord=COALESCE(NULLIF(p2_discord,''), ?),
                         round_name=?, match_number=?, phase_group=?, status=?
                     WHERE set_id=?
                 """, (p1_name, p2_name, p1_avatar, p2_avatar,
                        p1_eid, p2_eid,
+                       p1_discord, p2_discord,
                        round_name, match_num, str(phase_group), new_status, sid))
+                # Promote planned-stream membership onto already-tracked sets too.
+                # (Don't downgrade — if a planned set was unplanned, the user can toggle
+                #  the active match's stream flag directly via /toggle-stream.)
+                if sid in planned:
+                    preferred_stream = planned.get(sid)
+                    if preferred_stream and preferred_stream in station_by_stream:
+                        await db.execute(
+                            "UPDATE active_matches SET is_stream_match = 1, "
+                            "station_id = COALESCE(station_id, ?) WHERE set_id = ?",
+                            (station_by_stream[preferred_stream], sid)
+                        )
+                    else:
+                        await db.execute(
+                            "UPDATE active_matches SET is_stream_match = 1 WHERE set_id = ?",
+                            (sid,)
+                        )
             else:
-                # Auto-add matches that Start.gg has put in an active state
-                if state in _SGG_AUTO_ADD:
-                    new_status = _SGG_STATE_MAP[state]
+                # Auto-add matches that provider has put in an active state.
+                # Also auto-add planned-stream sets even if not yet in an auto-add state
+                # so the operator's pre-planned wishlist appears as soon as it resolves.
+                should_add = ps.state in _AUTO_ADD_STATES or sid in planned
+                if should_add:
+                    new_status = _PROVIDER_STATE_TO_LOCAL.get(ps.state, 'not_started')
                     bot_enabled = should_bot_manage_match(round_name, str(phase_group), bot_manage_limit)
+                    # Promote from planned_streams: flag for stream + pick preferred station.
+                    is_stream = 1 if sid in planned else 0
+                    station_id = None
+                    if is_stream:
+                        preferred_stream = planned.get(sid)
+                        if preferred_stream and preferred_stream in station_by_stream:
+                            station_id = station_by_stream[preferred_stream]
+                    p1_discord = _resolve_discord(ps.entrant1)
+                    p2_discord = _resolve_discord(ps.entrant2)
                     await db.execute("""
                         INSERT INTO active_matches (
                             set_id, tournament_slug, p1_name, p2_name, p1_avatar, p2_avatar,
-                            p1_entrant_id, p2_entrant_id, round_name, match_number, phase_group,
-                            status, bot_enabled
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            p1_entrant_id, p2_entrant_id, p1_discord, p2_discord,
+                            round_name, match_number, phase_group,
+                            status, bot_enabled, is_stream_match, station_id
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (sid, tournament_slug, p1_name, p2_name, p1_avatar, p2_avatar,
-                           p1_eid, p2_eid, round_name, match_num, str(phase_group),
-                           new_status, bot_enabled))
+                           p1_eid, p2_eid, p1_discord, p2_discord,
+                           round_name, match_num, str(phase_group),
+                           new_status, bot_enabled, is_stream, station_id))
 
-        # Remove orphans — only if Start.gg returned a full page (not truncated)
-        if len(startgg_sets) < 490:
-            for sid in list(local_matches.keys()):
-                if sid not in found_sids:
-                    # Orphan: set no longer in Start.gg bracket — remove from hub
-                    await db.execute("DELETE FROM active_matches WHERE set_id = ?", (sid,))
+        # Remove orphans — since provider.fetch_sets retrieves all paginated sets, orphan list is complete
+        for sid in list(local_matches.keys()):
+            if sid not in found_sids:
+                # Orphan: set no longer in provider bracket — remove from hub
+                await db.execute("DELETE FROM active_matches WHERE set_id = ?", (sid,))
 
         await db.commit()
 
@@ -725,6 +992,44 @@ async def get_conflicts(resolved: bool = False):
         ) as cursor:
             return [dict(r) for r in await cursor.fetchall()]
 
+async def get_conflict(conflict_id: int):
+    """Fetch a single conflict row (incl. its set_id) for score-based resolution."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM conflicts WHERE id = ?", (conflict_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+async def get_conflict_by_set_id(set_id: str, resolved: bool = False):
+    """Most recent (un)resolved conflict for a set — used by the Discord investigation."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM conflicts WHERE set_id = ? AND resolved = ? ORDER BY id DESC LIMIT 1",
+            (str(set_id), resolved),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+async def update_conflict_claim(conflict_id: int, slot: str, text: str):
+    """Store a player's investigation statement (slot is 'p1' or 'p2')."""
+    col = "p1_claim" if slot == "p1" else "p2_claim"
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            f"UPDATE conflicts SET {col} = ? WHERE id = ?", (text, conflict_id)
+        )
+        await db.commit()
+
+async def update_conflict_summary(conflict_id: int, summary: str):
+    """Store the AI-generated one-line dispute summary."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE conflicts SET ai_summary = ? WHERE id = ?", (summary, conflict_id)
+        )
+        await db.commit()
+
 async def resolve_conflict(conflict_id: int, resolution: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
@@ -748,13 +1053,14 @@ async def add_bot_feed(message: str, level: str = "info"):
         ''')
         await db.commit()
 
-async def get_bot_feed(limit: int = 50):
+async def get_bot_feed(limit: int = 50, offset: int = 0):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT * FROM bot_feed ORDER BY id DESC LIMIT ?", (limit,)
+            "SELECT * FROM bot_feed ORDER BY id DESC LIMIT ? OFFSET ?", (limit, offset)
         ) as cursor:
             return [dict(r) for r in await cursor.fetchall()]
+
 
 async def clear_bot_feed():
     async with aiosqlite.connect(DB_PATH) as db:
@@ -794,6 +1100,80 @@ async def update_hub_command_status(command_id: int, status: str):
             (status, command_id)
         )
         await db.commit()
+
+
+# ── Auto-Dispatcher Queries ──────────────────────────────────────────────
+async def get_dispatch_eligible_tournaments() -> list[dict]:
+    """Tournaments with the auto-dispatcher armed."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT slug, name, auto_dispatch_concurrency, auto_dispatch_stop_at "
+            "FROM tournaments WHERE auto_dispatch_enabled = 1"
+        ) as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
+
+
+async def count_active_dispatched(tournament_slug: str) -> int:
+    """Currently-occupying-time matches the dispatcher has on the wire.
+    Counts called + in_progress matches that are bot-managed for the tournament."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM active_matches "
+            "WHERE tournament_slug = ? AND bot_enabled = 1 AND status IN ('called', 'in_progress')",
+            (tournament_slug,)
+        ) as cursor:
+            row = await cursor.fetchone()
+    return int(row[0] if row else 0)
+
+
+async def count_remaining_event_matches(tournament_slug: str) -> int:
+    """Total uncompleted matches the dispatcher knows about for the tournament.
+    Includes TBD/unresolved sets so a Top-8 threshold isn't tripped prematurely
+    by pool matches still being resolved."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM active_matches "
+            "WHERE tournament_slug = ? AND status NOT IN ('complete', 'dq')",
+            (tournament_slug,)
+        ) as cursor:
+            row = await cursor.fetchone()
+    return int(row[0] if row else 0)
+
+
+async def get_dispatch_candidates(tournament_slug: str, limit: int) -> list[dict]:
+    """Find the next bot-managed matches that are safe to auto-call.
+
+    Excludes:
+      - matches with TBD/missing entrants (upstream bracket unresolved)
+      - matches that are already planned for stream (those wait for the TO / featured queue)
+      - anything already called or in progress (those are counted toward concurrency)
+    Orders by phase_group then match_number for predictable pool progression.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """
+            SELECT * FROM active_matches
+            WHERE tournament_slug = ?
+              AND status = 'not_started'
+              AND bot_enabled = 1
+              AND p1_entrant_id IS NOT NULL AND p1_entrant_id != ''
+              AND p2_entrant_id IS NOT NULL AND p2_entrant_id != ''
+              AND p1_name IS NOT NULL AND p1_name != '' AND p1_name != 'TBD'
+              AND p2_name IS NOT NULL AND p2_name != '' AND p2_name != 'TBD'
+              AND set_id NOT IN (
+                SELECT set_id FROM planned_streams WHERE tournament_slug = ?
+              )
+            ORDER BY
+              COALESCE(NULLIF(phase_group, ''), 'zzzz'),
+              COALESCE(match_number, 999999),
+              created_at
+            LIMIT ?
+            """,
+            (tournament_slug, tournament_slug, int(limit))
+        ) as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
 
 def should_bot_manage_match(round_name: str, phase_group: str, limit_setting: str) -> bool:
     if not limit_setting or limit_setting == "off":

@@ -37,6 +37,7 @@ function mapLocalState(status: string): MatchStatus {
     case 'not_started': return 'waiting';
     case 'in_progress': return 'live';
     case 'called': return 'called';
+    case 'conflict': return 'conflict';
     case 'complete':
     case 'done': return 'done';
     case 'dq': return 'dq';
@@ -56,7 +57,7 @@ function sortTBDLast(rows: MatchData[]): MatchData[] {
 
 // ── Main Component ─────────────────────────────────────────────────────
 export function MatchDashboard() {
-  const { matches, currentSlug, tournaments, stations, setMatches, plannedStreamIds, togglePlannedStream } = useHubStore();
+  const { matches, currentSlug, tournaments, stations, setMatches, plannedStreamIds, setPlannedStreamIds } = useHubStore();
   const [sets, setSets] = useState<any[]>([]);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
 
@@ -92,18 +93,30 @@ export function MatchDashboard() {
     } catch (e) { console.error('load sets', e); }
   }, [currentSlug]);
 
+  const loadPlanned = useCallback(async () => {
+    if (!currentSlug) { setPlannedStreamIds([]); return; }
+    try {
+      const res = await axios.get('/api/planned-streams', { params: { tournament_slug: currentSlug } });
+      setPlannedStreamIds((res.data.planned || []).map((p: any) => String(p.set_id)));
+    } catch (e) {
+      console.error('load planned streams', e);
+    }
+  }, [currentSlug, setPlannedStreamIds]);
+
   // ── WebSocket Integration ──
   useHubSocket(useCallback((evt) => {
     if (evt.type === 'match_update') {
       loadSets();
       reload();
+      loadPlanned();
     }
-  }, [loadSets, reload]));
+  }, [loadSets, reload, loadPlanned]));
 
   useEffect(() => {
     loadSets();
     reload();
-  }, [loadSets, reload]);
+    loadPlanned();
+  }, [loadSets, reload, loadPlanned]);
 
   // ── Collect unique phaseGroups from sets ──
   const phaseGroups = useMemo(() => {
@@ -134,18 +147,21 @@ export function MatchDashboard() {
       isStreamMatch: plannedStreamIds.includes(m.set_id) || !!m.is_stream_match,
       startedAt: m.started_at,
       calledAt: m.called_at,
+      autoDqDisarmed: !!m.auto_dq_disarmed,
       players: [
         {
           name: safe(m.p1_name) || 'Unknown',
           avatar: m.p1_avatar,
           score: m.p1_score != null ? Number(m.p1_score) : undefined,
-          isTBD: isTBD(safe(m.p1_name))
+          isTBD: isTBD(safe(m.p1_name)),
+          hasDiscord: !!m.p1_discord,
         },
         {
           name: safe(m.p2_name) || 'Unknown',
           avatar: m.p2_avatar,
           score: m.p2_score != null ? Number(m.p2_score) : undefined,
-          isTBD: isTBD(safe(m.p2_name))
+          isTBD: isTBD(safe(m.p2_name)),
+          hasDiscord: !!m.p2_discord,
         }
       ],
       raw: m,
@@ -225,6 +241,12 @@ export function MatchDashboard() {
         showToast('Players called via Discord');
         reload();
       }
+      else if (action === 'forceToInProgress') {
+        if (!setId) { showToast('Cannot force: missing set ID', false); return; }
+        const res = await axios.post(`/api/active-matches/${setId}/force-in-progress`);
+        showToast(res.data.message || 'Forced to in-progress ✓');
+        reload();
+      }
       else if (action === 'resetMatch') {
         if (!confirm(`Reset match on Start.gg and locally?`)) return;
         const res = await axios.post(`/api/active-matches/${setId}/reset`);
@@ -245,10 +267,9 @@ export function MatchDashboard() {
         reload();
       }
       else if (action === 'assignStation') {
-        await axios.patch(`/api/active-matches/${setId}`, {
-          station_id: data,
-          status: data ? 'in_progress' : 'called'
-        });
+        // Assigning a station to a called match elevates it to in_progress
+        // server-side (stamps started_at + notifies the provider).
+        await axios.patch(`/api/active-matches/${setId}`, { station_id: data });
         reload();
       }
     } catch (err: any) {
@@ -267,11 +288,43 @@ export function MatchDashboard() {
   const handleToggleStream = async (setId: string, currentVal: boolean) => {
     const actualSetId = String(setId || '');
     if (!actualSetId) return;
-    togglePlannedStream(actualSetId);
+
+    // Optimistic local update so the star flips instantly.
+    const wasPlanned = plannedStreamIds.includes(actualSetId);
+    setPlannedStreamIds(
+      wasPlanned
+        ? plannedStreamIds.filter(id => id !== actualSetId)
+        : [...plannedStreamIds, actualSetId]
+    );
+
     try {
-      await axios.post(`/api/active-matches/${actualSetId}/toggle-stream`, { is_stream_match: !currentVal });
+      // Is this set already tracked as an active match? If so, also flip is_stream_match.
+      const isLocal = matches?.some(m => String(m?.set_id) === actualSetId);
+
+      if (wasPlanned) {
+        // Unplan: remove the wishlist entry. Do NOT auto-toggle-stream-off on an
+        // already-active match — the operator may still want it on stream for now.
+        await axios.delete(`/api/planned-streams/${actualSetId}`);
+        if (isLocal && currentVal) {
+          await axios.post(`/api/active-matches/${actualSetId}/toggle-stream`, { is_stream_match: false });
+        }
+      } else {
+        // Plan it. Backend also auto-promotes if it's already in active_matches.
+        await axios.post('/api/planned-streams', {
+          set_id: actualSetId,
+          tournament_slug: currentSlug || '',
+        });
+        if (isLocal && !currentVal) {
+          // Tag the live row too for immediate effect (stream queue assignment etc.).
+          await axios.post(`/api/active-matches/${actualSetId}/toggle-stream`, { is_stream_match: true });
+        }
+      }
+      reload();
     } catch (e) {
-      console.error('Failed to toggle stream flag on backend', e);
+      console.error('Failed to persist planned-stream toggle', e);
+      // Revert optimistic update on failure.
+      setPlannedStreamIds(plannedStreamIds);
+      showToast('Failed to update stream plan', false);
     }
   };
 
@@ -359,6 +412,10 @@ export function MatchDashboard() {
           initialDqTimerSeconds={dqTimerSeconds}
           initialBotManageLimit={actualTourney?.bot_manage_limit}
           initialBotManageFinish={actualTourney?.bot_manage_finish}
+          initialAutoDispatchEnabled={!!(actualTourney as any)?.auto_dispatch_enabled}
+          initialAutoDispatchConcurrency={Number((actualTourney as any)?.auto_dispatch_concurrency ?? 1)}
+          initialAutoDispatchStopAt={Number((actualTourney as any)?.auto_dispatch_stop_at ?? 8)}
+          initialIgnoreActivityGuard={!!(actualTourney as any)?.ignore_activity_guard}
           phaseGroups={phaseGroups}
           onClose={() => setSettingsModalOpen(false)}
           onSave={() => {

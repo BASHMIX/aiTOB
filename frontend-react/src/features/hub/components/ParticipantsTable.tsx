@@ -11,7 +11,7 @@ export function ParticipantsTable() {
   useEffect(() => {
     const fetchAllOverrides = async () => {
       try {
-        const res = await axios.get('/api/tournaments/overrides/all');
+        const res = await axios.get('/api/players/overrides');
         setOverrides(res.data || {});
       } catch (e) {
         console.error("Failed to fetch overrides", e);
@@ -50,7 +50,7 @@ export function ParticipantsTable() {
   const handleEditClick = async (entrant: any) => {
     setEditingId(entrant.id);
     try {
-      const res = await axios.get(`/api/players/override/${entrant.id}`);
+      const res = await axios.get(`/api/players/overrides/${entrant.id}`);
       const ov = res.data;
       setEditForm({
         name: ov.display_name || entrant.name || '',
@@ -70,7 +70,7 @@ export function ParticipantsTable() {
 
   const handleSave = async (id: string) => {
     try {
-      await axios.patch(`/api/tournaments/override/${id}`, editForm);
+      await axios.patch(`/api/players/overrides/${id}`, editForm);
       setOverrides(prev => ({ ...prev, [id]: { ...prev[id], ...editForm } }));
       setEditingId(null);
     } catch (e) {
@@ -82,7 +82,7 @@ export function ParticipantsTable() {
     const formData = new FormData();
     formData.append('avatar', file);
     try {
-      const res = await axios.post(`/api/tournaments/avatar/${id}`, formData);
+      const res = await axios.post(`/api/players/overrides/${id}/avatar`, formData);
       const newUrl = res.data.avatar_url;
       setOverrides(prev => ({ ...prev, [id]: { ...prev[id], avatar_url: newUrl } }));
     } catch (e: any) {
@@ -100,7 +100,7 @@ export function ParticipantsTable() {
         <button 
           onClick={async () => {
             if (confirm("Reset ALL overrides? This cannot be undone.")) {
-              await axios.delete('/api/tournaments/overrides');
+              await axios.delete('/api/players/overrides');
               setOverrides({});
             }
           }}
@@ -169,7 +169,8 @@ export function ParticipantsTable() {
                             <button 
                               onClick={async () => {
                                 if (confirm(`Reset overrides for ${e.name}?`)) {
-                                  await axios.delete(`/api/players/override/${e.id}`);
+                                  await axios.delete(`/api/players/overrides/${e.id}`);
+
                                   setOverrides(prev => {
                                     const next = { ...prev };
                                     delete next[e.id];

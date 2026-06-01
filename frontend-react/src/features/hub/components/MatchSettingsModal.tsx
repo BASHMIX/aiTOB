@@ -7,6 +7,10 @@ interface MatchSettingsModalProps {
   initialDqTimerSeconds: number;
   initialBotManageLimit?: string;
   initialBotManageFinish?: string;
+  initialAutoDispatchEnabled?: boolean;
+  initialAutoDispatchConcurrency?: number;
+  initialAutoDispatchStopAt?: number;
+  initialIgnoreActivityGuard?: boolean;
   phaseGroups: string[];
   onClose: () => void;
   onSave: () => void;
@@ -18,6 +22,10 @@ export function MatchSettingsModal({
   initialDqTimerSeconds,
   initialBotManageLimit = "off",
   initialBotManageFinish = "off",
+  initialAutoDispatchEnabled = false,
+  initialAutoDispatchConcurrency = 1,
+  initialAutoDispatchStopAt = 8,
+  initialIgnoreActivityGuard = false,
   phaseGroups,
   onClose,
   onSave,
@@ -26,6 +34,10 @@ export function MatchSettingsModal({
   const [dqTimerMinutes, setDqTimerMinutes] = useState(Math.floor(initialDqTimerSeconds / 60));
   const [botManageLimit, setBotManageLimit] = useState(initialBotManageLimit);
   const [botManageFinish, setBotManageFinish] = useState(initialBotManageFinish);
+  const [autoDispatchEnabled, setAutoDispatchEnabled] = useState(initialAutoDispatchEnabled);
+  const [autoDispatchConcurrency, setAutoDispatchConcurrency] = useState(initialAutoDispatchConcurrency);
+  const [autoDispatchStopAt, setAutoDispatchStopAt] = useState(initialAutoDispatchStopAt);
+  const [ignoreActivityGuard, setIgnoreActivityGuard] = useState(initialIgnoreActivityGuard);
   const [saving, setSaving] = useState(false);
 
   const handleSave = async () => {
@@ -36,6 +48,10 @@ export function MatchSettingsModal({
         dq_timer_seconds: dqTimerMinutes * 60,
         bot_manage_limit: botManageLimit,
         bot_manage_finish: botManageFinish,
+        auto_dispatch_enabled: autoDispatchEnabled,
+        auto_dispatch_concurrency: autoDispatchConcurrency,
+        auto_dispatch_stop_at: autoDispatchStopAt,
+        ignore_activity_guard: ignoreActivityGuard,
       });
       onSave();
       onClose();
@@ -134,6 +150,80 @@ export function MatchSettingsModal({
             </select>
             <span className="text-xs text-textDim">Let the Discord bot DM players to collect and submit scores</span>
           </div>
+
+          {/* ── Auto-Dispatcher ── */}
+          <div className="flex flex-col gap-3 p-3 rounded-lg bg-black/40 border border-amber-500/30">
+            <div className="flex items-center justify-between">
+              <div className="flex flex-col gap-0.5">
+                <span className="text-sm font-bold text-amber-300">🤖 Auto-Dispatcher</span>
+                <span className="text-[11px] text-textDim">
+                  Bot calls the next ready match automatically. Master switch (top bar) must also be ON.
+                </span>
+              </div>
+              <input
+                type="checkbox"
+                checked={autoDispatchEnabled}
+                onChange={e => setAutoDispatchEnabled(e.target.checked)}
+                className="w-4 h-4 accent-amber-500 cursor-pointer rounded"
+              />
+            </div>
+
+            {autoDispatchEnabled && (
+              <>
+                <div className="flex items-center justify-between gap-3 pt-1 border-t border-white/5">
+                  <div className="flex flex-col gap-0.5 min-w-0">
+                    <span className="text-xs font-semibold text-gray-200">Concurrent matches</span>
+                    <span className="text-[11px] text-textDim">Cap how many run at once. Start at 1.</span>
+                  </div>
+                  <input
+                    type="number"
+                    min={1}
+                    max={20}
+                    value={autoDispatchConcurrency}
+                    onChange={e => setAutoDispatchConcurrency(Math.max(1, Math.min(20, Number(e.target.value))))}
+                    className="w-16 bg-black/40 border border-white/10 rounded px-2 py-1 text-center text-sm text-white focus:outline-none focus:border-amber-500/50"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between gap-3 pt-1 border-t border-white/5">
+                  <div className="flex flex-col gap-0.5 min-w-0">
+                    <span className="text-xs font-semibold text-gray-200">Hand off to TO at ≤ N remaining</span>
+                    <span className="text-[11px] text-textDim">Typically 8 (Top 8). 0 = run to the end.</span>
+                  </div>
+                  <input
+                    type="number"
+                    min={0}
+                    max={64}
+                    value={autoDispatchStopAt}
+                    onChange={e => setAutoDispatchStopAt(Math.max(0, Math.min(64, Number(e.target.value))))}
+                    className="w-16 bg-black/40 border border-white/10 rounded px-2 py-1 text-center text-sm text-white focus:outline-none focus:border-amber-500/50"
+                  />
+                </div>
+
+                <div className="text-[11px] text-amber-300/70 bg-amber-500/5 border border-amber-500/20 rounded p-2 leading-relaxed">
+                  Skips planned-stream matches and matches with TBD entrants. Logs every action to the bot feed. Flip the master switch off at any time to take over.
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* ── Advanced / Debug: Activity Guard Override ── */}
+          <label className="flex items-center justify-between p-3 rounded-lg bg-red-950/20 border border-red-500/30 cursor-pointer">
+            <div className="flex flex-col gap-0.5 pr-2">
+              <span className="text-sm font-bold text-red-300">⚠ Override Activity Guard</span>
+              <span className="text-[11px] text-textDim leading-snug">
+                Load matches even if the tournament/phase isn't ACTIVE on start.gg.
+                Off by default — Send/Call may still fail since start.gg refuses
+                mutations on completed sets. Use for replaying or testing.
+              </span>
+            </div>
+            <input
+              type="checkbox"
+              checked={ignoreActivityGuard}
+              onChange={e => setIgnoreActivityGuard(e.target.checked)}
+              className="w-4 h-4 accent-red-500 cursor-pointer rounded shrink-0"
+            />
+          </label>
         </div>
 
         <div className="flex items-center justify-end gap-2 border-t border-white/10 px-5 py-3.5 bg-black/35 mt-auto">

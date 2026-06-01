@@ -7,6 +7,7 @@ import { MatchDashboard } from './components/MatchDashboard';
 import { Conflicts } from './components/Conflicts';
 import { BotFeed } from './components/BotFeed';
 import { GeneralSettings } from './components/GeneralSettings';
+import { DispatcherMasterSwitch } from './components/DispatcherMasterSwitch';
 import { useHubStore } from '@/store/useHubStore';
 import { useHubSocket } from '@/hooks/useHubSocket';
 import axios from 'axios';
@@ -159,6 +160,7 @@ function ConnectionLines() {
 export function HubDashboard() {
   const {
     setTournaments,
+    status,
     setStatus,
     setMatches,
     currentSlug,
@@ -198,7 +200,9 @@ export function HubDashboard() {
         setStatus({
           startgg_api: statusRes.data.startgg_api,
           websockets: true,
-          discord_bot: statusRes.data.discord_bot || false
+          discord_bot: statusRes.data.discord_bot || false,
+          token_scope: statusRes.data.token_scope || null,
+          auto_dispatcher: !!statusRes.data.auto_dispatcher,
         });
       } catch { /* ignored */ }
 
@@ -218,7 +222,7 @@ export function HubDashboard() {
   }, [currentSlug, setCurrentSlug, setMatches, setStatus, setTournaments]);
 
   useHubSocket(useCallback((evt) => {
-    if (evt.type === 'match_update') {
+    if (evt.type === 'match_update' || evt.type === 'status_update') {
       loadData();
     }
   }, [loadData]));
@@ -226,6 +230,8 @@ export function HubDashboard() {
   useEffect(() => {
     loadData();
   }, []);
+
+  const [testingToken, setTestingToken] = useState(false);
 
   return (
     <div className="flex flex-col gap-4 h-full relative">
@@ -239,12 +245,61 @@ export function HubDashboard() {
             <span className="text-[10px] text-yellow-400/50 font-mono uppercase tracking-widest">Tournament Manager</span>
           </div>
         </div>
+        <div className="flex items-center gap-3">
+          <DispatcherMasterSwitch />
+        </div>
       </header>
+
+      {status.token_scope && (!status.token_scope.valid || !status.token_scope.has_write_scope) && (
+        <div className="animate-fadeIn p-3.5 rounded-lg border border-red-500/35 bg-red-950/20 text-red-200 text-xs flex items-center justify-between gap-4 shadow-lg shadow-red-950/30 backdrop-blur-md transition-all hover:border-red-500/50">
+          <div className="flex items-center gap-3">
+            <span className="text-xl shrink-0 filter drop-shadow-sm select-none animate-pulse">⚠️</span>
+            <div>
+              <p className="font-bold text-red-400 text-sm tracking-wide">Start.gg Token Connection Impaired</p>
+              <p className="text-red-300/85 mt-0.5 text-[11px] leading-relaxed">
+                {status.token_scope.error || (
+                  <>
+                    Token loaded successfully for user <strong className="text-red-200">{status.token_scope.user_name}</strong>, but lacks <strong className="text-yellow-400 font-bold uppercase tracking-wider">Tournament Organizer (T.O.) administrative write scopes</strong> on Start.gg. Bracket score submissions and match activations will fail.
+                  </>
+                )}
+              </p>
+            </div>
+          </div>
+          <button 
+            onClick={async () => {
+              setTestingToken(true);
+              try {
+                await axios.post('/api/settings/token-check');
+                await loadData();
+              } catch (e) {
+                console.error(e);
+              } finally {
+                setTestingToken(false);
+              }
+            }}
+            disabled={testingToken}
+            className="shrink-0 px-4 py-2 bg-red-500/15 hover:bg-red-500/30 disabled:opacity-50 border border-red-500/30 hover:border-red-500/50 rounded-md text-[10px] font-mono font-bold tracking-widest text-red-200 uppercase transition-all shadow-sm active:scale-95 flex items-center gap-1.5 cursor-pointer"
+          >
+            {testingToken ? (
+              <>
+                <svg className="animate-spin h-3 w-3 text-red-200" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                PROBING...
+              </>
+            ) : (
+              'RE-TEST TOKEN'
+            )}
+          </button>
+        </div>
+      )}
 
       <TopNavigation />
 
       <main className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 items-start h-[calc(100vh-140px)]">
         {/* Left Column (Tabs) */}
+
         <div className="lg:col-span-6 xl:col-span-7 flex flex-col gap-4 h-full pb-10">
           <div className="flex items-center gap-1 bg-cardDark/50 p-1 rounded-lg border border-white/5 w-fit">
             <button

@@ -8,10 +8,18 @@ class ConnectionManager:
         self.active_connections: List[WebSocket] = []
         self.subscriptions: Dict[str, Set[WebSocket]] = {} # tournament_slug -> {websockets}
         self.overlay_connections: Dict[str, Set[WebSocket]] = {} # slot -> {websockets}
+        self.bot_connection: WebSocket | None = None
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.append(websocket)
+
+    async def connect_bot(self, websocket: WebSocket):
+        await websocket.accept()
+        self.bot_connection = websocket
+
+    def disconnect_bot(self):
+        self.bot_connection = None
 
     async def connect_overlay(self, websocket: WebSocket, slot: str):
         await websocket.accept()
@@ -32,6 +40,9 @@ class ConnectionManager:
         for slot in list(self.overlay_connections.keys()):
             if websocket in self.overlay_connections[slot]:
                 self.overlay_connections[slot].remove(websocket)
+
+        if websocket == self.bot_connection:
+            self.bot_connection = None
 
     async def subscribe(self, websocket: WebSocket, tournament_slug: str):
         if tournament_slug not in self.subscriptions:

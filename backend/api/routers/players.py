@@ -1,14 +1,15 @@
-from fastapi import APIRouter, Request, HTTPException, Depends
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi import APIRouter, HTTPException, Depends, status, Request
+from fastapi.responses import FileResponse
 import os
-from backend.core.database import get_player, create_or_update_player
+from typing import Dict, Any, List, Optional
+from backend.core.database import get_player, create_or_update_player, get_all_player_overrides, delete_all_player_overrides, get_player_override, save_player_override, delete_player_override
 from backend.api.auth import verify_hub_password
-from backend.api.schemas import CreatePlayerRequest
+from backend.api.schemas import CreatePlayerRequest, MessageResponse, ErrorResponse
 
 router = APIRouter(tags=["players"])
 
 
-@router.get("/{discord_id}/avatar", summary="Get player avatar image")
+@router.get("/{discord_id}/avatar", summary="Get player avatar image", operation_id="getPlayerAvatar")
 async def api_player_avatar(discord_id: str):
     """Return a player's avatar image file or the default placeholder."""
     p = await get_player(discord_id)
@@ -18,7 +19,7 @@ async def api_player_avatar(discord_id: str):
     return FileResponse(os.path.join(static_dir, "player_placeholder.jpg"))
 
 
-@router.get("", summary="List all players")
+@router.get("", summary="List all players", operation_id="listPlayers")
 async def api_list_players():
     """Return all registered players from the database."""
     from backend.core.database import aiosqlite, DB_PATH
@@ -29,96 +30,107 @@ async def api_list_players():
             return {"players": [dict(r) for r in rows]}
 
 
-@router.get("/{discord_id}", summary="Get a player by Discord ID")
-async def api_get_player(discord_id: str):
-    """Return a single player's details."""
-    p = await get_player(discord_id)
-    if not p:
-        raise HTTPException(404)
-    return p
-
-
-@router.post("", summary="Create or update a player")
+@router.post("", summary="Create or update a player", status_code=status.HTTP_201_CREATED, response_model=MessageResponse, operation_id="createPlayer")
 async def api_create_player(body: CreatePlayerRequest):
-    """Register a new player or update an existing one."""
+    """Register a new player or update an existing one's information."""
     await create_or_update_player(**body.model_dump())
-    return {"message": "Success"}
+    return MessageResponse(message="Success", ok=True)
 
 
-@router.get("/login/auth", summary="OAuth login link for Start.gg")
-async def login(discord_id: str):
-    """Redirect user to Start.gg OAuth authorization page."""
-    from backend.core.database import get_setting, get_connection
-    client_id = await get_setting("STARTGG_CLIENT_ID") or await get_connection("STARTGG_CLIENT_ID")
-    api_base = os.getenv("API_BASE_URL", "http://localhost:8000")
-    redirect_uri = f"{api_base}/api/players/callback"
-    return RedirectResponse(
-        url=f"https://start.gg/oauth/authorize?client_id={client_id}&redirect_uri={redirect_uri}&response_type=code&state={discord_id}"
-    )
+# ── Player Overrides (Unified & Standardized) ───────────────────────────────
+# IMPORTANT: this entire static-path block MUST stay declared BEFORE the
+# `GET /{discord_id}` catch-all below. Starlette matches routes in declaration
+# order; a dynamic single-segment route would otherwise capture the literal
+# string "overrides" as a discord_id and trip a 404. See the route-ordering
+# regression that surfaced in ParticipantsTable.tsx.
 
-
-@router.get("/callback", summary="OAuth callback from Start.gg")
-async def callback(code: str, state: str):
-    """Handle Start.gg OAuth callback and link Discord ID."""
-    discord_id = state
-    await create_or_update_player(discord_id=discord_id, registration_step="startgg_linked")
-    return {"message": f"Linked to Discord ID {discord_id}. You can now close this tab and return to Discord."}
-
-
-@router.get("/overrides", summary="Get all player overrides")
+@router.get(
+    "/overrides",
+    summary="Get all player overrides",
+    response_model=Dict[str, Dict[str, Optional[str]]],
+    operation_id="listPlayerOverrides"
+)
 async def api_get_overrides():
-    """Return all player display name / avatar overrides."""
-    from backend.core.database import get_all_player_overrides
+    """Return all player display name / avatar overrides. Accessible without admin authentication."""
     return await get_all_player_overrides()
 
 
-@router.delete("/overrides",
-               dependencies=[Depends(verify_hub_password)],
-               summary="Clear all overrides")
+@router.delete(
+    "/overrides",
+    dependencies=[Depends(verify_hub_password)],
+    summary="Clear all overrides",
+    response_model=MessageResponse,
+    responses={401: {"model": ErrorResponse}},
+    operation_id="clearPlayerOverrides"
+)
 async def api_delete_all_overrides():
-    from backend.core.database import delete_all_player_overrides
+    """Delete all configured player overrides from the database. Requires admin password authentication."""
     await delete_all_player_overrides()
-    return {"message": "All overrides cleared"}
+    return MessageResponse(message="All overrides cleared", ok=True)
 
 
-@router.get("/override/{id}", summary="Get a single override")
+@router.get(
+    "/overrides/{id}",
+    summary="Get a single override",
+    responses={404: {"model": ErrorResponse}},
+    operation_id="getPlayerOverride"
+)
 async def api_get_override(id: str):
-    from backend.core.database import get_player_override
+    """Retrieve details for a single configured player override by their entrant ID."""
     ov = await get_player_override(id)
     if not ov:
-        raise HTTPException(404)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Override not found")
     return ov
 
 
-@router.patch("/override/{id}",
-              dependencies=[Depends(verify_hub_password)],
-              summary="Save a player override")
+@router.patch(
+    "/overrides/{id}",
+    dependencies=[Depends(verify_hub_password)],
+    summary="Save a player override",
+    response_model=MessageResponse,
+    responses={401: {"model": ErrorResponse}},
+    operation_id="savePlayerOverride"
+)
 async def api_patch_override(id: str, request: Request):
-    from backend.core.database import save_player_override
+    """Save or update override properties for a player. Requires admin password authentication."""
     d = await request.json()
-    await save_player_override(id, d)
-    return {"message": "Override saved"}
+    validated = {
+        k: str(v) for k, v in d.items()
+        if k in ["name", "team", "country", "cfn", "avatar_url"]
+    }
+    await save_player_override(id, validated)
+    return MessageResponse(message="Override saved", ok=True)
 
 
-@router.delete("/override/{id}",
-               dependencies=[Depends(verify_hub_password)],
-               summary="Delete a specific override")
+@router.delete(
+    "/overrides/{id}",
+    dependencies=[Depends(verify_hub_password)],
+    summary="Delete a specific override",
+    response_model=MessageResponse,
+    responses={401: {"model": ErrorResponse}},
+    operation_id="deletePlayerOverride"
+)
 async def api_delete_override(id: str):
-    from backend.core.database import delete_player_override
+    """Remove a configured player override. Requires admin password authentication."""
     await delete_player_override(id)
-    return {"message": "Override deleted"}
+    return MessageResponse(message="Override deleted", ok=True)
 
 
-@router.post("/avatar/{id}",
-             dependencies=[Depends(verify_hub_password)],
-             summary="Upload player avatar")
+@router.post(
+    "/overrides/{id}/avatar",
+    dependencies=[Depends(verify_hub_password)],
+    summary="Upload player avatar",
+    response_model=Dict[str, str],
+    responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}},
+    operation_id="uploadPlayerAvatar"
+)
 async def api_upload_avatar(id: str, request: Request):
-    """Upload an avatar image for a player."""
+    """Upload and set a custom avatar image override for a player. Requires admin password authentication."""
     from fastapi import UploadFile
     form = await request.form()
     file = form.get("avatar")
     if not isinstance(file, UploadFile):
-        raise HTTPException(400, "No file uploaded")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No file uploaded")
 
     static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
     os.makedirs(static_dir, exist_ok=True)
@@ -131,8 +143,16 @@ async def api_upload_avatar(id: str, request: Request):
         f.write(await file.read())
 
     avatar_url = f"/static/{filename}"
-
-    from backend.core.database import save_player_override
     await save_player_override(id, {"avatar_url": avatar_url})
-
     return {"avatar_url": avatar_url}
+
+
+# ── Dynamic single-segment catch-all — keep last ────────────────────────────
+# Declared after every static "/something" route above so it doesn't shadow them.
+@router.get("/{discord_id}", summary="Get a player by Discord ID", operation_id="getPlayer")
+async def api_get_player(discord_id: str):
+    """Return a single player's details by their Discord ID."""
+    p = await get_player(discord_id)
+    if not p:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Player not found")
+    return p

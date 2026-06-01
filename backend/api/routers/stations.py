@@ -67,8 +67,14 @@ async def api_create_station(body: CreateStationRequest):
               dependencies=[Depends(verify_hub_password)],
               summary="Update a station")
 async def api_update_station(id: str, body: UpdateStationRequest):
-    """Rename or reconfigure a station."""
-    await update_station(id, body.name)
+    """Rename a station, toggle bot/hidden, set overlay, or remap stream binding."""
+    fields = body.model_dump(exclude_unset=True)
+    # Empty-string sentinels mean "clear" — store NULL.
+    for k in ("startgg_stream_id", "stream_url", "active_overlay"):
+        if fields.get(k) == "":
+            fields[k] = None
+    if fields:
+        await update_station(id, **fields)
     return {"message": "Updated"}
 
 

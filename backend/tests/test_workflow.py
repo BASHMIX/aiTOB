@@ -74,6 +74,29 @@ def test_transitions_rules():
     assert not validate_transition("called", "conflict")
     assert not validate_transition("complete", "in_progress")
 
+def test_on_stream_overlay_state():
+    """on_stream is documented as an overlay of in_progress but is NOT a transition node."""
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    root_dir = os.path.dirname(os.path.dirname(current_dir))
+    json_path = os.path.join(root_dir, "docs", "workflows.json")
+
+    with open(json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    states = data["match_workflow"]["states"]
+    assert "on_stream" in states, "on_stream overlay missing from workflows.json"
+    on_stream = states["on_stream"]
+    assert on_stream.get("overlay") is True
+    assert on_stream.get("derived_from") == "in_progress"
+
+    # Overlay states must be excluded from the runtime FSM so transition validation is
+    # unchanged — on_stream is a derived view, never a state a match transitions into.
+    assert "on_stream" not in VALID_TRANSITIONS
+    assert validate_transition("in_progress", "on_stream") is False
+    assert set(VALID_TRANSITIONS.keys()) == {
+        "not_started", "called", "in_progress", "conflict", "complete"
+    }
+
 @pytest.mark.asyncio
 async def test_transition_match_function(setup_test_db):
     """Verify transition_match properly transitions states and updates DB."""

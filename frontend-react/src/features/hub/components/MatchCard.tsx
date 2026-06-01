@@ -29,8 +29,26 @@ const IconCall = () => (
     <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
   </svg>
 );
+const IconActivate = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-3.5 h-3.5">
+    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+  </svg>
+);
+const IconRemove = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-3.5 h-3.5">
+    <line x1="18" y1="6" x2="6" y2="18"></line>
+    <line x1="6" y1="6" x2="18" y2="18"></line>
+  </svg>
+);
+const IconMonitor = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-3.5 h-3.5">
+    <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+    <line x1="8" y1="21" x2="16" y2="21"/>
+    <line x1="12" y1="17" x2="12" y2="21"/>
+  </svg>
+);
 
-export type MatchStatus = "waiting" | "live" | "called" | "done" | "dq";
+export type MatchStatus = "waiting" | "live" | "called" | "conflict" | "done" | "dq";
 
 export interface MatchPlayer {
   name: string;
@@ -38,6 +56,9 @@ export interface MatchPlayer {
   score?: number | "DQ";
   highlight?: boolean;
   isTBD?: boolean;
+  // Reachability — true when this entrant has a linked Discord account in our players table.
+  // Drives the "📵 unreachable" badge. Only meaningful once the match is local (synced).
+  hasDiscord?: boolean;
 }
 
 export interface MatchData {
@@ -50,8 +71,11 @@ export interface MatchData {
   isStreamMatch?: boolean;
   startedAt?: string;
   calledAt?: string;
-  raw: any; 
+  raw: any;
   stationId?: string;
+  // True when the bot has surrendered auto-DQ for this set (partial / no Discord reach).
+  // Surfaces as a small banner so the TO knows the bot won't intervene.
+  autoDqDisarmed?: boolean;
 }
 
 const STATUS_META: Record<
@@ -61,6 +85,7 @@ const STATUS_META: Record<
   waiting: { label: "WAITING", tone: "activate" },
   live: { label: "LIVE", tone: "send" },
   called: { label: "CALLED", tone: "reset" },
+  conflict: { label: "CONFLICT", tone: "dq" },
   done: { label: "DONE", tone: "neutral" },
   dq: { label: "DQ", tone: "dq" },
 };
@@ -87,35 +112,33 @@ const PANEL_TONE: Record<string, string> = {
   neutral: "border-[var(--border)] bg-[var(--card)]",
 };
 
-function ScoreCell({ player, onUpdate }: { player: MatchPlayer; onUpdate?: (val: number) => void }) {
+function ScoreCell({ player }: { player: MatchPlayer }) {
   const isDQ = player.score === "DQ";
-  const score = typeof player.score === 'number' ? player.score : 0;
 
   return (
     <div
-      className={`flex h-12 min-w-16 items-center justify-center text-base font-semibold border-l border-[var(--border)] text-slate-100
-        ${isDQ ? "text-[var(--tone-dq)]" : ""}
+      className={`flex h-11 w-12 items-center justify-center text-base font-black border-l border-[var(--border)] text-slate-100 shrink-0
+        ${isDQ ? "text-[var(--tone-dq)] animate-pulse" : ""}
         ${player.highlight ? "bg-[var(--tone-send-highlight)] text-[var(--tone-send)]" : ""}
       `}
     >
-      {onUpdate && !isDQ && (
-        <button 
-          onClick={() => onUpdate(Math.max(0, score - 1))}
-          className="w-5 h-full flex items-center justify-center hover:bg-white/5 text-xs text-gray-500 transition-colors"
-        >-</button>
-      )}
-      <span className="flex-1 text-center">{player.score !== undefined ? player.score : ""}</span>
-      {onUpdate && !isDQ && (
-        <button 
-          onClick={() => onUpdate(score + 1)}
-          className="w-5 h-full flex items-center justify-center hover:bg-white/5 text-xs text-gray-500 transition-colors"
-        >+</button>
-      )}
+      <span className="text-center">{player.score !== undefined ? player.score : ""}</span>
     </div>
   );
 }
 
-function PlayersBlock({ players, onUpdateScore }: { players: MatchData["players"], onUpdateScore?: (p: number, val: number) => void }) {
+function UnreachableBadge() {
+  return (
+    <span
+      title="No linked Discord account — bot can't reach this player. They must check in & report on start.gg directly."
+      className="inline-flex items-center justify-center text-amber-400/90 text-xs leading-none flex-shrink-0 cursor-help select-none"
+    >
+      📵
+    </span>
+  );
+}
+
+function PlayersBlock({ players }: { players: MatchData["players"] }) {
   return (
     <div className="flex-1 overflow-hidden flex flex-col justify-center rounded-l-md">
       {players.map((p, i) => (
@@ -123,17 +146,19 @@ function PlayersBlock({ players, onUpdateScore }: { players: MatchData["players"
           key={i}
           className={`flex items-center justify-between ${i === 0 ? "border-b border-[var(--border)]" : ""}`}
         >
-          <div className="flex-1 flex items-center gap-2.5 px-3 py-2.5 text-sm font-medium text-[var(--foreground)]">
+          <div className="flex-1 flex items-center gap-2.5 px-3.5 py-2.5 text-sm font-semibold text-[var(--foreground)]">
             <div className="w-6 h-6 rounded-full bg-[var(--muted)] overflow-hidden border border-[var(--border)] flex-shrink-0">
               {p.avatar ? (
                 <img src={p.avatar} alt="" className="w-full h-full object-cover" onError={(e) => (e.currentTarget.style.display = 'none')} />
               ) : (
-                <div className="w-full h-full flex items-center justify-center text-[10px] text-[var(--muted-foreground)]">?</div>
+                <div className="w-full h-full flex items-center justify-center text-xs text-[var(--muted-foreground)]">?</div>
               )}
             </div>
             <span className="truncate">{p.name}</span>
+            {/* Only show the badge once we're sure: hasDiscord is set on local matches; undefined for unsynced bracket rows. */}
+            {p.hasDiscord === false && !p.isTBD && <UnreachableBadge />}
           </div>
-          <ScoreCell player={p} onUpdate={onUpdateScore ? (v) => onUpdateScore(i, v) : undefined} />
+          <ScoreCell player={p} />
         </div>
       ))}
     </div>
@@ -171,7 +196,7 @@ function DQMenu({ match, onAction, onOpenChange }: { match: MatchData; onAction:
     <div className="relative" ref={ref}>
       <ActionButton tone="dq" label="DQ" icon={<IconDQ />} onClick={() => setOpen(!open)} />
       {open && (
-        <div className="absolute right-0 top-full mt-1.5 z-50 bg-[var(--card)] border border-[var(--tone-dq-border)] rounded-md shadow-2xl min-w-[140px] text-left p-1 overflow-hidden animate-slideUp">
+        <div className="absolute right-0 top-full mt-1.5 z-[100] bg-[var(--card)] border border-[var(--tone-dq-border)] rounded-md shadow-2xl min-w-[140px] text-left p-1 overflow-hidden animate-slideUp">
           <div className="px-2.5 py-1 text-[9px] text-[var(--tone-dq)] font-bold uppercase tracking-widest border-b border-white/5 mb-1">DQ who?</div>
           <button onClick={() => { setOpen(false); onAction("dq", match, "p1"); }} className="w-full text-left px-3 py-2 text-xs text-white hover:bg-[var(--tone-dq-hover)] rounded transition-colors truncate">{match.players[0].name || 'P1'}</button>
           <button onClick={() => { setOpen(false); onAction("dq", match, "p2"); }} className="w-full text-left px-3 py-2 text-xs text-white hover:bg-[var(--tone-dq-hover)] rounded transition-colors truncate">{match.players[1].name || 'P2'}</button>
@@ -214,16 +239,17 @@ function StationMenu({ match, stations, onAction, onOpenChange }: { match: Match
       <button
         onClick={() => setOpen(!open)}
         title={match.stationId ? `Live on: ${curName}` : "Assign to station"}
-        className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-md border px-3 text-xs font-semibold transition-all
+        className={`inline-flex h-7 items-center justify-center rounded-md border text-[10px] font-semibold transition-all duration-200 hover:scale-105 active:scale-95 shadow-sm
           ${match.stationId
-            ? "border-[var(--tone-send-border)] bg-[var(--tone-send-bg)] text-[var(--tone-send)] hover:bg-[var(--tone-send-hover)] hover:scale-[1.02]"
-            : "border-[var(--border)] bg-[var(--foreground-5)] text-gray-300 hover:bg-[var(--foreground-10)] hover:text-white hover:scale-[1.02]"
+            ? "border-[var(--tone-send-border)] bg-[var(--tone-send-bg)] text-[var(--tone-send)] hover:bg-[var(--tone-send-hover)] hover:shadow-[0_0_8px_rgba(59,130,246,0.15)] px-1.5 gap-1"
+            : "border-[var(--border)] bg-[var(--foreground-5)] text-gray-300 hover:bg-[var(--foreground-10)] hover:text-white w-7"
           }`}
       >
-        {match.stationId ? curName : "Station"}
+        <IconMonitor />
+        {match.stationId && <span className="font-bold font-mono text-[9px]">{curName}</span>}
       </button>
       {open && (
-        <div className="absolute right-0 top-full mt-1.5 z-50 bg-[var(--card)] border border-[var(--border)] rounded-md shadow-2xl min-w-[170px] text-left p-1 overflow-hidden animate-slideUp">
+        <div className="absolute right-0 top-full mt-1.5 z-[100] bg-[var(--card)] border border-[var(--border)] rounded-md shadow-2xl min-w-[170px] text-left p-1 overflow-hidden animate-slideUp">
           <div className="px-2.5 py-1 text-[9px] text-[var(--muted-foreground)] font-bold uppercase tracking-widest border-b border-white/5 mb-1">Assign Station</div>
           {match.stationId && (
             <button onClick={() => { setOpen(false); onAction("assignStation", match, null); }} className="w-full text-left px-3 py-1.5 text-xs text-gray-400 hover:bg-[var(--foreground-5)] rounded transition-colors">— Unassign</button>
@@ -258,13 +284,21 @@ function StationMenu({ match, stations, onAction, onOpenChange }: { match: Match
 export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onToggleStream, stations }: MatchCardProps) {
   const meta = STATUS_META[match.status];
   const showTimer = match.status === "live" || match.status === "called";
-  
+
   const [timeDisplay, setTimeDisplay] = useState("00:00");
   const [isTimerWarning, setIsTimerWarning] = useState(false);
   const [stationMenuOpen, setStationMenuOpen] = useState(false);
   const [dqMenuOpen, setDqMenuOpen] = useState(false);
 
   const isDropdownOpen = stationMenuOpen || dqMenuOpen;
+
+  // Preview sets are start.gg's unresolved bracket placeholders (IDs like
+  // "preview_XXX"). They have no entrants assigned yet and cannot be mutated
+  // via the API. We still render the row so the TO can see upcoming bracket
+  // structure AND flag it for stream — but we hide every action that would
+  // round-trip to start.gg (Call, Activate, Send, DQ, Reset, Remove).
+  const rawSetId = String(match.raw?.set_id || match.raw?.id || match.id || "");
+  const isPreview = rawSetId.startsWith("preview");
 
   const displayPool = match.pool 
     ? (match.pool.toLowerCase().includes('pool') ? match.pool : `Pool ${match.pool}`) 
@@ -326,101 +360,151 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
   }, [match.status, match.startedAt, match.calledAt, dqTimerSeconds, autoDqEnabled, showTimer]);
 
   return (
-    <div className={`flex items-stretch rounded-lg border transition-all duration-200
+    <div className={`flex flex-col rounded-lg border transition-all duration-200
       ${isDropdownOpen 
-        ? "z-40 relative shadow-[0_0_20px_rgba(255,200,0,0.15)] border-accentYellow/40 bg-black/40 scale-[1.01]" 
-        : "z-10 relative border-white/10"
+        ? "z-50 relative shadow-[0_0_20px_rgba(255,200,0,0.15)] border-accentYellow/40 bg-black/40 scale-[1.01] overflow-visible" 
+        : "z-10 relative border-white/10 overflow-hidden"
       }
       ${PANEL_TONE[meta.tone]}
     `}>
-      <PlayersBlock 
-        players={match.players} 
-        onUpdateScore={match.isLocal ? (p, v) => onAction("updateScore", match, { playerIdx: p, value: v }) : undefined} 
-      />
-
-      <div className="relative flex w-[260px] flex-col justify-between border-l border-[var(--border-60)] px-3 py-2.5 rounded-r-lg">
-        <span
-          className={`absolute right-2.5 top-2.5 rounded border px-2 py-0.5 text-[9px] font-black tracking-widest ${TONE_TEXT[meta.tone]} ${TONE_BORDER[meta.tone]}`}
-        >
-          {meta.label}
-        </span>
-
-        <div>
-          <div className="flex items-center gap-1.5 text-sm font-semibold text-[var(--foreground)] truncate font-mono">
-            <span className="inline-flex h-5 min-w-5 px-1 items-center justify-center rounded bg-white/5 border border-white/10 text-[9px] font-black text-textDim">
-              {match.id || "—"}
+      {/* Top Section: Players, Scores, and Match Metadata */}
+      <div className="flex items-stretch w-full">
+        <PlayersBlock 
+          players={match.players} 
+        />
+        
+        {/* Match Metadata Column */}
+        <div className="w-[125px] border-l border-white/5 flex flex-col justify-center px-3 py-1 bg-black/20 gap-1 select-none shrink-0 font-mono text-xs leading-tight">
+          {/* Match ID and Status Pill */}
+          <div className="flex items-center justify-between gap-1">
+            <span className="font-extrabold text-[11px] text-textDim truncate font-mono">
+              #{match.id || "—"}
             </span>
-            {displayPool && <span className="text-[#38bdf8] font-bold">{displayPool}</span>}
+            <span className={`rounded border px-1.5 py-[2px] text-[10px] font-black tracking-wider leading-none ${TONE_TEXT[meta.tone]} ${TONE_BORDER[meta.tone]}`}>
+              {meta.label}
+            </span>
           </div>
-          <div className="text-[11px] font-medium text-[var(--muted-foreground)] truncate pl-1 mt-0.5">{match.round || "Round"}</div>
+
+          {/* Pool */}
+          {displayPool ? (
+            <span className="text-[#38bdf8] font-bold truncate text-xs" title={displayPool}>
+              {displayPool}
+            </span>
+          ) : (
+            <span className="text-textDim/40 italic text-[11px]">No Pool</span>
+          )}
+
+          {/* Stage / Round */}
+          <span className="text-textDim truncate font-semibold text-xs" title={match.round}>
+            {match.round || "Round"}
+          </span>
         </div>
+      </div>
 
-        <div className="mt-2.5 flex items-center gap-2 flex-wrap">
-          {match.status === "waiting" && (
-            <>
-              {!match.isLocal && (
-                <>
-                  <ActionButton tone="activate" label="Call Match" icon={<IconCall />} onClick={() => onAction("callMatch", match)} />
-                  <ActionButton tone="neutral" label="Activate" onClick={() => onAction("activate", match)} />
-                </>
-              )}
-              {match.isLocal && (
-                 <ActionButton tone="activate" label="Call Match" icon={<IconCall />} onClick={() => onAction("callMatch", match)} />
-              )}
-              <button
-                type="button"
-                onClick={() => onToggleStream(String(match.raw?.set_id || match.raw?.id || match.id || ''), !!match.isStreamMatch)}
-                aria-label="Toggle Stream Q"
-                title="Toggle stream indicators"
-                className={`inline-flex h-8 w-10 items-center justify-center rounded-md border transition-all ${
-                  match.isStreamMatch
-                    ? "border-[var(--tone-activate-border)] bg-[var(--tone-activate)] text-[var(--background)] hover:bg-[var(--tone-activate-hover)] hover:scale-105"
-                    : "border-[var(--tone-activate-border)] text-[var(--tone-activate)] hover:bg-[var(--tone-activate-hover)] hover:scale-105"
-                }`}
-              >
-                <IconPlay />
-              </button>
-
-            </>
-          )}
-          
-          {match.isLocal && match.status !== "done" && match.status !== "dq" && (
-            <StationMenu match={match} stations={stations || []} onAction={onAction} onOpenChange={setStationMenuOpen} />
+      {/* Bottom Section (Row 3): Timer & Action Buttons Toolbar */}
+      <div className="flex items-center justify-between border-t border-white/5 bg-black/20 px-2.5 py-1.5 gap-2 text-xs">
+        {/* Left Side: Timer & Auto-DQ Manual Warning */}
+        <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+          {/* Unreachable / Auto-DQ Banner */}
+          {match.autoDqDisarmed && match.isLocal && match.status !== "done" && match.status !== "dq" && (
+            <span
+              title="Auto-DQ disarmed — partial-reach match. Bot won't intervene; coordinate on start.gg."
+              className="rounded border border-amber-500/40 bg-amber-500/10 text-amber-300 px-1.5 py-0.5 text-[8px] font-bold tracking-wider cursor-help select-none shrink-0"
+            >
+              ⚠ MANUAL
+            </span>
           )}
 
-          {match.isLocal && match.status === "live" && (
-            <ActionButton tone="send" label="Send" icon={<IconSend />} onClick={() => onAction("sendScore", match)} />
-          )}
-
-          {match.isLocal && (match.status === "live" || match.status === "called") && (
-            <DQMenu match={match} onAction={onAction} onOpenChange={setDqMenuOpen} />
-          )}
-
-          {match.isLocal && (
-            <div className="flex gap-1">
-              <ActionButton tone="reset" label="Reset" icon={<IconReset />} onClick={() => onAction("resetMatch", match)} />
-              <button
-                onClick={() => onAction("removeMatch", match)}
-                title="Deactivate (Local only)"
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-red-900/40 bg-red-900/10 text-red-400 hover:bg-red-900/30 transition-colors"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-3.5 h-3.5">
-                  <line x1="18" y1="6" x2="6" y2="18"></line>
-                  <line x1="6" y1="6" x2="18" y2="18"></line>
-                </svg>
-              </button>
-            </div>
-          )}
-
+          {/* Timer */}
           {showTimer && (
             <span
-              className={`ml-auto font-mono text-xs font-bold tabular-nums tracking-tight flex items-center gap-1.5 px-2 py-1 rounded bg-black/20 border border-white/5
+              className={`h-7 px-2 font-mono text-xs font-extrabold tabular-nums tracking-wide flex items-center justify-center gap-1.5 rounded bg-black/40 border border-white/10 shrink-0 shadow-inner
                 ${match.status === "live" ? "text-[var(--tone-send)]" : (isTimerWarning ? "text-[var(--tone-dq)] animate-pulse" : "text-[var(--tone-reset)]")}
               `}
             >
               <span>{match.status === "live" ? "⏱️" : "⏳"}</span>
               <span>{timeDisplay}</span>
             </span>
+          )}
+        </div>
+
+        {/* Right Side: Action Buttons (Icon Only) */}
+        <div className="flex items-center gap-1 shrink-0">
+          {isPreview ? (
+            <>
+              <span
+                title="This bracket position hasn't resolved yet. Actions unlock once start.gg fills in both entrants."
+                className="text-[9px] font-mono uppercase tracking-widest text-textDim italic select-none mr-1"
+              >
+                Awaiting bracket
+              </span>
+              <button
+                type="button"
+                onClick={() => onToggleStream(rawSetId, !!match.isStreamMatch)}
+                aria-label="Plan for stream"
+                title="Plan this future match for stream coverage"
+                className={`inline-flex h-7 w-7 items-center justify-center rounded-md border transition-all duration-200 hover:scale-105 active:scale-95 ${
+                  match.isStreamMatch
+                    ? "border-[var(--tone-activate-border)] bg-[var(--tone-activate)] text-[var(--background)] hover:bg-[var(--tone-activate-hover)]"
+                    : "border-[var(--tone-activate-border)] text-[var(--tone-activate)] hover:bg-[var(--tone-activate-hover)]/10"
+                }`}
+              >
+                <IconPlay />
+              </button>
+            </>
+          ) : (
+            <>
+              {match.status === "waiting" && (
+                <>
+                  {!match.isLocal && (
+                    <>
+                      <ActionButton tone="activate" label="Call Match" icon={<IconCall />} onClick={() => onAction("callMatch", match)} />
+                      <ActionButton tone="neutral" label="Activate Match" icon={<IconActivate />} onClick={() => onAction("activate", match)} />
+                    </>
+                  )}
+                  {match.isLocal && (
+                    <ActionButton tone="activate" label="Call Match" icon={<IconCall />} onClick={() => onAction("callMatch", match)} />
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => onToggleStream(rawSetId, !!match.isStreamMatch)}
+                    aria-label="Toggle Stream Q"
+                    title="Plan this match for stream coverage"
+                    className={`inline-flex h-7 w-7 items-center justify-center rounded-md border transition-all duration-200 hover:scale-105 active:scale-95 ${
+                      match.isStreamMatch
+                        ? "border-[var(--tone-activate-border)] bg-[var(--tone-activate)] text-[var(--background)] hover:bg-[var(--tone-activate-hover)]"
+                        : "border-[var(--tone-activate-border)] text-[var(--tone-activate)] hover:bg-[var(--tone-activate-hover)]/10"
+                    }`}
+                  >
+                    <IconPlay />
+                  </button>
+                </>
+              )}
+
+              {match.isLocal && match.status !== "done" && match.status !== "dq" && (
+                <StationMenu match={match} stations={stations || []} onAction={onAction} onOpenChange={setStationMenuOpen} />
+              )}
+
+              {match.isLocal && match.status === "live" && (
+                <ActionButton tone="send" label="Send Score" icon={<IconSend />} onClick={() => onAction("sendScore", match)} />
+              )}
+
+              {match.isLocal && (match.status === "live" || match.status === "called" || match.status === "conflict") && (
+                <DQMenu match={match} onAction={onAction} onOpenChange={setDqMenuOpen} />
+              )}
+
+              {match.isLocal && (
+                <>
+                  <ActionButton tone="reset" label="Reset Match" icon={<IconReset />} onClick={() => onAction("resetMatch", match)} />
+                  <ActionButton tone="dq" label="Remove Match" icon={<IconRemove />} onClick={() => onAction("removeMatch", match)} />
+                </>
+              )}
+
+              {/* Force to In-Progress button for called matches */}
+              {match.isLocal && match.status === "called" && (
+                <ActionButton tone="send" label="Force to In-Progress" icon={<IconPlay />} onClick={() => onAction("forceToInProgress", match)} />
+              )}
+            </>
           )}
         </div>
       </div>

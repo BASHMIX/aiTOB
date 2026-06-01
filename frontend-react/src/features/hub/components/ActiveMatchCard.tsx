@@ -275,7 +275,7 @@ export function ActiveMatchCard({ match }: { match: any }) {
           <button
             onClick={closeMatch}
             className="ml-1 w-5 h-5 flex items-center justify-center rounded text-textDim hover:text-red-400 hover:bg-red-900/20 transition-colors"
-            title="Remove from Active Match Status"
+            title="Remove from On-Stream panel"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-3.5 h-3.5">
               <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>

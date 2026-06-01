@@ -13,6 +13,14 @@
         "description": "Both players checked in, lobby is active, match is actively being played.",
         "allowed_next": ["complete", "conflict", "not_started"]
       },
+      "on_stream": {
+        "overlay": true,
+        "derived_from": "in_progress",
+        "condition": "is_stream_match == true",
+        "label": "On-Stream Match Live",
+        "description": "An in_progress match flagged for stream coverage (is_stream_match). Surfaced in the hub's 'On-Stream Match Live' spotlight panel. Derived view of in_progress — not a transition target.",
+        "allowed_next": []
+      },
       "conflict": {
         "description": "Players reported different scores, waiting for admin resolution.",
         "allowed_next": ["complete", "not_started"]

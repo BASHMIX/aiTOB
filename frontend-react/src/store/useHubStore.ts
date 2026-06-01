@@ -17,7 +17,7 @@ interface Match {
   p2_name: string;
   p1_score: number;
   p2_score: number;
-  status: 'not_started' | 'in_progress' | 'called' | 'complete' | 'dq';
+  status: 'not_started' | 'in_progress' | 'called' | 'conflict' | 'complete' | 'dq';
   round_name: string;
   station_id?: string;
   match_number?: string;
@@ -43,6 +43,9 @@ interface Match {
   dq_player?: string;
   lobby_password?: string;
   discord_thread_id?: string;
+  auto_dq_disarmed?: boolean;
+  p1_discord?: string | null;
+  p2_discord?: string | null;
 }
 
 interface Station {
@@ -56,15 +59,28 @@ interface HubState {
   currentSlug: string | null;
   matches: Match[];
   stations: Station[];
-  status: { startgg_api: boolean; websockets: boolean; discord_bot: boolean };
+  status: {
+    startgg_api: boolean;
+    websockets: boolean;
+    discord_bot: boolean;
+    token_scope?: { valid: boolean; has_write_scope: boolean; error: string | null; user_name?: string } | null;
+    auto_dispatcher?: boolean;
+  };
   plannedStreamIds: string[];
   hubPassword: string;
   setTournaments: (tournaments: Tournament[]) => void;
   setCurrentSlug: (slug: string | null) => void;
   setMatches: (matches: Match[]) => void;
   setStations: (stations: Station[]) => void;
-  setStatus: (status: { startgg_api: boolean; websockets: boolean; discord_bot: boolean }) => void;
+  setStatus: (status: {
+    startgg_api: boolean;
+    websockets: boolean;
+    discord_bot: boolean;
+    token_scope?: { valid: boolean; has_write_scope: boolean; error: string | null; user_name?: string } | null;
+    auto_dispatcher?: boolean;
+  }) => void;
   togglePlannedStream: (setId: string) => void;
+  setPlannedStreamIds: (ids: string[]) => void;
   setHubPassword: (password: string) => void;
   logout: () => void;
 }
@@ -74,7 +90,7 @@ export const useHubStore = create<HubState>((set) => ({
   currentSlug: localStorage.getItem('hub_current_slug'),
   matches: [],
   stations: [],
-  status: { startgg_api: false, websockets: false, discord_bot: false },
+  status: { startgg_api: false, websockets: false, discord_bot: false, token_scope: null },
   plannedStreamIds: [],
   hubPassword: localStorage.getItem('hub_password') || '',
   setTournaments: (tournaments) => set({ tournaments }),
@@ -89,6 +105,7 @@ export const useHubStore = create<HubState>((set) => ({
   setMatches: (matches) => set({ matches }),
   setStations: (stations) => set({ stations }),
   setStatus: (status) => set({ status }),
+  setPlannedStreamIds: (plannedStreamIds: string[]) => set({ plannedStreamIds }),
   togglePlannedStream: (setId) => set((state) => ({
     plannedStreamIds: state.plannedStreamIds.includes(setId)
       ? state.plannedStreamIds.filter(id => id !== setId)

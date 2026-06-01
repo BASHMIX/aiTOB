@@ -1,7 +1,33 @@
 import discord
 import asyncio
-from backend.core.database import get_player, get_active_match, update_active_match, add_bot_feed, get_setting, upsert_active_match
+from backend.core.database import (
+    get_player, get_active_match, update_active_match, add_bot_feed,
+    get_setting, upsert_active_match,
+)
 from backend.core.match_state import generate_lobby_password, start_call_timer
+
+
+# ── Emergency-Fallback Workflow ────────────────────────────────────────
+# When at least one side of a match has no linked Discord account, the bot
+# cannot drive the full coordination loop. Per the architecture spec:
+#   1. The reachable player(s) still get a Ready DM.
+#   2. On Ready click, we DM them fallback instructions and stop trying to
+#      coordinate via Discord.
+#   3. Auto-DQ is DISARMED for that set — letting it fire would silently
+#      penalize a player who's actively waiting on start.gg.
+#   4. The sync engine picks up the result whenever both players self-report
+#      on start.gg's web UI.
+FALLBACK_DM_TEXT = (
+    "⚠️ **Your opponent has no linked Discord account.**\n\n"
+    "We've recorded your readiness, but we can't coordinate the match for you here.\n\n"
+    "**Please proceed to your start.gg match dashboard now** to check in and use the site chat. "
+    "Once you both finish and self-report on start.gg, the result will sync automatically.\n\n"
+    "No DQ will be issued for this match by the bot."
+)
+FALLBACK_THREAD_TEXT = (
+    "⚠️ Partial-reach match — opponent has no linked Discord account. "
+    "Auto-DQ is **DISARMED**. Coordinate and report on start.gg directly."
+)
 
 async def create_match_thread(bot, tournament, set_data):
     channel_id = await get_setting("match_threads_channel_id")
@@ -30,15 +56,26 @@ async def create_match_thread(bot, tournament, set_data):
     thread = await channel.create_thread(name=thread_name, type=discord.ChannelType.public_thread)
 
     is_stream = set_data.get("is_stream_match", False)
-    p1_discord = await get_discord_id_from_startgg(set_data.get('p1_id') or set_data.get('p1_entrant_id'))
-    p2_discord = await get_discord_id_from_startgg(set_data.get('p2_id') or set_data.get('p2_entrant_id'))
+
+    # Prefer the sync-engine-resolved discord IDs (kept in the active_matches row
+    # via _resolve_discord in sync_active_matches). Fall back to a fresh lookup
+    # for the case where the row was created outside sync — e.g. via the manual
+    # "Activate" hub button before the next sync tick.
+    p1_discord = set_data.get('p1_discord') or await get_discord_id_from_startgg(set_data.get('p1_id') or set_data.get('p1_entrant_id'))
+    p2_discord = set_data.get('p2_discord') or await get_discord_id_from_startgg(set_data.get('p2_id') or set_data.get('p2_entrant_id'))
+
+    # If NEITHER side is reachable on Discord, there's nothing the bot can do.
+    # Disarm immediately and surface a thread message so the TO sees the state.
+    fully_unreachable = not p1_discord and not p2_discord
+    partial = (bool(p1_discord) ^ bool(p2_discord))  # exactly one side has Discord
 
     await update_active_match(
         set_id,
         discord_thread_id=str(thread.id),
         status="called",
         p1_discord=p1_discord,
-        p2_discord=p2_discord
+        p2_discord=p2_discord,
+        auto_dq_disarmed=(1 if (fully_unreachable or partial) else 0),
     )
 
     mentions = []
@@ -46,14 +83,27 @@ async def create_match_thread(bot, tournament, set_data):
     if p2_discord: mentions.append(f"<@{p2_discord}>")
     content = " ".join(mentions) if mentions else "Players, your match is ready!"
 
-    embed = discord.Embed(
-        title=f"Match Ready: {round_name}",
-        description=f"**{p1_name}** vs **{p2_name}**\n\nClick **I'm Ready** to check in. You have 10 minutes.",
-        color=discord.Color.green()
-    )
+    desc = f"**{p1_name}** vs **{p2_name}**\n\nClick **I'm Ready** to check in. You have 10 minutes."
+    embed = discord.Embed(title=f"Match Ready: {round_name}", description=desc, color=discord.Color.green())
 
     view = ReadyCheckView(set_id, p1_discord, p2_discord, is_stream, thread, bot)
     await thread.send(content=content, embed=embed, view=view)
+
+    if fully_unreachable:
+        await thread.send(
+            "⚠️ Neither player has a linked Discord account. **Auto-DQ disarmed** — "
+            "this match must be coordinated and reported entirely on start.gg."
+        )
+        await add_bot_feed(
+            f"Match {set_id} ({p1_name} vs {p2_name}) auto-disarmed: no Discord on either side",
+            "warn"
+        )
+    elif partial:
+        await thread.send(FALLBACK_THREAD_TEXT)
+        await add_bot_feed(
+            f"Match {set_id} ({p1_name} vs {p2_name}) auto-disarmed: partial reach",
+            "warn"
+        )
 
     from backend.core.database import get_tournament
     t = await get_tournament(set_data.get('tournament_slug', ''))
@@ -94,6 +144,24 @@ class ReadyCheckView(discord.ui.View):
         await interaction.response.send_message(f"✅ {interaction.user.display_name} is ready!", ephemeral=False)
 
         match = await get_active_match(self.set_id)
+        opponent_discord = self.p2_discord if player_key == "p1" else self.p1_discord
+
+        # Emergency-fallback path: opponent has no Discord. We've already disarmed
+        # auto-DQ at thread-creation time. Send the player the start.gg-only
+        # instructions and stop the bot's coordination loop for this set.
+        if not opponent_discord:
+            try:
+                await interaction.followup.send(FALLBACK_DM_TEXT, ephemeral=True)
+            except Exception:
+                # Followup ephemeral can fail in DMs — fall back to a plain message
+                try:
+                    await interaction.user.send(FALLBACK_DM_TEXT)
+                except Exception:
+                    pass
+            # Don't try to launch the lobby flow — the opponent isn't in this channel.
+            self.stop()
+            return
+
         if match and match.get("p1_ready") and match.get("p2_ready"):
             await update_active_match(self.set_id, started_at=discord.utils.utcnow().isoformat())
             self.stop()
@@ -140,14 +208,22 @@ class ReadyCheckView(discord.ui.View):
         return password
 
 async def run_ready_check_timeout(bot, thread, set_id, timeout_seconds: int = 600):
-    warning_at = timeout_seconds - 180
+    warning_at = max(0, timeout_seconds - 180)
     await asyncio.sleep(warning_at)
+
+    # Re-fetch each time — the disarm flag can be flipped mid-flight, e.g. by a
+    # T.O. manually marking the match safe, or by the partial-reach fallback.
     match = await get_active_match(set_id)
-    if match and match.get('status') == 'called':
+    if match and match.get('status') == 'called' and not match.get('auto_dq_disarmed'):
         await thread.send("⚠️ **Warning**: 3 minutes remaining. If both players are not ready, the match may be DQ'd.")
+
     await asyncio.sleep(180)
     match = await get_active_match(set_id)
-    if match and match.get('status') == 'called':
-        await thread.send("🛑 **Timeout**: 10 minutes elapsed. Auto-DQ triggered.")
-        from backend.core.match_state import auto_dq_match
-        await auto_dq_match(set_id)
+    if not match or match.get('status') != 'called':
+        return
+    if match.get('auto_dq_disarmed'):
+        # Spec section 3: silent surrender to start.gg. No DQ, no thread spam.
+        return
+    await thread.send("🛑 **Timeout**: 10 minutes elapsed. Auto-DQ triggered.")
+    from backend.core.match_state import auto_dq_match
+    await auto_dq_match(set_id)

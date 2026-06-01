@@ -129,13 +129,48 @@ export function GeneralSettings() {
               />
             </div>
 
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-mono text-gray-400 uppercase tracking-widest">Start.gg Client ID</label>
+                <input
+                  className="bg-appDark border border-white/10 rounded-md px-4 py-2 text-sm text-white focus:border-accentYellow outline-none"
+                  value={env.STARTGG_CLIENT_ID || ''}
+                  onChange={e => updateEnv('STARTGG_CLIENT_ID', e.target.value)}
+                  placeholder="OAuth app client_id"
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-mono text-gray-400 uppercase tracking-widest">Start.gg Client Secret</label>
+                <input
+                  className="bg-appDark border border-white/10 rounded-md px-4 py-2 text-sm text-white focus:border-accentYellow outline-none"
+                  type="password"
+                  placeholder="Keep empty to leave unchanged"
+                  onChange={e => updateEnv('STARTGG_CLIENT_SECRET', e.target.value)}
+                />
+                <p className="text-[10px] text-gray-500 italic">Current: {env.STARTGG_CLIENT_SECRET ? '••••••••' : 'Not set'}</p>
+              </div>
+            </div>
+
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-mono text-gray-400 uppercase tracking-widest">Start.gg Client ID</label>
-              <input 
+              <label className="text-xs font-mono text-gray-400 uppercase tracking-widest">Discord Bot Token</label>
+              <input
                 className="bg-appDark border border-white/10 rounded-md px-4 py-2 text-sm text-white focus:border-accentYellow outline-none"
-                value={env.STARTGG_CLIENT_ID || ''}
-                onChange={e => updateEnv('STARTGG_CLIENT_ID', e.target.value)}
+                type="password"
+                placeholder="Keep empty to leave unchanged"
+                onChange={e => updateEnv('DISCORD_BOT_TOKEN', e.target.value)}
               />
+              <p className="text-[10px] text-gray-500 italic">Current: {env.DISCORD_BOT_TOKEN ? '••••••••' : 'Not set'} · Restart the bot process after rotating.</p>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-mono text-gray-400 uppercase tracking-widest">API Base URL</label>
+              <input
+                className="bg-appDark border border-white/10 rounded-md px-4 py-2 text-sm text-white focus:border-accentYellow outline-none"
+                value={env.API_BASE_URL || ''}
+                onChange={e => updateEnv('API_BASE_URL', e.target.value)}
+                placeholder="http://localhost:8000"
+              />
+              <p className="text-[10px] text-gray-500 italic">Used to build the OAuth callback link the bot sends to players.</p>
             </div>
 
             <div className="flex flex-col gap-1.5 pt-4 border-t border-white/5">
@@ -247,6 +282,17 @@ export function GeneralSettings() {
             </div>
 
             <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-mono text-gray-400 uppercase tracking-widest">Match Threads Channel ID</label>
+              <input
+                className="bg-appDark border border-white/10 rounded-md px-4 py-2 text-sm text-white focus:border-accentYellow outline-none"
+                value={settings.match_threads_channel_id || ''}
+                onChange={e => updateSetting('match_threads_channel_id', e.target.value)}
+                placeholder="Discord channel ID for per-match threads"
+              />
+              <p className="text-[10px] text-gray-500 italic">If empty, the bot falls back to the first available text channel — risky for live events.</p>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
               <label className="text-xs font-mono text-gray-400 uppercase tracking-widest">Registration Welcome Message</label>
               <textarea 
                 rows={3}
@@ -298,7 +344,7 @@ export function GeneralSettings() {
             </div>
           </div>
 
-          <button 
+          <button
             onClick={saveSettings}
             disabled={isSaving}
             className="mt-4 bg-blue-600 hover:bg-blue-500 text-white font-bold py-2.5 rounded-lg transition-all shadow-lg active:scale-95 disabled:opacity-50"
@@ -308,6 +354,87 @@ export function GeneralSettings() {
         </section>
 
       </div>
+
+      {/* ── Maintenance & Workflows ─────────────────────────────────────── */}
+      <MaintenancePanel onMessage={showMsg} />
     </div>
+  );
+}
+
+
+function MaintenancePanel({ onMessage }: { onMessage: (text: string, ok?: boolean) => void }) {
+  const [busyReload, setBusyReload] = useState(false);
+  const [busyToken, setBusyToken] = useState(false);
+
+  const reloadWorkflows = async () => {
+    setBusyReload(true);
+    try {
+      const res = await axios.post('/api/workflows/reload');
+      onMessage(res.data.message || 'Workflows reloaded', true);
+    } catch (e: any) {
+      onMessage(e.response?.data?.detail || 'Reload failed', false);
+    } finally {
+      setBusyReload(false);
+    }
+  };
+
+  const retestToken = async () => {
+    setBusyToken(true);
+    try {
+      await axios.post('/api/settings/token-check');
+      onMessage('Token re-tested. Check the header for status.', true);
+    } catch (e: any) {
+      onMessage(e.response?.data?.detail || 'Token test failed', false);
+    } finally {
+      setBusyToken(false);
+    }
+  };
+
+  return (
+    <section className="bg-cardDark rounded-xl p-6 shadow-xl border border-white/5 flex flex-col gap-4">
+      <div className="flex items-center gap-3 mb-1">
+        <div className="w-10 h-10 rounded-lg bg-purple-500/10 flex items-center justify-center text-purple-300">
+          🛠️
+        </div>
+        <div>
+          <h2 className="text-lg font-bold text-white">Maintenance & Workflows</h2>
+          <p className="text-xs text-textDim italic">Hot-reload config and re-probe credentials without restarting</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="flex flex-col gap-2 p-4 rounded-lg bg-black/30 border border-white/5">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-semibold text-gray-200">Match Workflow Transitions</span>
+            <button
+              onClick={reloadWorkflows}
+              disabled={busyReload}
+              className="px-3 py-1.5 text-xs font-bold rounded-md bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/40 text-purple-200 transition-all disabled:opacity-50"
+            >
+              {busyReload ? 'Reloading…' : '♻️ Reload workflows.json'}
+            </button>
+          </div>
+          <p className="text-[11px] text-textDim leading-relaxed">
+            Re-reads <code className="text-purple-300">docs/workflows.json</code> live. Takes effect on the next match transition. Use for hot-fixes during an event.
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-2 p-4 rounded-lg bg-black/30 border border-white/5">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-semibold text-gray-200">Re-test Start.gg Token</span>
+            <button
+              onClick={retestToken}
+              disabled={busyToken}
+              className="px-3 py-1.5 text-xs font-bold rounded-md bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-200 transition-all disabled:opacity-50"
+            >
+              {busyToken ? 'Probing…' : '🔑 Probe scopes'}
+            </button>
+          </div>
+          <p className="text-[11px] text-textDim leading-relaxed">
+            Confirms the API token has T.O. write scope on your tournament. Result shows in the header banner.
+          </p>
+        </div>
+      </div>
+    </section>
   );
 }

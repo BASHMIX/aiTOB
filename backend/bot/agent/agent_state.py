@@ -11,3 +11,6 @@ class MatchState(TypedDict):
     match_status: str # 'waiting_checkin', 'playing', 'conflict', 'completed', 'dq'
     winner_id: Optional[int]
     score_string: Optional[str]
+    # One-line LLM explanation surfaced to bot_feed when status flips —
+    # gives the T.O. an audit trail of *why* the AI Referee decided what it did.
+    reasoning: Optional[str]

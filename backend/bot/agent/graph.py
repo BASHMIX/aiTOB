@@ -80,7 +80,11 @@ async def evaluate_chat(state: MatchState) -> dict:
             updates["match_status"] = "completed"
             updates["winner_id"] = result.winner_discord_id
             updates["score_string"] = result.score
-            
+
+        # Always carry the reasoning forward so callers can log it on status flips.
+        if result.reasoning:
+            updates["reasoning"] = result.reasoning
+
         return updates
     except Exception as e:
         print(f"LLM Extraction failed: {e}")
