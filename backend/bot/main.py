@@ -1,7 +1,6 @@
 import discord
 from discord.ext import commands, tasks
 import os
-import httpx
 from dotenv import load_dotenv
 import asyncio
 from langchain_core.tools import tool
@@ -12,7 +11,6 @@ root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 sys.path.append(root)
 sys.path.append(os.path.join(root, "backend"))
 from core.database import init_db, create_or_update_player, get_player
-from core.image_utils import process_avatar
 from bot.registration import registration_manager
 from bot.messages import get_msg
 from bot.agent.graph import app, process_message
@@ -459,7 +457,6 @@ async def _llm_rank_entrants(discord_user: discord.User | discord.Member,
 
     try:
         from bot.agent.graph import _get_llm
-        from langchain_core.prompts import ChatPromptTemplate
         from pydantic import BaseModel, Field as _Field
         from typing import List as _List
 
@@ -1145,6 +1142,129 @@ async def handle_conflict_statement_dm(message) -> bool:
     return True
 
 
+
+async def handle_match_state_update(message: discord.Message, new_state: dict, bot_instance: commands.Bot):
+    """
+    Process the new state of a match thread after a message is handled.
+    Updates the match status (completed, conflict) based on the LLM evaluation.
+    """
+    status = new_state.get("match_status")
+    reasoning = new_state.get("reasoning") or "(no reasoning provided)"
+
+    if status == "completed":
+        winner_id = new_state.get("winner_id")
+        score = new_state.get("score_string")
+
+        # ── LLM winner_id sanity check (cleanup #3) ──
+        from core.database import (
+            save_match_result, update_active_match, get_active_match,
+            add_conflict, add_bot_feed,
+        )
+        set_id = new_state.get("set_id")
+        match_details = await get_active_match(str(set_id)) if set_id else None
+        valid_players = {
+            str(match_details.get("p1_discord")) if match_details else None,
+            str(match_details.get("p2_discord")) if match_details else None,
+        }
+        valid_players.discard(None)
+        valid_players.discard("None")
+
+        if not match_details or str(winner_id) not in valid_players:
+            # Demote — do NOT touch start.gg with a bogus winner.
+            await add_bot_feed(
+                f"🚫 AI Referee rejected (set {set_id}): proposed winner "
+                f"<{winner_id}> isn't a player in this match. Reasoning: {reasoning}",
+                "warn",
+            )
+            if set_id:
+                await add_conflict(
+                    str(set_id),
+                    "AI returned invalid winner_id",
+                    f"LLM said winner=<{winner_id}>; players are {valid_players}",
+                )
+                await update_active_match(str(set_id), status="conflict")
+            await message.channel.send(
+                "⚠️ I parsed a result but the winner didn't match either player. "
+                "Flagging for admin review."
+            )
+            return
+
+        await message.channel.send(
+            f"✅ **Match Completed!**\n"
+            f"Winner: <@{winner_id}>\n"
+            f"Score: {score}\n\n"
+            "Locking this thread."
+        )
+        await message.channel.edit(archived=True, locked=True)
+
+        p1_name = match_details.get("p1_name", "")
+        p2_name = match_details.get("p2_name", "")
+        tournament_slug = match_details.get("tournament_slug", "")
+        stream_slot = match_details.get("station_id")
+        round_name = match_details.get("round_name", "")
+
+        p1_score = "0"
+        p2_score = "0"
+        if score and "-" in score:
+            parts = score.split("-")
+            if len(parts) == 2:
+                p1_score, p2_score = parts[0].strip(), parts[1].strip()
+
+        await save_match_result(
+            set_id=str(set_id),
+            tournament_slug=tournament_slug,
+            stream_slot=stream_slot or "",
+            p1_name=p1_name,
+            p2_name=p2_name,
+            winner=str(winner_id),
+            p1_score=p1_score,
+            p2_score=p2_score,
+            round_name=round_name,
+        )
+        await update_active_match(str(set_id), status="complete")
+
+        await add_bot_feed(
+            f"🤖 AI Referee → completed (set {set_id}, {p1_score}-{p2_score}, "
+            f"winner <@{winner_id}>). Reasoning: {reasoning}",
+            "info",
+        )
+    elif status == "conflict":
+        await message.channel.send(
+            "⚠️ **Conflict Detected!**\n"
+            "The reported scores do not match or a dispute was found. An Admin has been pinged."
+        )
+        from core.database import add_conflict, update_active_match, add_bot_feed, get_active_match
+        set_id = new_state.get("set_id")
+        if set_id:
+            await add_conflict(str(set_id), "", "")
+            await update_active_match(str(set_id), status="conflict")
+
+            cmatch = await get_active_match(str(set_id))
+            if cmatch:
+                investigate_msg = (
+                    "⚠️ **Score conflict on your match.**\n"
+                    "Please reply to **this DM** with a brief explanation of what happened "
+                    "(and a **screenshot of the final results screen** if you have one). "
+                    "Your statement goes to the tournament organizer to settle the result."
+                )
+                for did in (cmatch.get("p1_discord"), cmatch.get("p2_discord")):
+                    if did:
+                        try:
+                            player_user = await bot_instance.fetch_user(int(did))
+                            if player_user:
+                                await player_user.send(investigate_msg)
+                        except Exception:
+                            pass
+                await message.channel.send(
+                    "⚠️ Conflict flagged. I've DMed both players for their statements — "
+                    "the TO will resolve this from the dashboard."
+                )
+
+        await add_bot_feed(
+            f"⚠️ AI Referee → conflict (set {set_id}). Reasoning: {reasoning}",
+            "warn",
+        )
+
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
@@ -1179,135 +1299,7 @@ async def on_message(message):
                 )
                 
                 if new_state:
-                    status = new_state.get("match_status")
-                    reasoning = new_state.get("reasoning") or "(no reasoning provided)"
-
-                    if status == "completed":
-                        winner_id = new_state.get("winner_id")
-                        score = new_state.get("score_string")
-
-                        # ── LLM winner_id sanity check (cleanup #3) ──
-                        # The LLM is constrained by structured output but can still hallucinate
-                        # a winner_discord_id that isn't either player in the match. Before we
-                        # touch start.gg or lock the thread, confirm the ID matches one of the
-                        # two players. Mismatch → demote to "conflict" for T.O. review instead
-                        # of silently reporting a wrong winner.
-                        from core.database import (
-                            save_match_result, update_active_match, get_active_match,
-                            add_conflict, add_bot_feed,
-                        )
-                        set_id = new_state.get("set_id")
-                        match_details = await get_active_match(str(set_id)) if set_id else None
-                        valid_players = {
-                            str(match_details.get("p1_discord")) if match_details else None,
-                            str(match_details.get("p2_discord")) if match_details else None,
-                        }
-                        valid_players.discard(None)
-                        valid_players.discard("None")
-
-                        if not match_details or str(winner_id) not in valid_players:
-                            # Demote — do NOT touch start.gg with a bogus winner.
-                            await add_bot_feed(
-                                f"🚫 AI Referee rejected (set {set_id}): proposed winner "
-                                f"<{winner_id}> isn't a player in this match. Reasoning: {reasoning}",
-                                "warn",
-                            )
-                            if set_id:
-                                await add_conflict(
-                                    str(set_id),
-                                    "AI returned invalid winner_id",
-                                    f"LLM said winner=<{winner_id}>; players are {valid_players}",
-                                )
-                                await update_active_match(str(set_id), status="conflict")
-                            await message.channel.send(
-                                "⚠️ I parsed a result but the winner didn't match either player. "
-                                "Flagging for admin review."
-                            )
-                            return
-
-                        await message.channel.send(
-                            f"✅ **Match Completed!**\n"
-                            f"Winner: <@{winner_id}>\n"
-                            f"Score: {score}\n\n"
-                            "Locking this thread."
-                        )
-                        await message.channel.edit(archived=True, locked=True)
-
-                        p1_name = match_details.get("p1_name", "")
-                        p2_name = match_details.get("p2_name", "")
-                        tournament_slug = match_details.get("tournament_slug", "")
-                        stream_slot = match_details.get("station_id")
-                        round_name = match_details.get("round_name", "")
-
-                        p1_score = "0"
-                        p2_score = "0"
-                        if score and "-" in score:
-                            parts = score.split("-")
-                            if len(parts) == 2:
-                                p1_score, p2_score = parts[0].strip(), parts[1].strip()
-
-                        await save_match_result(
-                            set_id=str(set_id),
-                            tournament_slug=tournament_slug,
-                            stream_slot=stream_slot or "",
-                            p1_name=p1_name,
-                            p2_name=p2_name,
-                            winner=str(winner_id),
-                            p1_score=p1_score,
-                            p2_score=p2_score,
-                            round_name=round_name,
-                        )
-                        await update_active_match(str(set_id), status="complete")
-
-                        # Cleanup #4: surface the LLM's reasoning to bot_feed so the T.O.
-                        # has a one-line audit trail of *why* the AI Referee called it.
-                        await add_bot_feed(
-                            f"🤖 AI Referee → completed (set {set_id}, {p1_score}-{p2_score}, "
-                            f"winner <@{winner_id}>). Reasoning: {reasoning}",
-                            "info",
-                        )
-                    elif status == "conflict":
-                        await message.channel.send(
-                            f"⚠️ **Conflict Detected!**\n"
-                            "The reported scores do not match or a dispute was found. An Admin has been pinged."
-                        )
-                        # Push conflict to DB and open an AI investigation: DM both
-                        # players for their account, collect replies as the p1/p2 claims,
-                        # then summarize for the TO (see handle_conflict_statement_dm).
-                        from core.database import add_conflict, update_active_match, add_bot_feed, get_active_match
-                        set_id = new_state.get("set_id")
-                        if set_id:
-                            # Start with EMPTY claims so player DMs can be detected/stored.
-                            await add_conflict(str(set_id), "", "")
-                            await update_active_match(str(set_id), status="conflict")
-
-                            cmatch = await get_active_match(str(set_id))
-                            if cmatch:
-                                investigate_msg = (
-                                    "⚠️ **Score conflict on your match.**\n"
-                                    "Please reply to **this DM** with a brief explanation of what happened "
-                                    "(and a **screenshot of the final results screen** if you have one). "
-                                    "Your statement goes to the tournament organizer to settle the result."
-                                )
-                                for did in (cmatch.get("p1_discord"), cmatch.get("p2_discord")):
-                                    if did:
-                                        try:
-                                            player_user = await bot.fetch_user(int(did))
-                                            if player_user:
-                                                await player_user.send(investigate_msg)
-                                        except Exception:
-                                            pass
-                                await message.channel.send(
-                                    "⚠️ Conflict flagged. I've DMed both players for their statements — "
-                                    "the TO will resolve this from the dashboard."
-                                )
-
-                        # Cleanup #4: surface the AI Referee's reasoning here too —
-                        # operators need to know what triggered the conflict flag.
-                        await add_bot_feed(
-                            f"⚠️ AI Referee → conflict (set {set_id}). Reasoning: {reasoning}",
-                            "warn",
-                        )
+                    await handle_match_state_update(message, new_state, bot)
 
     await bot.process_commands(message)
 
@@ -1422,7 +1414,7 @@ async def dq_player_tool(set_id: str, player_to_dq: str):
             await update_active_match(set_id, status="complete", p1_score=p1_score, p2_score=p2_score)
             await add_bot_feed(f"🤖 Agent DQ'd {p_to_dq} in match {set_id}", "success")
             return f"Successfully DQ'd player {p_to_dq} in match {set_id}."
-        return f"Failed to disqualify player on Start.gg."
+        return "Failed to disqualify player on Start.gg."
 
 @tool
 async def force_score_tool(set_id: str, p1_score: int, p2_score: int):
@@ -1476,7 +1468,7 @@ async def reopen_match_tool(set_id: str):
         await update_active_match(set_id, status="in_progress", p1_score=0, p2_score=0)
         await add_bot_feed(f"🤖 Agent reopened match {set_id}", "success")
         return f"Successfully reopened match {set_id}."
-    return f"Failed to reset set on Start.gg."
+    return "Failed to reset set on Start.gg."
 
 hub_tools = [
     get_active_matches_tool,
@@ -1684,7 +1676,7 @@ async def handle_ws_command(cmd_text: str):
                     
             await ws_add_bot_feed(f"🤖 Hub Agent: {ai_msg}", "success")
         else:
-            await ws_add_bot_feed(f"❌ Command ignored: Hub Agent not initialized", "error")
+            await ws_add_bot_feed("❌ Command ignored: Hub Agent not initialized", "error")
             
     except Exception as e:
         print(f"WS Command execution error: {e}")
@@ -1701,7 +1693,7 @@ async def bot_ws_listener():
         try:
             async with websockets.connect(ws_url) as ws:
                 bot_ws = ws
-                await ws_add_bot_feed(f"🤖 Discord Bot is online and connected to Hub API!", "success")
+                await ws_add_bot_feed("🤖 Discord Bot is online and connected to Hub API!", "success")
                 
                 # Start a simple ping task to keep connection alive
                 async def ping_loop():
