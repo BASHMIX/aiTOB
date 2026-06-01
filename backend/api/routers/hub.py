@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Query, HTTPException
 from typing import Dict, Any
 from backend.core.database import (
-    get_bot_feed, add_bot_feed, clear_bot_feed, add_hub_command, get_all_settings,
+    get_bot_feed, add_bot_feed, clear_bot_feed, add_hub_command,
     get_setting, set_setting,
 )
 from backend.api.ws_manager import manager as hub_mgr
