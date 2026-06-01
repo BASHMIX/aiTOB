@@ -590,6 +590,31 @@ async def remove_station_overlay(station_id: str, overlay_name: str):
         await db.commit()
 
 # ── Active Matches ─────────────────────────────────────────────────────────
+async def assign_station_to_active_match(set_id: str, station_id: str) -> bool:
+    """Fast update of station_id for an existing active match."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "UPDATE active_matches SET station_id = ? WHERE set_id = ?",
+            (station_id, set_id)
+        ) as cursor:
+            await db.commit()
+            return cursor.rowcount > 0
+
+async def get_used_station_ids(exclude_set_id: str) -> set[str]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            """
+            SELECT station_id
+            FROM active_matches
+            WHERE station_id IS NOT NULL
+              AND status IN ('not_started', 'called', 'in_progress')
+              AND set_id != ?
+            """,
+            (exclude_set_id,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return {row[0] for row in rows}
+
 async def get_active_matches(tournament_slug: str = None):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row

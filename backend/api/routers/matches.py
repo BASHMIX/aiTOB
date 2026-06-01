@@ -51,21 +51,24 @@ async def _remove_provider_stream(set_id: str, tournament_slug: str) -> None:
 
 
 async def auto_assign_free_station(set_id: str):
-    from backend.core.database import get_stations, get_active_matches, upsert_active_match
+    from backend.core.database import get_stations, get_used_station_ids, assign_station_to_active_match, upsert_active_match
     stations = await get_stations()
-    active_matches = await get_active_matches()
     available_stations = [st for st in stations if not st.get("hidden")]
     if not available_stations:
         return None
-    used_station_ids = set()
-    for am in active_matches:
-        if am.get("set_id") != set_id and am.get("status") in ["not_started", "called", "in_progress"] and am.get("station_id"):
-            used_station_ids.add(am.get("station_id"))
+    used_station_ids = await get_used_station_ids(set_id)
+
+    # Pre-fetch the match once before the loop
+    this_match = await get_active_match(set_id)
+
     for st in available_stations:
         if st["id"] not in used_station_ids:
-            await upsert_active_match(set_id, station_id=st["id"])
+            # Targeted fast UPDATE instead of full PRAGMA table_info upsert
+            updated = await assign_station_to_active_match(set_id, st["id"])
+            if not updated:
+                await upsert_active_match(set_id, station_id=st["id"])
+
             # If this station is mapped to a start.gg stream, push the set onto it.
-            this_match = await get_active_match(set_id)
             await _sync_provider_stream(set_id, st["id"], (this_match or {}).get("tournament_slug") or "")
             return st["id"]
     return None
