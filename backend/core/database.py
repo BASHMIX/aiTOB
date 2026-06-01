@@ -679,6 +679,111 @@ _AUTO_ADD_STATES = {
 }
 
 
+async def _preload_sync_data(db, tournament_slug: str):
+    async with db.execute("SELECT bot_manage_limit FROM tournaments WHERE slug = ?", (tournament_slug,)) as t_cursor:
+        t_row = await t_cursor.fetchone()
+        bot_manage_limit = t_row[0] if t_row else "off"
+
+    async with db.execute("SELECT set_id, status FROM active_matches WHERE tournament_slug = ?", (tournament_slug,)) as cursor:
+        rows = await cursor.fetchall()
+        local_matches = {row[0]: row[1] for row in rows}
+
+    async with db.execute(
+        "SELECT set_id, stream_id FROM planned_streams WHERE tournament_slug = ?",
+        (tournament_slug,)
+    ) as cursor:
+        planned = {row[0]: row[1] for row in await cursor.fetchall()}
+
+    async with db.execute(
+        "SELECT id, startgg_stream_id FROM stations WHERE startgg_stream_id IS NOT NULL AND startgg_stream_id != ''"
+    ) as cursor:
+        station_by_stream = {row[1]: row[0] for row in await cursor.fetchall()}
+
+    async with db.execute(
+        "SELECT startgg_id, discord_id FROM players WHERE startgg_id IS NOT NULL AND startgg_id != ''"
+    ) as cursor:
+        discord_by_startgg = {str(row[0]): str(row[1]) for row in await cursor.fetchall()}
+
+    return bot_manage_limit, local_matches, planned, station_by_stream, discord_by_startgg
+
+async def _update_existing_match(
+    db, sid, ps, local_status, provider_status, planned, station_by_stream, discord_by_startgg,
+    p1_name, p2_name, p1_avatar, p2_avatar, p1_eid, p2_eid, round_name, match_num, phase_group
+):
+    if ps.state in _TERMINAL_STATES:
+        new_status = 'complete'
+    elif ps.state == ProviderSetState.NOT_STARTED and local_status in ('complete', 'dq'):
+        new_status = 'not_started'
+    elif provider_status and local_status == 'not_started':
+        new_status = provider_status
+    else:
+        new_status = local_status
+
+    uid1 = ps.entrant1.user_id if ps.entrant1 else None
+    p1_discord = discord_by_startgg.get(str(uid1)) if uid1 else None
+    uid2 = ps.entrant2.user_id if ps.entrant2 else None
+    p2_discord = discord_by_startgg.get(str(uid2)) if uid2 else None
+
+    await db.execute("""
+        UPDATE active_matches SET
+            p1_name=?, p2_name=?, p1_avatar=?, p2_avatar=?,
+            p1_entrant_id=COALESCE(NULLIF(p1_entrant_id,''), ?),
+            p2_entrant_id=COALESCE(NULLIF(p2_entrant_id,''), ?),
+            p1_discord=COALESCE(NULLIF(p1_discord,''), ?),
+            p2_discord=COALESCE(NULLIF(p2_discord,''), ?),
+            round_name=?, match_number=?, phase_group=?, status=?
+        WHERE set_id=?
+    """, (p1_name, p2_name, p1_avatar, p2_avatar,
+           p1_eid, p2_eid,
+           p1_discord, p2_discord,
+           round_name, match_num, str(phase_group), new_status, sid))
+
+    if sid in planned:
+        preferred_stream = planned.get(sid)
+        if preferred_stream and preferred_stream in station_by_stream:
+            await db.execute(
+                "UPDATE active_matches SET is_stream_match = 1, "
+                "station_id = COALESCE(station_id, ?) WHERE set_id = ?",
+                (station_by_stream[preferred_stream], sid)
+            )
+        else:
+            await db.execute(
+                "UPDATE active_matches SET is_stream_match = 1 WHERE set_id = ?",
+                (sid,)
+            )
+
+async def _insert_new_match(
+    db, sid, ps, tournament_slug, bot_manage_limit, planned, station_by_stream, discord_by_startgg,
+    p1_name, p2_name, p1_avatar, p2_avatar, p1_eid, p2_eid, round_name, match_num, phase_group
+):
+    should_add = ps.state in _AUTO_ADD_STATES or sid in planned
+    if should_add:
+        new_status = _PROVIDER_STATE_TO_LOCAL.get(ps.state, 'not_started')
+        bot_enabled = should_bot_manage_match(round_name, str(phase_group), bot_manage_limit)
+        is_stream = 1 if sid in planned else 0
+        station_id = None
+        if is_stream:
+            preferred_stream = planned.get(sid)
+            if preferred_stream and preferred_stream in station_by_stream:
+                station_id = station_by_stream[preferred_stream]
+
+        uid1 = ps.entrant1.user_id if ps.entrant1 else None
+        p1_discord = discord_by_startgg.get(str(uid1)) if uid1 else None
+        uid2 = ps.entrant2.user_id if ps.entrant2 else None
+        p2_discord = discord_by_startgg.get(str(uid2)) if uid2 else None
+
+        await db.execute("""
+            INSERT INTO active_matches (
+                set_id, tournament_slug, p1_name, p2_name, p1_avatar, p2_avatar,
+                p1_entrant_id, p2_entrant_id, p1_discord, p2_discord,
+                round_name, match_number, phase_group,
+                status, bot_enabled, is_stream_match, station_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (sid, tournament_slug, p1_name, p2_name, p1_avatar, p2_avatar,
+               p1_eid, p2_eid, p1_discord, p2_discord,
+               round_name, match_num, str(phase_group),
+               new_status, bot_enabled, is_stream, station_id))
+
 async def sync_active_matches(tournament_slug: str, provider_sets: list[ProviderSet]):
     """
     Synchronizes local active_matches with provider-agnostic ProviderSet objects.
@@ -688,39 +793,7 @@ async def sync_active_matches(tournament_slug: str, provider_sets: list[Provider
     is_stream_match=TRUE and (if a stream_id is set) a matching station assigned.
     """
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT bot_manage_limit FROM tournaments WHERE slug = ?", (tournament_slug,)) as t_cursor:
-            t_row = await t_cursor.fetchone()
-            bot_manage_limit = t_row[0] if t_row else "off"
-
-        async with db.execute("SELECT set_id, status FROM active_matches WHERE tournament_slug = ?", (tournament_slug,)) as cursor:
-            rows = await cursor.fetchall()
-            local_matches = {row[0]: row[1] for row in rows}
-
-        # Preload planned-stream wishlist for this tournament: {set_id: stream_id_or_None}
-        async with db.execute(
-            "SELECT set_id, stream_id FROM planned_streams WHERE tournament_slug = ?",
-            (tournament_slug,)
-        ) as cursor:
-            planned = {row[0]: row[1] for row in await cursor.fetchall()}
-
-        # Preload station-by-stream map for fast lookup during promotion.
-        async with db.execute(
-            "SELECT id, startgg_stream_id FROM stations WHERE startgg_stream_id IS NOT NULL AND startgg_stream_id != ''"
-        ) as cursor:
-            station_by_stream = {row[1]: row[0] for row in await cursor.fetchall()}
-
-        # Preload startgg_id → discord_id map so we can fill p1_discord/p2_discord
-        # at sync time. Without this, the Reachability Check is always "unreachable"
-        # because the lookup only fires inside create_match_thread, which is too late
-        # for the dispatcher's pre-call gating logic.
-        async with db.execute(
-            "SELECT startgg_id, discord_id FROM players WHERE startgg_id IS NOT NULL AND startgg_id != ''"
-        ) as cursor:
-            discord_by_startgg = {str(row[0]): str(row[1]) for row in await cursor.fetchall()}
-
-        def _resolve_discord(entrant: Optional[ProviderEntrant]) -> Optional[str]:
-            uid = entrant.user_id if entrant else None
-            return discord_by_startgg.get(str(uid)) if uid else None
+        bot_manage_limit, local_matches, planned, station_by_stream, discord_by_startgg = await _preload_sync_data(db, tournament_slug)
 
         found_sids = set()
 
@@ -728,15 +801,9 @@ async def sync_active_matches(tournament_slug: str, provider_sets: list[Provider
             sid = ps.id
             found_sids.add(sid)
 
-            # Skip INVALID (bye/DQ sets)
             if ps.state == ProviderSetState.INVALID:
                 continue
 
-            # Skip start.gg preview sets — IDs like "preview_xxxxx" reference
-            # unresolved bracket placeholders that can't be mutated. Tracking
-            # them in active_matches leads to actionable UI cards that fail at
-            # send/call time. They remain visible in the bracket view because
-            # that data comes from provider.fetch_sets directly, not from here.
             if str(sid).startswith("preview"):
                 continue
 
@@ -754,86 +821,18 @@ async def sync_active_matches(tournament_slug: str, provider_sets: list[Provider
 
             if sid in local_matches:
                 local_status = local_matches[sid]
-                # Determine new status:
-                # • If provider says COMPLETE → always sync (source of truth)
-                # • If provider says NOT_STARTED and local was complete/dq → reset scenario
-                # • If local is not_started, upgrade to provider_status
-                if ps.state in _TERMINAL_STATES:
-                    new_status = 'complete'
-                elif ps.state == ProviderSetState.NOT_STARTED and local_status in ('complete', 'dq'):
-                    new_status = 'not_started'
-                elif provider_status and local_status == 'not_started':
-                    new_status = provider_status
-                else:
-                    new_status = local_status  # keep hub-managed state
-
-                # Resolve discord IDs from current player table on every sync.
-                # COALESCE keeps an existing value (e.g. set by a later OAuth) but
-                # backfills the column the moment a player verifies.
-                p1_discord = _resolve_discord(ps.entrant1)
-                p2_discord = _resolve_discord(ps.entrant2)
-                await db.execute("""
-                    UPDATE active_matches SET
-                        p1_name=?, p2_name=?, p1_avatar=?, p2_avatar=?,
-                        p1_entrant_id=COALESCE(NULLIF(p1_entrant_id,''), ?),
-                        p2_entrant_id=COALESCE(NULLIF(p2_entrant_id,''), ?),
-                        p1_discord=COALESCE(NULLIF(p1_discord,''), ?),
-                        p2_discord=COALESCE(NULLIF(p2_discord,''), ?),
-                        round_name=?, match_number=?, phase_group=?, status=?
-                    WHERE set_id=?
-                """, (p1_name, p2_name, p1_avatar, p2_avatar,
-                       p1_eid, p2_eid,
-                       p1_discord, p2_discord,
-                       round_name, match_num, str(phase_group), new_status, sid))
-                # Promote planned-stream membership onto already-tracked sets too.
-                # (Don't downgrade — if a planned set was unplanned, the user can toggle
-                #  the active match's stream flag directly via /toggle-stream.)
-                if sid in planned:
-                    preferred_stream = planned.get(sid)
-                    if preferred_stream and preferred_stream in station_by_stream:
-                        await db.execute(
-                            "UPDATE active_matches SET is_stream_match = 1, "
-                            "station_id = COALESCE(station_id, ?) WHERE set_id = ?",
-                            (station_by_stream[preferred_stream], sid)
-                        )
-                    else:
-                        await db.execute(
-                            "UPDATE active_matches SET is_stream_match = 1 WHERE set_id = ?",
-                            (sid,)
-                        )
+                await _update_existing_match(
+                    db, sid, ps, local_status, provider_status, planned, station_by_stream, discord_by_startgg,
+                    p1_name, p2_name, p1_avatar, p2_avatar, p1_eid, p2_eid, round_name, match_num, phase_group
+                )
             else:
-                # Auto-add matches that provider has put in an active state.
-                # Also auto-add planned-stream sets even if not yet in an auto-add state
-                # so the operator's pre-planned wishlist appears as soon as it resolves.
-                should_add = ps.state in _AUTO_ADD_STATES or sid in planned
-                if should_add:
-                    new_status = _PROVIDER_STATE_TO_LOCAL.get(ps.state, 'not_started')
-                    bot_enabled = should_bot_manage_match(round_name, str(phase_group), bot_manage_limit)
-                    # Promote from planned_streams: flag for stream + pick preferred station.
-                    is_stream = 1 if sid in planned else 0
-                    station_id = None
-                    if is_stream:
-                        preferred_stream = planned.get(sid)
-                        if preferred_stream and preferred_stream in station_by_stream:
-                            station_id = station_by_stream[preferred_stream]
-                    p1_discord = _resolve_discord(ps.entrant1)
-                    p2_discord = _resolve_discord(ps.entrant2)
-                    await db.execute("""
-                        INSERT INTO active_matches (
-                            set_id, tournament_slug, p1_name, p2_name, p1_avatar, p2_avatar,
-                            p1_entrant_id, p2_entrant_id, p1_discord, p2_discord,
-                            round_name, match_number, phase_group,
-                            status, bot_enabled, is_stream_match, station_id
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (sid, tournament_slug, p1_name, p2_name, p1_avatar, p2_avatar,
-                           p1_eid, p2_eid, p1_discord, p2_discord,
-                           round_name, match_num, str(phase_group),
-                           new_status, bot_enabled, is_stream, station_id))
+                await _insert_new_match(
+                    db, sid, ps, tournament_slug, bot_manage_limit, planned, station_by_stream, discord_by_startgg,
+                    p1_name, p2_name, p1_avatar, p2_avatar, p1_eid, p2_eid, round_name, match_num, phase_group
+                )
 
-        # Remove orphans — since provider.fetch_sets retrieves all paginated sets, orphan list is complete
         for sid in list(local_matches.keys()):
             if sid not in found_sids:
-                # Orphan: set no longer in provider bracket — remove from hub
                 await db.execute("DELETE FROM active_matches WHERE set_id = ?", (sid,))
 
         await db.commit()
