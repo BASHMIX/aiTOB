@@ -171,6 +171,11 @@ async def init_db():
                 created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+
+        # Indexes for the hottest active_matches filters (tournament_slug, status).
+        # IF NOT EXISTS → idempotent; speeds up list / poll / OBS-telemetry reads.
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_active_matches_tournament_slug ON active_matches(tournament_slug)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_active_matches_status ON active_matches(status)")
         # ── Safe migrations (add new columns if missing) ─────────────────
         migrations = [
             # active_matches new columns

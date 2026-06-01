@@ -129,7 +129,11 @@ export function MatchDashboard() {
   }, [sets]);
 
   // ── Build mapped matches ─────────────────────────────────────
-  const mappedMatches: MatchData[] = [];
+  // Memoized so it rebuilds only when its inputs change; Start.gg sets are
+  // de-duplicated against local matches via an O(1) Set lookup.
+  const mappedMatches: MatchData[] = useMemo(() => {
+    const result: MatchData[] = [];
+    const localMatchIds = new Set((matches ?? []).map(m => safe(m?.set_id)));
 
   // Local matches first
   (matches ?? []).forEach(m => {
@@ -138,7 +142,7 @@ export function MatchDashboard() {
     // Skip if wrong tournament
     if (currentSlug && m.tournament_slug && m.tournament_slug !== currentSlug) return;
 
-    mappedMatches.push({
+    result.push({
       id: safe(m.match_number) || shortId(m.set_id),
       pool: safe(m.phase_group),
       round: safe(m.round_name),
@@ -173,11 +177,11 @@ export function MatchDashboard() {
   (sets ?? []).forEach(s => {
     if (!s || !s.id) return;
     const sid = safe(s.id);
-    if (matches?.some(m => safe(m?.set_id) === sid)) return;
+    if (localMatchIds.has(sid)) return;
 
     const mapped = mapStartggState(s.state);
 
-    mappedMatches.push({
+    result.push({
       id: s.identifier || shortId(s.id),
       pool: safe(s.phaseGroup?.displayIdentifier),
       round: safe(s.fullRoundText || s.round),
@@ -191,6 +195,9 @@ export function MatchDashboard() {
       raw: s,
     });
   });
+
+    return result;
+  }, [matches, sets, currentSlug, plannedStreamIds]);
 
   // ── Action handlers ────────────────────────────────────────────────
   const handleAction = async (action: string, row: any, data?: any) => {
