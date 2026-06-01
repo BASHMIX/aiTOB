@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Rnd } from 'react-rnd';
 import { useEditorStore } from '@/store/useEditorStore';
 import type { OverlayElement } from '@/store/useEditorStore';
+import { useDraggable } from '../hooks/useDraggable';
 
 function resolveCascadeDelays(elements: Record<string, any>) {
   const sorted = Object.entries(elements).sort(
@@ -50,6 +51,8 @@ interface Props {
 export function DraggableElement({ id, element, scale, onContextMenu }: Props) {
   const store = useEditorStore();
   const { updateElement, selectedId, setSelectedId, activeMatch } = store;
+
+  const { onDrag, onDragStop, onResize, onResizeStop } = useDraggable(id, updateElement);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLooping, setIsLooping] = useState(false);
@@ -277,36 +280,6 @@ export function DraggableElement({ id, element, scale, onContextMenu }: Props) {
       </div>
     );
   }
-
-  // Snap dragging stop to precise integers to prevent CSS fractional shift
-  const onDragStop = (_e: any, d: any) => {
-    updateElement(id, { x: Math.round(d.x), y: Math.round(d.y) });
-  };
-
-  // Update store coordinates in real-time while dragging to prevent controlled input snapback on re-renders
-  const onDrag = (_e: any, d: any) => {
-    updateElement(id, { x: Math.round(d.x), y: Math.round(d.y) });
-  };
-
-  // Snap resizing to precise integers to prevent coordinate drift
-  const onResizeStop = (_e: any, _direction: any, ref: any, _delta: any, position: any) => {
-    updateElement(id, {
-      width: Math.round(parseInt(ref.style.width, 10)),
-      height: Math.round(parseInt(ref.style.height, 10)),
-      x: Math.round(position.x),
-      y: Math.round(position.y)
-    });
-  };
-
-  // Update store width/height/coordinates in real-time while resizing to keep inputs and bounding box in sync
-  const onResize = (_e: any, _direction: any, ref: any, _delta: any, position: any) => {
-    updateElement(id, {
-      width: Math.round(parseInt(ref.style.width, 10)),
-      height: Math.round(parseInt(ref.style.height, 10)),
-      x: Math.round(position.x),
-      y: Math.round(position.y)
-    });
-  };
 
   // Text elements should also have width and height resizability for align-alignment bounding box
   const hasFixedSize = true; 
