@@ -41,3 +41,13 @@ def test_schema_validation_active_match():
     )
     assert resp.status_code == 422
 
+def test_cors_headers_restricted():
+    # Test an allowed origin
+    resp = client.options("/", headers={"Origin": "http://localhost:5173", "Access-Control-Request-Method": "GET"})
+    assert resp.status_code == 200
+    assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
+
+    # Test a disallowed origin
+    resp_disallowed = client.options("/", headers={"Origin": "http://evil.com", "Access-Control-Request-Method": "GET"})
+    assert resp_disallowed.status_code == 400
+    assert "access-control-allow-origin" not in resp_disallowed.headers
