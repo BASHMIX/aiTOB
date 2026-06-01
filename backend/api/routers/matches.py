@@ -1,6 +1,6 @@
-from fastapi import APIRouter, Request, HTTPException, Depends, status, Query
+from fastapi import APIRouter, HTTPException, Depends, status, Query
 import datetime
-from typing import Dict, Any, List, Optional
+from typing import Optional
 from backend.core.database import (
     get_active_matches, get_active_match, upsert_active_match, delete_active_match,
     get_all_player_overrides, add_bot_feed, add_hub_command, get_match_occupying_station,
@@ -65,8 +65,8 @@ async def auto_assign_free_station(set_id: str):
         if st["id"] not in used_station_ids:
             await upsert_active_match(set_id, station_id=st["id"])
             # If this station is mapped to a start.gg stream, push the set onto it.
-            this_match = await get_active_match(set_id)
-            await _sync_provider_stream(set_id, st["id"], (this_match or {}).get("tournament_slug") or "")
+            this_match = next((am for am in active_matches if str(am.get("set_id")) == str(set_id)), {})
+            await _sync_provider_stream(set_id, st["id"], this_match.get("tournament_slug") or "")
             return st["id"]
     return None
 
