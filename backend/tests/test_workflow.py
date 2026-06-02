@@ -36,6 +36,23 @@ async def setup_test_db():
     backend.core.database.DB_PATH = orig_db_path
     backend.core.match_state.DB_PATH = orig_db_path
 
+from unittest.mock import patch
+
+def test_load_workflow_transitions_exception(capsys):
+    """Verify load_workflow_transitions handles exceptions gracefully and logs a warning."""
+    # We test this by forcing an exception when open() is called
+    from backend.core.match_state import load_workflow_transitions
+
+    with patch("builtins.open", side_effect=Exception("mocked open error")):
+        # We need to make sure the file exists check passes so we reach the open() call
+        with patch("backend.core.match_state.os.path.exists", return_value=True):
+            # Should not raise an exception
+            load_workflow_transitions()
+
+    # Check output
+    captured = capsys.readouterr()
+    assert "Warning: Failed to load workflow configuration from docs/workflows.json: mocked open error" in captured.out
+
 def test_workflow_json_exists():
     """Verify that docs/workflows.json exists and contains correct format."""
     current_dir = os.path.dirname(os.path.abspath(__file__))
