@@ -1268,7 +1268,7 @@ async def on_message(message):
                         )
                     elif status == "conflict":
                         await message.channel.send(
-                            f"⚠️ **Conflict Detected!**\n"
+                            "⚠️ **Conflict Detected!**\n"
                             "The reported scores do not match or a dispute was found. An Admin has been pinged."
                         )
                         # Push conflict to DB and open an AI investigation: DM both

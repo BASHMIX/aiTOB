@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Query, HTTPException
 from typing import Dict, Any
 from backend.core.database import (
-    get_bot_feed, add_bot_feed, clear_bot_feed, add_hub_command, get_all_settings,
+    get_bot_feed, add_bot_feed, clear_bot_feed, add_hub_command,
     get_setting, set_setting,
 )
 from backend.api.ws_manager import manager as hub_mgr
@@ -138,12 +138,10 @@ async def api_get_status():
     """Verify operational and connection statuses for database, websockets, and credentials scope. Requires admin password authentication."""
     from backend.core.database import get_all_connections, get_all_settings
     import json
-    import datetime
     settings = await get_all_settings()
     conns = await get_all_connections()
 
     startgg_token = settings.get("STARTGG_API_TOKEN") or conns.get("STARTGG_API_TOKEN")
-    discord_token = settings.get("DISCORD_BOT_TOKEN") or conns.get("DISCORD_BOT_TOKEN")
 
     token_scope_status = settings.get("token_scope_status")
     token_scope = None

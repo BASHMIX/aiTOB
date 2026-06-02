@@ -36,6 +36,23 @@ async def setup_test_db():
     backend.core.database.DB_PATH = orig_db_path
     backend.core.match_state.DB_PATH = orig_db_path
 
+from unittest.mock import patch
+
+def test_load_workflow_transitions_exception(capsys):
+    """Verify load_workflow_transitions handles exceptions gracefully and logs a warning."""
+    # We test this by forcing an exception when open() is called
+    from backend.core.match_state import load_workflow_transitions
+
+    with patch("builtins.open", side_effect=Exception("mocked open error")):
+        # We need to make sure the file exists check passes so we reach the open() call
+        with patch("backend.core.match_state.os.path.exists", return_value=True):
+            # Should not raise an exception
+            load_workflow_transitions()
+
+    # Check output
+    captured = capsys.readouterr()
+    assert "Warning: Failed to load workflow configuration from docs/workflows.json: mocked open error" in captured.out
+
 def test_workflow_json_exists():
     """Verify that docs/workflows.json exists and contains correct format."""
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -51,6 +68,43 @@ def test_workflow_json_exists():
     assert "states" in data["match_workflow"]
     assert "registration_workflow" in data
     assert "steps" in data["registration_workflow"]
+
+def test_validate_transition(monkeypatch):
+    """Test validate_transition function with a mock dictionary."""
+    mock_transitions = {
+        "state_a": ["state_b", "state_c"],
+        "state_b": ["state_d"],
+        "state_c": [],
+        # state_d is missing from keys
+    }
+    monkeypatch.setattr("backend.core.match_state.VALID_TRANSITIONS", mock_transitions)
+
+    # Valid transitions
+    assert validate_transition("state_a", "state_b") is True
+    assert validate_transition("state_a", "state_c") is True
+    assert validate_transition("state_b", "state_d") is True
+
+    # Invalid transitions
+    assert validate_transition("state_a", "state_d") is False
+    assert validate_transition("state_b", "state_c") is False
+
+    # Backwards transition
+    assert validate_transition("state_b", "state_a") is False
+
+    # Unknown from_status
+    assert validate_transition("unknown_state", "state_b") is False
+
+    # State with no outward transitions
+    assert validate_transition("state_c", "state_a") is False
+    assert validate_transition("state_c", "any_state") is False
+
+    # Empty strings
+    assert validate_transition("", "state_b") is False
+    assert validate_transition("state_a", "") is False
+    assert validate_transition("", "") is False
+
+    # Missing from keys
+    assert validate_transition("state_d", "state_a") is False
 
 def test_transitions_rules():
     """Verify standard transition rules loaded from workflows.json."""
