@@ -1,6 +1,7 @@
-import pytest
 from fastapi.testclient import TestClient
 from backend.api.main import app
+from unittest.mock import patch
+import os
 
 client = TestClient(app)
 
@@ -41,3 +42,13 @@ def test_schema_validation_active_match():
     )
     assert resp.status_code == 422
 
+
+def test_missing_hub_password_configuration():
+    # When HUB_PASSWORD is not set in env or DB, auth must fail (no fallback)
+    with patch.dict("os.environ", {k: v for k, v in os.environ.items() if k != "HUB_PASSWORD"}, clear=True):
+        resp = client.post(
+            "/api/hub/command",
+            json={"command": "Who is currently playing?"},
+            headers={"X-Hub-Password": "admin"}
+        )
+        assert resp.status_code == 401

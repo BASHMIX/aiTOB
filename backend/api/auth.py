@@ -24,7 +24,7 @@ async def verify_hub_password(
     
     # Fallback to env if not in DB yet (for initial setup)
     if not expected_password:
-        expected_password = os.getenv("HUB_PASSWORD", "admin")
+        expected_password = os.getenv("HUB_PASSWORD")
 
     if not password or password != expected_password:
         print(f"[AUTH] Denied: received '{password}', expected '{expected_password}'")

@@ -97,7 +97,7 @@ export function LoginPage() {
         </div>
         
         <p className="text-center text-gray-500 text-[10px] mt-6 px-10 leading-relaxed italic">
-          If you don't know the password, check your <span className="text-accentYellow">.env</span> file for <span className="font-bold">HUB_PASSWORD</span>. Default is <span className="font-bold">admin</span>.
+          If you don't know the password, check your <span className="text-accentYellow">.env</span> file for <span className="font-bold">HUB_PASSWORD</span>.
         </p>
       </div>
     </div>
