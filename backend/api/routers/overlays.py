@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends
 from backend.core.database import save_overlay, get_overlays, delete_overlay
 from backend.api.auth import verify_hub_password
 from backend.api.schemas import SaveOverlayRequest

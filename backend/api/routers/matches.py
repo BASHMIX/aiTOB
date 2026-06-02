@@ -51,21 +51,24 @@ async def _remove_provider_stream(set_id: str, tournament_slug: str) -> None:
 
 
 async def auto_assign_free_station(set_id: str):
-    from backend.core.database import get_stations, get_active_matches, upsert_active_match
+    from backend.core.database import get_stations, get_used_station_ids, assign_station_to_active_match, upsert_active_match
     stations = await get_stations()
-    active_matches = await get_active_matches()
     available_stations = [st for st in stations if not st.get("hidden")]
     if not available_stations:
         return None
-    used_station_ids = set()
-    for am in active_matches:
-        if am.get("set_id") != set_id and am.get("status") in ["not_started", "called", "in_progress"] and am.get("station_id"):
-            used_station_ids.add(am.get("station_id"))
+    used_station_ids = await get_used_station_ids(set_id)
+
+    # Pre-fetch the match once before the loop (tournament_slug doesn't change on assignment)
+    this_match = await get_active_match(set_id)
+
     for st in available_stations:
         if st["id"] not in used_station_ids:
-            await upsert_active_match(set_id, station_id=st["id"])
+            # Targeted fast UPDATE instead of a full PRAGMA-based upsert
+            updated = await assign_station_to_active_match(set_id, st["id"])
+            if not updated:
+                await upsert_active_match(set_id, station_id=st["id"])
+
             # If this station is mapped to a start.gg stream, push the set onto it.
-            this_match = await get_active_match(set_id)
             await _sync_provider_stream(set_id, st["id"], (this_match or {}).get("tournament_slug") or "")
             return st["id"]
     return None
@@ -415,12 +418,17 @@ async def api_patch_active_match(set_id: str, body: PatchActiveMatchRequest):
 )
 async def api_get_conflicts():
     """Retrieve all match results that have conflicting player score claims. Accessible without authentication."""
-    from backend.core.database import get_conflicts
+    from backend.core.database import get_conflicts, get_active_matches_by_set_ids
     conflicts = await get_conflicts()
     # Enrich each conflict with the live match's player names + entrant IDs so the
     # dashboard can render named "Choose Winner" buttons that post a winner_id.
+    set_ids = list({cf.get("set_id") for cf in conflicts if cf.get("set_id")})
+    active_matches = await get_active_matches_by_set_ids(set_ids)
+    matches_by_set_id = {m["set_id"]: m for m in active_matches}
+
     for cf in conflicts:
-        m = await get_active_match(cf.get("set_id")) if cf.get("set_id") else None
+        set_id = cf.get("set_id")
+        m = matches_by_set_id.get(set_id) if set_id else None
         if m:
             cf["p1_name"] = m.get("p1_name")
             cf["p2_name"] = m.get("p2_name")

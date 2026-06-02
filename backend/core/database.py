@@ -559,6 +559,15 @@ async def delete_station(station_id: str):
         await db.commit()
 
 # ── Station Overlays ───────────────────────────────────────────────────────
+async def get_all_station_overlays():
+    """Fetch all station overlays in one query (avoids N+1 when listing stations)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM station_overlays ORDER BY station_id, sort_order"
+        ) as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
+
 async def get_station_overlays(station_id: str):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -590,6 +599,32 @@ async def remove_station_overlay(station_id: str, overlay_name: str):
         await db.commit()
 
 # ── Active Matches ─────────────────────────────────────────────────────────
+async def assign_station_to_active_match(set_id: str, station_id: str) -> bool:
+    """Fast targeted UPDATE of station_id for an existing active match."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "UPDATE active_matches SET station_id = ? WHERE set_id = ?",
+            (station_id, set_id)
+        ) as cursor:
+            await db.commit()
+            return cursor.rowcount > 0
+
+async def get_used_station_ids(exclude_set_id: str) -> set:
+    """Station IDs currently occupied by other active (not-completed) matches."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            """
+            SELECT station_id
+            FROM active_matches
+            WHERE station_id IS NOT NULL
+              AND status IN ('not_started', 'called', 'in_progress')
+              AND set_id != ?
+            """,
+            (exclude_set_id,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return {row[0] for row in rows}
+
 async def get_active_matches(tournament_slug: str = None):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -608,6 +643,17 @@ async def get_active_match(set_id: str):
         async with db.execute("SELECT * FROM active_matches WHERE set_id = ?", (set_id,)) as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else None
+
+async def get_active_matches_by_set_ids(set_ids: list[str]) -> list[dict]:
+    """Batch-fetch active matches for many set_ids in one query (avoids N+1)."""
+    if not set_ids:
+        return []
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        placeholders = ','.join('?' * len(set_ids))
+        query = f"SELECT * FROM active_matches WHERE set_id IN ({placeholders})"
+        async with db.execute(query, set_ids) as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
 
 async def get_match_occupying_station(station_id: str, exclude_set_id: str = None) -> dict | None:
     query = """
@@ -831,10 +877,10 @@ async def sync_active_matches(tournament_slug: str, provider_sets: list[Provider
                            new_status, bot_enabled, is_stream, station_id))
 
         # Remove orphans — since provider.fetch_sets retrieves all paginated sets, orphan list is complete
-        for sid in list(local_matches.keys()):
-            if sid not in found_sids:
-                # Orphan: set no longer in provider bracket — remove from hub
-                await db.execute("DELETE FROM active_matches WHERE set_id = ?", (sid,))
+        orphans = [(sid,) for sid in local_matches.keys() if sid not in found_sids]
+        if orphans:
+            # Orphan: set no longer in provider bracket — remove from hub
+            await db.executemany("DELETE FROM active_matches WHERE set_id = ?", orphans)
 
         await db.commit()
 
