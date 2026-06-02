@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Query, HTTPException
 from typing import Dict, Any
 from backend.core.database import (
-    get_bot_feed, add_bot_feed, clear_bot_feed, add_hub_command,
+    get_bot_feed, add_bot_feed, clear_bot_feed, add_hub_command, get_all_settings,
     get_setting, set_setting,
 )
 from backend.api.ws_manager import manager as hub_mgr
@@ -13,6 +13,7 @@ from backend.api.schemas import (
 
 router = APIRouter(tags=["hub"])
 
+_auto_dispatcher_cache = None
 
 @router.post(
     "/auth/verify",
@@ -138,10 +139,12 @@ async def api_get_status():
     """Verify operational and connection statuses for database, websockets, and credentials scope. Requires admin password authentication."""
     from backend.core.database import get_all_connections, get_all_settings
     import json
+    import datetime
     settings = await get_all_settings()
     conns = await get_all_connections()
 
     startgg_token = settings.get("STARTGG_API_TOKEN") or conns.get("STARTGG_API_TOKEN")
+    discord_token = settings.get("DISCORD_BOT_TOKEN") or conns.get("DISCORD_BOT_TOKEN")
 
     token_scope_status = settings.get("token_scope_status")
     token_scope = None
@@ -151,7 +154,10 @@ async def api_get_status():
         except Exception:
             pass
 
-    dispatcher_on = (await get_setting("auto_dispatch_master_switch", "off") or "off").lower() == "on"
+    global _auto_dispatcher_cache
+    if _auto_dispatcher_cache is None:
+        _auto_dispatcher_cache = (await get_setting("auto_dispatch_master_switch", "off") or "off").lower() == "on"
+    dispatcher_on = _auto_dispatcher_cache
 
     # Check the Discord Bot state from the active WebSocket connection!
     from backend.api.ws_manager import manager as ws_manager
@@ -213,6 +219,8 @@ async def api_set_dispatcher_master(body: DispatcherMasterRequest):
     """
     new_state = "on" if body.enabled else "off"
     await set_setting("auto_dispatch_master_switch", new_state)
+    global _auto_dispatcher_cache
+    _auto_dispatcher_cache = new_state == "on"
     # Clear stop-signaled flags so re-enabling re-emits Top-N notices if applicable.
     if body.enabled:
         from backend.core.database import get_tournaments
