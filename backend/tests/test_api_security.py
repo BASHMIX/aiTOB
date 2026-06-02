@@ -1,10 +1,12 @@
-import pytest
 from fastapi.testclient import TestClient
 from backend.api.main import app
 from backend.core.database import init_db
 import asyncio
 
 client = TestClient(app)
+import pytest
+from backend.api.main import app
+
 
 @pytest.fixture(autouse=True)
 def setup_db():
