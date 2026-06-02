@@ -41,3 +41,27 @@ def test_schema_validation_active_match():
     )
     assert resp.status_code == 422
 
+
+def test_cors_allows_dev_origin_and_blocks_unknown():
+    # With ALLOWED_ORIGINS unset, the dev fallback allows the Vite origin.
+    resp = client.options(
+        "/",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
+
+    # An unlisted origin must not receive an allow-origin header.
+    resp_blocked = client.options(
+        "/",
+        headers={
+            "Origin": "http://evil.com",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert resp_blocked.status_code == 400
+    assert "access-control-allow-origin" not in resp_blocked.headers
+

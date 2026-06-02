@@ -33,10 +33,29 @@ app = FastAPI(
     servers=[{"url": "http://localhost:8000", "description": "Development Server"}]
 )
 
-# CORS
+# CORS — allowed origins are environment-driven so the same code path serves
+# local dev and the public deployment.
+#   • Production: set ALLOWED_ORIGINS in .env as a comma-separated list, e.g.
+#     ALLOWED_ORIGINS=https://hub.mydomain.com,https://overlays.mydomain.com
+#   • Local dev (var unset/empty): fall back to Vite + local uvicorn origins.
+DEV_ORIGINS = [
+    "http://localhost:5173",   # Vite dev server (frontend-react)
+    "http://127.0.0.1:5173",
+    "http://localhost:8000",   # uvicorn — same-host OBS browser sources / hub.html
+    "http://127.0.0.1:8000",
+]
+
+_origins_env = os.getenv("ALLOWED_ORIGINS", "").strip()
+allowed_origins = [o.strip() for o in _origins_env.split(",") if o.strip()] or DEV_ORIGINS
+
+# Optional: allow a whole subdomain space for cloud-hosted overlays (set only if needed),
+# e.g. ALLOWED_ORIGIN_REGEX=https://.*\.mydomain\.com
+_origin_regex = os.getenv("ALLOWED_ORIGIN_REGEX") or None
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # In production, restrict this
+    allow_origins=allowed_origins,
+    allow_origin_regex=_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
