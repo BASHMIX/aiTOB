@@ -1264,14 +1264,15 @@ async def get_dispatch_candidates(tournament_slug: str, limit: int) -> list[dict
             return [dict(r) for r in await cursor.fetchall()]
 
 def should_bot_manage_match(round_name: str, phase_group: str, limit_setting: str) -> bool:
-    if not limit_setting or limit_setting == "off":
+    limit_lower = (limit_setting or "").lower()
+
+    if not limit_lower or limit_lower == "off":
         return False
-    if limit_setting == "all" or limit_setting == "on":
+    if limit_lower == "all" or limit_lower == "on":
         return True
         
     round_lower = (round_name or "").lower()
     phase_lower = (phase_group or "").lower()
-    limit_lower = (limit_setting or "").lower()
     
     if limit_lower == "top8":
         is_top8 = "top 8" in phase_lower or "top8" in phase_lower or "final" in round_lower or "semi" in round_lower or "quarter" in round_lower
