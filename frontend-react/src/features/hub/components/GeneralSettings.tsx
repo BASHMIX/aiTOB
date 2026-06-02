@@ -114,10 +114,10 @@ export function GeneralSettings() {
               <input 
                 className="bg-appDark border border-white/10 rounded-md px-4 py-2 text-sm text-white focus:border-accentYellow outline-none transition-all"
                 type="password"
-                placeholder="Keep empty to leave unchanged"
+                placeholder={env.STARTGG_API_TOKEN ? '••••••••••••••••' : 'Keep empty to leave unchanged'}
                 onChange={e => updateEnv('STARTGG_API_TOKEN', e.target.value)}
               />
-              <p className="text-[10px] text-gray-500 italic">Current: {env.STARTGG_API_TOKEN || 'Not set'}</p>
+              <p className="text-[10px] text-gray-500 italic">Current: {env.STARTGG_API_TOKEN ? '••••••••' : 'Not set'}</p>
             </div>
 
             <div className="flex flex-col gap-1.5">
@@ -275,10 +275,10 @@ export function GeneralSettings() {
               <input 
                 className="bg-appDark border border-white/10 rounded-md px-4 py-2 text-sm text-white focus:border-accentYellow outline-none"
                 type="password"
-                placeholder="Keep empty to leave unchanged"
+                placeholder={env.GEMINI_API_KEY ? '••••••••••••••••' : 'Keep empty to leave unchanged'}
                 onChange={e => updateEnv('GEMINI_API_KEY', e.target.value)}
               />
-              <p className="text-[10px] text-gray-500 italic">Current: {env.GEMINI_API_KEY || 'Not set'}</p>
+              <p className="text-[10px] text-gray-500 italic">Current: {env.GEMINI_API_KEY ? '••••••••' : 'Not set'}</p>
             </div>
 
             <div className="flex flex-col gap-1.5">
