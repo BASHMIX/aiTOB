@@ -27,6 +27,7 @@ class StartGGClient:
         self.last_request_time = 0
         self.request_count = 0
         self.rate_limit_lock = asyncio.Lock()
+        self._token_last_fetched: float = 0
 
     async def _get_http_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
@@ -39,6 +40,16 @@ class StartGGClient:
     async def close(self):
         if self._http_client and not self._http_client.is_closed:
             await self._http_client.aclose()
+
+    async def _ensure_token(self):
+        """Fetch token from DB if missing, using a 60s TTL cache to prevent DB spam."""
+        now = time.time()
+        if now - self._token_last_fetched > 60:
+            from backend.core.database import get_setting, get_connection
+            new_token = await get_setting("STARTGG_API_TOKEN") or await get_connection("STARTGG_API_TOKEN")
+            if new_token:
+                self.token = new_token
+            self._token_last_fetched = now
 
     async def _handle_rate_limit(self):
         async with self.rate_limit_lock:
@@ -61,11 +72,9 @@ class StartGGClient:
         for attempt in range(self.MAX_RETRIES + 1):
             await self._handle_rate_limit()
             
-            # Ensure we have a token (fetch from DB if needed and cache it)
-            if not self.token:
-                from backend.core.database import get_setting, get_connection
-                self.token = await get_setting("STARTGG_API_TOKEN") or await get_connection("STARTGG_API_TOKEN")
-            
+            # Ensure we have a token (fetch from DB if needed, cached with 60s TTL)
+            await self._ensure_token()
+
             if not self.token:
                 raise Exception("Start.gg API Token not configured")
 
@@ -504,10 +513,8 @@ class StartGGClient:
 
     async def probe_token_permissions(self) -> Dict[str, Any]:
         """Verify token validity and check for tournament admin / write permissions."""
-        # Ensure we have a token (fetch from DB if needed and cache it)
-        if not self.token:
-            from backend.core.database import get_setting, get_connection
-            self.token = await get_setting("STARTGG_API_TOKEN") or await get_connection("STARTGG_API_TOKEN")
+        # Ensure we have a token (fetch from DB if needed, cached with 60s TTL)
+        await self._ensure_token()
 
         if not self.token:
             return {
