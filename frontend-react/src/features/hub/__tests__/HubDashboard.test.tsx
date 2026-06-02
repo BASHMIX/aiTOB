@@ -165,7 +165,7 @@ describe('HubDashboard Integration', () => {
 
     mockedAxios.get.mockClear();
 
-    const refreshBtn = screen.getByTitle('Refresh All Data');
+    const refreshBtn = screen.getByTitle('Sync Matches with Provider');
     await user.click(refreshBtn);
 
     expect(mockedAxios.get).toHaveBeenCalledWith('/api/tournaments');

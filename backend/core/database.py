@@ -580,19 +580,23 @@ async def _update_existing_match(
     else:
         new_status = local_status
 
+    # Bracket reset on the provider drops a set back to NOT_STARTED — wipe any
+    # stale local scores during sync so the row mirrors the clean provider state.
+    reset_scores = new_status == 'not_started'
+
     uid1 = ps.entrant1.user_id if ps.entrant1 else None
     p1_discord = discord_by_startgg.get(str(uid1)) if uid1 else None
     uid2 = ps.entrant2.user_id if ps.entrant2 else None
     p2_discord = discord_by_startgg.get(str(uid2)) if uid2 else None
 
-    await db.execute("""
+    await db.execute(f"""
         UPDATE active_matches SET
             p1_name=?, p2_name=?, p1_avatar=?, p2_avatar=?,
             p1_entrant_id=COALESCE(NULLIF(p1_entrant_id,''), ?),
             p2_entrant_id=COALESCE(NULLIF(p2_entrant_id,''), ?),
             p1_discord=COALESCE(NULLIF(p1_discord,''), ?),
             p2_discord=COALESCE(NULLIF(p2_discord,''), ?),
-            round_name=?, match_number=?, phase_group=?, status=?
+            round_name=?, match_number=?, phase_group=?, status=?{', p1_score = 0, p2_score = 0' if reset_scores else ''}
         WHERE set_id=?
     """, (p1_name, p2_name, p1_avatar, p2_avatar,
            p1_eid, p2_eid,
