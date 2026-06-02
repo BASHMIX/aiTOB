@@ -1,8 +1,10 @@
-import pytest
 from fastapi.testclient import TestClient
 from backend.api.main import app
 
 client = TestClient(app)
+import pytest
+from backend.api.main import app
+
 
 def test_sensitive_endpoints_require_auth():
     # Sensitive GET reads must return 401 Unauthorized
