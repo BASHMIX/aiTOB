@@ -1,8 +1,36 @@
 import discord
 import os
-from backend.core.database import create_or_update_player, get_player
+from backend.core.database import (
+    create_or_update_player, get_player, add_hub_command, add_bot_feed,
+)
 from backend.core.image_utils import validate_avatar_quality, validate_avatar_safety, process_avatar
 from backend.bot.messages import get_msg
+
+
+async def finalize_verification(
+    discord_id: str,
+    gamer_tag: str | None = None,
+    avatar_path: str | None = None,
+):
+    """Single source of truth for completing a player's verification.
+
+    Flips ``is_verified`` on, marks the registration step ``verified``, and hands
+    role/nick assignment to the bot's hub-command worker. Both the bio-code DM
+    avatar handler and the returning-player "Keep Existing Avatar" button funnel
+    through here so the finalize semantics never drift between the two paths.
+    """
+    fields = {"is_verified": True, "registration_step": "verified"}
+    if avatar_path:
+        fields["avatar_path"] = avatar_path
+    await create_or_update_player(discord_id, **fields)
+    cmd = f"apply_verified_role {discord_id}"
+    if gamer_tag:
+        cmd += f" {gamer_tag}"
+    await add_hub_command(cmd)
+    await add_bot_feed(
+        f"✅ Verified (broadcast-ready): <{discord_id}> ({gamer_tag or '—'})",
+        "success",
+    )
 
 
 class RegistrationManager:
@@ -44,6 +72,10 @@ class RegistrationManager:
             await self._handle_cfn_step(message, discord_id, lang)
         elif step == "cfn_entered":
             await self._handle_avatar_step(message, discord_id, lang)
+        elif step == "avatar_upload":
+            # Bio-code (Path B) broadcast-avatar collection. No language/CFN was
+            # gathered on this path, so we fall back to the stored language.
+            await self._handle_broadcast_avatar_step(message, discord_id, lang)
         elif step == "avatar_uploaded":
             # Avatar was attempted but didn't finalize; nudge them to retry.
             await message.channel.send(get_msg("avatar_prompt", lang))
@@ -82,15 +114,21 @@ class RegistrationManager:
         )
         await message.channel.send(get_msg("avatar_prompt", lang))
 
-    async def _handle_avatar_step(self, message, discord_id, lang):
+    async def _process_and_save_avatar(self, message, discord_id, lang) -> str | None:
+        """Validate (quality + safety) and persist a DM'd avatar attachment.
+
+        Shared by the full-flow (Path A) avatar step and the bio-code (Path B)
+        broadcast-avatar step. Sends the appropriate error message to the player
+        and returns ``None`` on any failure; returns the saved local path on success.
+        """
         if not message.attachments:
             await message.channel.send(get_msg("avatar_prompt", lang))
-            return
+            return None
 
         attachment = message.attachments[0]
         if not any(attachment.filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg']):
             await message.channel.send(get_msg("error_quality", lang))
-            return
+            return None
 
         await message.channel.send(get_msg("safety_check", lang))
 
@@ -101,29 +139,50 @@ class RegistrationManager:
             ok_q, msg_q = validate_avatar_quality(image_bytes)
             if not ok_q:
                 await message.channel.send(f"❌ {msg_q}")
-                return
+                return None
 
             # AI Safety check
             ok_s, msg_s = await validate_avatar_safety(image_bytes)
             if not ok_s:
                 await message.channel.send(get_msg("error_safety", lang, reason=msg_s))
-                return
+                return None
 
             # Process and save
             p = await get_player(discord_id)
-            filename_id = p.get('startgg_id') or discord_id
-            saved_path = process_avatar(image_bytes, filename_id)
-
-            await create_or_update_player(
-                discord_id,
-                avatar_path=saved_path,
-                registration_step="verified",
-                is_verified=True,
-            )
-            await message.channel.send(get_msg("reg_complete", lang))
+            filename_id = (p or {}).get('startgg_id') or discord_id
+            return process_avatar(image_bytes, filename_id)
 
         except Exception as e:
             print(f"Registration Avatar Error: {e}")
             await message.channel.send(get_msg("error_generic", lang))
+            return None
+
+    async def _handle_avatar_step(self, message, discord_id, lang):
+        saved_path = await self._process_and_save_avatar(message, discord_id, lang)
+        if not saved_path:
+            return
+        await create_or_update_player(
+            discord_id,
+            avatar_path=saved_path,
+            registration_step="verified",
+            is_verified=True,
+        )
+        await message.channel.send(get_msg("reg_complete", lang))
+
+    async def _handle_broadcast_avatar_step(self, message, discord_id, lang):
+        """Bio-code (Path B): collect the broadcast avatar, then finalize.
+
+        Reached when a new (or replacing) bio-verified player DMs their photo.
+        On a passing image we save it and flip verification on via the shared
+        ``finalize_verification`` so role/nick assignment fires exactly as it
+        does for the full registration flow.
+        """
+        saved_path = await self._process_and_save_avatar(message, discord_id, lang)
+        if not saved_path:
+            return
+        player = await get_player(discord_id)
+        gamer_tag = (player or {}).get("gamer_tag")
+        await finalize_verification(discord_id, gamer_tag, saved_path)
+        await message.channel.send(get_msg("reg_complete", lang))
 
 registration_manager = RegistrationManager()

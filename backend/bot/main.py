@@ -11,7 +11,7 @@ root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 sys.path.append(root)
 sys.path.append(os.path.join(root, "backend"))
 from core.database import init_db, create_or_update_player, get_player
-from bot.registration import registration_manager
+from bot.registration import registration_manager, finalize_verification
 from bot.messages import get_msg
 from bot.agent.graph import app, process_message
 from bot.agent.hub_agent import build_hub_agent, build_hub_agent_async
@@ -130,6 +130,152 @@ async def _start_bio_verification(interaction: discord.Interaction, slug: str):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
+def _map_discord_locale(locale) -> str:
+    """Map Discord's native interaction locale to a bot-supported language.
+
+    Discord sends locales like 'en-US', 'en-GB', 'ar', etc. We only support
+    Arabic and English, so anything Arabic-ish maps to 'ar' and everything
+    else defaults to 'en'. Capturing this from `interaction.locale` replaces
+    the language-selection DM that only the OAuth (Path A) flow used to run.
+    """
+    code = str(locale or "").lower()
+    if code.startswith("ar"):
+        return "ar"
+    return "en"
+
+
+async def _avatar_display_url(avatar: str | None) -> str | None:
+    """Resolve a stored avatar (local path or URL) to a public URL for embeds.
+
+    Locally-saved avatars live under backend/api/static/avatars and are served
+    at {API_BASE_URL}/static/avatars/<file>. Already-absolute URLs pass through.
+    """
+    if not avatar:
+        return None
+    if avatar.startswith("http://") or avatar.startswith("https://"):
+        return avatar
+    from core.database import get_connection
+    api_base = await get_connection("API_BASE_URL", API_BASE_URL_ENV)
+    base = os.path.basename(avatar)
+    return f"{api_base.rstrip('/')}/static/avatars/{base}"
+
+
+class BroadcastAvatarView(discord.ui.View):
+    """Returning-player avatar gate shown after a successful bio-code match.
+
+    [Keep Existing Avatar] finalizes verification with the on-file image.
+    [Upload New Avatar] parks the player in the `avatar_upload` state so their
+    next DM'd photo is validated and saved before verification completes.
+    """
+
+    def __init__(self, discord_id: str, gamer_tag: str | None, lang: str = "en"):
+        super().__init__(timeout=600)
+        self.discord_id = str(discord_id)
+        self.gamer_tag = gamer_tag
+        self.lang = lang
+
+        keep_btn = discord.ui.Button(
+            label=get_msg("avatar_keep_btn", lang) or "Keep Existing Avatar",
+            style=discord.ButtonStyle.success,
+            custom_id="bcast_keep",
+        )
+        keep_btn.callback = self._keep
+        self.add_item(keep_btn)
+
+        new_btn = discord.ui.Button(
+            label=get_msg("avatar_upload_btn", lang) or "Upload New Avatar",
+            style=discord.ButtonStyle.primary,
+            custom_id="bcast_new",
+        )
+        new_btn.callback = self._upload_new
+        self.add_item(new_btn)
+
+    async def _guard(self, interaction: discord.Interaction) -> bool:
+        if str(interaction.user.id) != self.discord_id:
+            await interaction.response.send_message(
+                get_msg("not_your_buttons", self.lang) or "These buttons aren't for you.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def _disable_all(self, interaction: discord.Interaction):
+        for c in self.children:
+            c.disabled = True
+        try:
+            await interaction.response.edit_message(view=self)
+        except Exception:
+            pass
+
+    async def _keep(self, interaction: discord.Interaction):
+        if not await self._guard(interaction):
+            return
+        await self._disable_all(interaction)
+        await finalize_verification(self.discord_id, self.gamer_tag)
+        await interaction.followup.send(
+            get_msg("avatar_kept_done", self.lang, gamer_tag=self.gamer_tag or "")
+            or f"✅ Verified as **{self.gamer_tag}** with your existing avatar.",
+            ephemeral=True,
+        )
+
+    async def _upload_new(self, interaction: discord.Interaction):
+        if not await self._guard(interaction):
+            return
+        from core.database import create_or_update_player
+        await create_or_update_player(self.discord_id, registration_step="avatar_upload")
+        await self._disable_all(interaction)
+        await interaction.followup.send(
+            get_msg("avatar_send_new", self.lang)
+            or "📸 Sure — please DM me a new photo and I'll set it as your broadcast avatar.",
+            ephemeral=True,
+        )
+
+
+class NewAvatarPromptView(discord.ui.View):
+    """Soft-gate prompt for a brand-new bio-verified player.
+
+    The DM-upload path is still the happy route, but [Skip for Now] lets the
+    player finalize verification with NO avatar on file so they're immediately
+    safe to be auto-dispatched off-stream. They can backfill later via /avatar.
+    """
+
+    def __init__(self, discord_id: str, gamer_tag: str | None, lang: str = "en"):
+        super().__init__(timeout=600)
+        self.discord_id = str(discord_id)
+        self.gamer_tag = gamer_tag
+        self.lang = lang
+
+        skip_btn = discord.ui.Button(
+            label=get_msg("avatar_skip_btn", lang) or "Skip for Now",
+            style=discord.ButtonStyle.secondary,
+            custom_id="bcast_skip",
+        )
+        skip_btn.callback = self._skip
+        self.add_item(skip_btn)
+
+    async def _skip(self, interaction: discord.Interaction):
+        if str(interaction.user.id) != self.discord_id:
+            await interaction.response.send_message(
+                get_msg("not_your_buttons", self.lang) or "These buttons aren't for you.",
+                ephemeral=True,
+            )
+            return
+        for c in self.children:
+            c.disabled = True
+        try:
+            await interaction.response.edit_message(view=self)
+        except Exception:
+            pass
+        # Finalize WITHOUT an avatar — role applied, avatar_path left NULL.
+        await finalize_verification(self.discord_id, self.gamer_tag)
+        await interaction.followup.send(
+            get_msg("avatar_skipped", self.lang)
+            or "✅ Verification complete! Remember to upload your avatar later using "
+               "the `/avatar` command before the broadcast begins.",
+            ephemeral=True,
+        )
+
+
 @bot.tree.command(name="verify", description="Link your Discord account to your start.gg profile")
 @discord.app_commands.describe(profile="Your start.gg profile URL or slug (optional — bot will try to find you)")
 async def verify_command(interaction: discord.Interaction, profile: str | None = None):
@@ -169,7 +315,7 @@ async def verify_command(interaction: discord.Interaction, profile: str | None =
 async def verify_confirm_command(interaction: discord.Interaction):
     from core.database import (
         get_pending_verification, delete_pending_verification,
-        increment_verification_attempts, create_or_update_player, add_hub_command,
+        increment_verification_attempts, create_or_update_player,
         add_bot_feed, get_player,
     )
 
@@ -228,41 +374,104 @@ async def verify_confirm_command(interaction: discord.Interaction):
         )
         return
 
-    # Verified. Extract gamerTag + avatar and write the player row.
+    # Account control proven. Extract gamerTag and link the start.gg identity —
+    # but DO NOT finalize verification yet. For broadcast we require a player
+    # avatar on file, so we gate `is_verified` behind avatar collection below.
     sgg_user_id = str(user.get("id"))
     player_node = user.get("player") or {}
     gamer_tag = player_node.get("gamerTag")
-    images = user.get("images") or []
-    avatar = next((i.get("url") for i in images if i.get("type") == "profile"), None) or (
-        images[0].get("url") if images else None
-    )
 
+    # Path B skips the language-selection DM that Path A ran, so derive the
+    # player's language from Discord's native interaction locale instead.
+    lang_pref = _map_discord_locale(interaction.locale)
+
+    # Capture any existing broadcast avatar BEFORE writing, so we can tell a brand
+    # new player (no avatar → must upload) from a returning one (keep / replace).
+    existing_player = await get_player(discord_id)
+    existing_avatar = (existing_player or {}).get("avatar_path")
+
+    # Persist the language FIRST — before the avatar_upload state or any DM — so
+    # every subsequent prompt (and future match threads) speaks their language.
     await create_or_update_player(
         discord_id=discord_id,
         startgg_id=sgg_user_id,
         gamer_tag=gamer_tag,
-        avatar_path=avatar,
-        is_verified=True,
-        registration_step="verified",
+        preferred_language=lang_pref,
+        registration_step="avatar_upload",
     )
     await delete_pending_verification(discord_id)
-    # Hand off role/nick assignment to the existing hub-command worker.
-    await add_hub_command(f"apply_verified_role {discord_id}")
     await add_bot_feed(
-        f"✅ Bio-code verified: Discord <{discord_id}> ↔ start.gg user {sgg_user_id} ({gamer_tag})",
-        "success",
+        f"🔗 Bio-code matched: Discord <{discord_id}> ↔ start.gg user {sgg_user_id} "
+        f"({gamer_tag}, lang={lang_pref}). Awaiting broadcast avatar.",
+        "info",
     )
 
-    await interaction.followup.send(
-        f"✅ Verified as **{gamer_tag}**! You can now remove the code from your bio.",
-        ephemeral=True,
-    )
+    if existing_avatar:
+        # Returning player — confirm or replace their on-file avatar.
+        display_url = await _avatar_display_url(existing_avatar)
+        embed = discord.Embed(
+            title=get_msg("bio_confirmed_title", lang_pref),
+            description=get_msg("bio_confirmed_desc", lang_pref, gamer_tag=gamer_tag or ""),
+            color=discord.Color.blue(),
+        )
+        if display_url:
+            embed.set_image(url=display_url)
+        view = BroadcastAvatarView(discord_id, gamer_tag, lang_pref)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+    else:
+        # New player — prompt for an avatar, but SOFT-GATE it: a [Skip for Now]
+        # button finalizes verification immediately (role applied, avatar NULL) so
+        # the auto-dispatcher never DQs an otherwise-ready player. The avatar is a
+        # broadcast nicety they can add later via /avatar.
+        view = NewAvatarPromptView(discord_id, gamer_tag, lang_pref)
+        await interaction.followup.send(
+            get_msg("bio_confirmed_new", lang_pref, gamer_tag=gamer_tag or ""),
+            view=view,
+            ephemeral=True,
+        )
 
 
 @bot.tree.command(name="register", description="Alias for /verify")
 @discord.app_commands.describe(profile="Your start.gg profile URL or slug (optional)")
 async def register_command(interaction: discord.Interaction, profile: str | None = None):
     await verify_command.callback(interaction, profile)  # type: ignore[attr-defined]
+
+
+@bot.tree.command(name="avatar", description="Upload or update your broadcast avatar")
+async def avatar_command(interaction: discord.Interaction):
+    """Re-enter the broadcast-avatar upload state at any time.
+
+    Idempotent: an already-verified player can run this to backfill or replace
+    their avatar without affecting their verified status. The next photo they
+    DM the bot flows through the existing _handle_broadcast_avatar_step pipeline.
+    """
+    from core.database import get_player, create_or_update_player
+    discord_id = str(interaction.user.id)
+    player = await get_player(discord_id)
+
+    # Prefer the player's stored language; otherwise derive (and persist) it.
+    lang = (player or {}).get("preferred_language") or _map_discord_locale(interaction.locale)
+
+    # Require a linked start.gg identity — the avatar upload finalizes verification,
+    # so we don't want it to verify someone who never proved account control.
+    if not player or not player.get("startgg_id"):
+        await interaction.response.send_message(
+            get_msg("avatar_need_verify", lang)
+            or "Please run `/verify` to link your start.gg account first.",
+            ephemeral=True,
+        )
+        return
+
+    fields = {"registration_step": "avatar_upload"}
+    if not (player or {}).get("preferred_language"):
+        fields["preferred_language"] = lang
+    await create_or_update_player(discord_id, **fields)
+
+    await interaction.response.send_message(
+        get_msg("avatar_cmd_prompt", lang)
+        or "📸 Please **DM me a photo** (min 100x100, square-ish) to set as your broadcast avatar.",
+        ephemeral=True,
+    )
 
 
 # ── Gap B: LLM-driven entrant disambiguation ───────────────────────────
@@ -1470,6 +1679,72 @@ async def reopen_match_tool(set_id: str):
         return f"Successfully reopened match {set_id}."
     return "Failed to reset set on Start.gg."
 
+async def _tournament_discord_ids(tournament_slug: str) -> set[str]:
+    """Discord IDs currently appearing in a tournament's synced matches.
+
+    Used to scope the avatar reminder to one tournament. We key off the
+    sync-engine-resolved p1_discord/p2_discord on active_matches (reliable
+    linkage) rather than the entrant/user-id ambiguity in raw_data.
+    """
+    from core.database import get_active_matches
+    ids: set[str] = set()
+    for m in await get_active_matches(tournament_slug):
+        for k in ("p1_discord", "p2_discord"):
+            v = m.get(k)
+            if v:
+                ids.add(str(v))
+    return ids
+
+
+@tool
+async def remind_players_missing_avatars_tool(tournament_slug: str = None):
+    """DMs a reminder to every VERIFIED player who has not yet uploaded a broadcast avatar.
+
+    Use this when the tournament organizer asks to remind/nudge players to add their
+    avatars before a broadcast. Pass `tournament_slug` to scope the reminder to players
+    in that tournament's synced matches; omit it to remind across all tracked tournaments.
+    Returns a human-readable summary of how many were reminded and how many were unreachable.
+    """
+    from core.database import get_verified_players_missing_avatar, add_bot_feed
+
+    players = await get_verified_players_missing_avatar()
+    if not players:
+        return "All verified players already have a broadcast avatar on file — nobody to remind."
+
+    scope_label = ""
+    if tournament_slug:
+        scoped_ids = await _tournament_discord_ids(tournament_slug)
+        players = [p for p in players if str(p.get("discord_id")) in scoped_ids]
+        scope_label = f" in '{tournament_slug}'"
+        if not players:
+            return (
+                f"No verified players missing avatars are currently in synced matches{scope_label}. "
+                "(Only players already placed in the bracket can be scoped by tournament.)"
+            )
+
+    sent, failed = 0, 0
+    for p in players:
+        did = p.get("discord_id")
+        lang = p.get("preferred_language") or "en"
+        if not did:
+            continue
+        try:
+            member = await bot.fetch_user(int(did))
+            await member.send(get_msg("avatar_reminder_dm", lang))
+            sent += 1
+        except Exception:
+            # DMs closed / user not reachable — count it and keep going.
+            failed += 1
+
+    await add_bot_feed(
+        f"📨 Avatar reminder DMed to {sent} player(s){scope_label} ({failed} unreachable).",
+        "info",
+    )
+    return (
+        f"Reminded {sent} of {len(players)} verified player(s) missing avatars{scope_label}. "
+        f"{failed} could not be DMed (DMs likely closed)."
+    )
+
 hub_tools = [
     get_active_matches_tool,
     get_players_tool,
@@ -1477,7 +1752,8 @@ hub_tools = [
     post_announcement_tool,
     dq_player_tool,
     force_score_tool,
-    reopen_match_tool
+    reopen_match_tool,
+    remind_players_missing_avatars_tool,
 ]
 hub_agent = build_hub_agent(hub_tools)  # fast-path: uses env key if present
 

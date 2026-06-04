@@ -45,12 +45,16 @@
         "index": 3,
         "description": "Player entered their CFN (Capcom Fighter Network) ID."
       },
-      "avatar_uploaded": {
+      "avatar_upload": {
         "index": 4,
+        "description": "Bio-code (Path B) verified; awaiting broadcast avatar upload or confirmation before final verification."
+      },
+      "avatar_uploaded": {
+        "index": 5,
         "description": "Player uploaded their avatar image."
       },
       "verified": {
-        "index": 5,
+        "index": 6,
         "description": "Player is fully verified and registration is complete."
       }
     }

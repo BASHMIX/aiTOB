@@ -72,6 +72,21 @@ async def get_player(discord_id: str):
             row = await cursor.fetchone()
             return dict(row) if row else None
 
+async def get_verified_players_missing_avatar() -> list[dict]:
+    """Verified players who still have no broadcast avatar on file.
+
+    Backs the Hub AI 'remind players to upload avatars' tool. Returns the
+    fields needed to DM each player in their own language.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT discord_id, startgg_id, gamer_tag, preferred_language "
+            "FROM players "
+            "WHERE is_verified = 1 AND (avatar_path IS NULL OR avatar_path = '')"
+        ) as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
+
 # ── Overlays ───────────────────────────────────────────────────────────────
 async def save_overlay(name: str, config: str):
     if not isinstance(config, str):
