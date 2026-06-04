@@ -1,6 +1,7 @@
 from fastapi import Request, HTTPException, Depends, status
 from fastapi.security import APIKeyHeader, HTTPBearer, HTTPAuthorizationCredentials
 import os
+import secrets
 from backend.core.database import get_setting
 
 # Support both X-Hub-Password and standard Authorization: Bearer
@@ -26,8 +27,8 @@ async def verify_hub_password(
     if not expected_password:
         expected_password = os.getenv("HUB_PASSWORD", "admin")
 
-    if not password or password != expected_password:
-        print(f"[AUTH] Denied: received '{password}', expected '{expected_password}'")
+    if not password or not secrets.compare_digest(password, expected_password):
+        print("[AUTH] Denied: Invalid Hub Password attempt")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid Hub Password",
