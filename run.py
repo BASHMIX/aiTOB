@@ -45,18 +45,24 @@ def kill_port(port: int):
     """Kill any process occupying the given port."""
     try:
         import psutil
-        for proc in psutil.process_iter(['pid', 'name']):
-            try:
-                # Use net_connections() method instead of 'connections' attribute in as_dict
-                for conn in proc.connections(kind='inet'):
-                    if conn.laddr.port == port:
-                        cprint(YELLOW, "SYS", f"Killing existing process {proc.info['name']} on port {port} (PID {proc.pid})")
-                        proc.kill()
-            except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError):
-                pass
-
     except ImportError:
         cprint(RED, "SYS", "psutil not installed — skipping port cleanup")
+        return
+
+    for proc in psutil.process_iter(['pid', 'name']):
+        try:
+            # psutil 6.0 renamed Process.connections() -> Process.net_connections().
+            # Try the new name first, fall back to the old one for older psutil.
+            try:
+                conns = proc.net_connections(kind='inet')
+            except (AttributeError, TypeError):
+                conns = proc.connections(kind='inet')
+            for conn in conns:
+                if conn.laddr and conn.laddr.port == port:
+                    cprint(YELLOW, "SYS", f"Killing existing process {proc.info['name']} on port {port} (PID {proc.pid})")
+                    proc.kill()
+        except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError):
+            pass
 
 # ── Process Logging Thread ────────────────────────────────────────────────
 def stream_output(proc: subprocess.Popen, prefix: str, color: str):
@@ -134,18 +140,28 @@ signal.signal(signal.SIGTERM, signal_handler)
 
 # ── Main ──────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    # Lightweight flag parsing — keep the script dependency-free.
+    no_frontend = "--no-frontend" in sys.argv
+
     cprint(GREEN, "SYS", "Starting AI Tournament Organizer…")
     cprint(GREEN, "SYS", f"Python: {PYTHON}")
     cprint(GREEN, "SYS", f"Root:   {ROOT}")
+    if no_frontend:
+        cprint(YELLOW, "SYS", "Frontend (VITE) disabled via --no-frontend")
     print()
 
-    # Kill existing processes on API port
+    # Select services (optionally skipping the React dev server).
+    services = [s for s in SERVICES if not (no_frontend and s["name"] == "VITE")]
+
+    # Free the ports we're about to bind.
     kill_port(8000)
+    if not no_frontend:
+        kill_port(5173)
 
     pids = {}
     threads = []
 
-    for svc in SERVICES:
+    for svc in services:
         cprint(svc["color"], svc["name"], f"Starting: {' '.join(svc['cmd'][-2:])}")
         try:
             proc = subprocess.Popen(
