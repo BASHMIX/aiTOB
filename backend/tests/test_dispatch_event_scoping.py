@@ -15,6 +15,7 @@ from backend.core.database import (
     get_dispatch_eligible_events, count_active_dispatched,
     count_remaining_event_matches, get_dispatch_candidates,
     get_available_stream_station, create_station, update_station,
+    resolve_dispatch_budget,
 )
 
 TEST_DB_PATH = "backend/core/test_dispatch_event_scoping.sqlite"
@@ -142,6 +143,27 @@ async def test_eligible_events_lists_each_event(setup_test_db):
     assert by_event[EVENT_T8]["auto_dispatch_concurrency"] == 3
     assert by_event[EVENT_T8]["auto_dispatch_stop_at"] == 4
     assert by_event[EVENT_SF6]["event_name"] == "SF6"
+
+
+# ── stop_at = 0 must be honored (falsy-zero regression) ───────────────────
+def test_resolve_dispatch_budget_honors_explicit_zero():
+    # The bug: stop_at=0 became 8 via `int(value or 8)`.
+    assert resolve_dispatch_budget({"auto_dispatch_concurrency": 2, "auto_dispatch_stop_at": 0}) == (2, 0)
+    # None (genuinely unset) still falls back to the defaults.
+    assert resolve_dispatch_budget({}) == (1, 8)
+    # Concurrency is clamped to at least 1.
+    assert resolve_dispatch_budget({"auto_dispatch_concurrency": 0, "auto_dispatch_stop_at": 5}) == (1, 5)
+
+
+@pytest.mark.asyncio
+async def test_eligible_events_round_trips_stop_at_zero(setup_test_db):
+    # The dispatcher reads stop_at live from the DB — a TO-set 0 must survive.
+    await _arm_tournament(concurrency=1, stop_at=0)
+    await _seed_candidate("t8_1", EVENT_T8, "Tekken 8")
+
+    events = await get_dispatch_eligible_events()
+    assert events and events[0]["auto_dispatch_stop_at"] == 0
+    assert resolve_dispatch_budget(events[0]) == (1, 0)
 
 
 @pytest.mark.asyncio

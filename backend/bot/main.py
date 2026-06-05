@@ -792,6 +792,7 @@ async def auto_dispatch_pool_matches():
         get_setting, get_dispatch_eligible_events,
         count_active_dispatched, count_remaining_event_matches,
         get_dispatch_candidates, add_hub_command, add_bot_feed,
+        resolve_dispatch_budget,
     )
 
     # Master kill switch — overrides every per-tournament setting.
@@ -810,8 +811,9 @@ async def auto_dispatch_pool_matches():
         event_name = t.get("event_name") or ""
         # A readable tag for the bot feed — game name when known, else a short id.
         evt_tag = event_name or (f"event {event_id}" if event_id else "")
-        concurrency = max(1, int(t.get("auto_dispatch_concurrency") or 1))
-        stop_at = max(0, int(t.get("auto_dispatch_stop_at") or 8))
+        # Read fresh from the DB each tick (no cache) and honor an explicit 0 —
+        # `int(value or 8)` was treating a TO-set stop_at=0 as the default 8.
+        concurrency, stop_at = resolve_dispatch_budget(t)
 
         # Cooldown — prevents back-to-back dispatches from one tick if the loop
         # interval is reduced. The 30s gap also gives players time to react.

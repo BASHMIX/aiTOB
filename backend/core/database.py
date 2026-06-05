@@ -1092,6 +1092,20 @@ async def update_hub_command_status(command_id: int, status: str):
 
 
 # ── Auto-Dispatcher Queries ──────────────────────────────────────────────
+def resolve_dispatch_budget(row: dict) -> tuple[int, int]:
+    """Return (concurrency, stop_at) for a tournament row, honoring an explicit 0.
+
+    A TO can legitimately set stop_at=0 ("auto-dispatch all the way to the final").
+    The old `int(value or 8)` form treated that 0 as falsy and silently restored
+    the default 8 — so only a genuinely missing (None) value falls back here.
+    """
+    conc = row.get("auto_dispatch_concurrency")
+    stop = row.get("auto_dispatch_stop_at")
+    concurrency = max(1, int(conc if conc is not None else 1))
+    stop_at = max(0, int(stop if stop is not None else 8))
+    return concurrency, stop_at
+
+
 async def get_dispatch_eligible_tournaments() -> list[dict]:
     """Tournaments with the auto-dispatcher armed."""
     async with aiosqlite.connect(DB_PATH) as db:
