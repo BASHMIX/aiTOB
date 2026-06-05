@@ -1498,22 +1498,47 @@ async def on_message(message):
 
     # Check if it's a Thread
     if isinstance(message.channel, discord.Thread):
-        config = {"configurable": {"thread_id": str(message.channel.id)}}
-        state_snapshot = app.get_state(config)
-        
-        if state_snapshot.values:
-            current_status = state_snapshot.values.get("match_status")
-            
-            if current_status not in ["completed", "conflict", "dq"]:
-                new_state = await process_message(
-                    thread_id=message.channel.id,
-                    author_id=message.author.id,
-                    author_name=message.author.name,
-                    message_content=message.content
+        try:
+            config = {"configurable": {"thread_id": str(message.channel.id)}}
+            state_snapshot = app.get_state(config)
+
+            if state_snapshot.values:
+                current_status = state_snapshot.values.get("match_status")
+
+                # Gate: do NOT accept results until both players have checked in.
+                # 'waiting_for_checkin' chat is ignored by the referee; terminal
+                # states are likewise skipped.
+                inert = ["waiting_for_checkin", "completed", "conflict", "dq"]
+                if current_status not in inert:
+                    new_state = await process_message(
+                        thread_id=message.channel.id,
+                        author_id=message.author.id,
+                        author_name=message.author.name,
+                        message_content=message.content
+                    )
+
+                    if new_state:
+                        await handle_match_state_update(message, new_state, bot)
+        except Exception as e:
+            # Never let a referee error kill the handler or desync the Hub.
+            try:
+                from core.database import add_bot_feed
+                await add_bot_feed(
+                    f"❌ AI Referee error in thread {message.channel.id}: {e}", "error"
                 )
-                
-                if new_state:
-                    await handle_match_state_update(message, new_state, bot)
+                await message.channel.send(
+                    "⚠️ I hit an error processing that — a tournament organizer has been notified."
+                )
+            except Exception:
+                pass
+        finally:
+            # Always push a Hub refresh so the dashboard reflects current state
+            # even if the referee path raised partway through.
+            try:
+                from backend.api.ws_manager import manager as _hub_mgr
+                await _hub_mgr.broadcast({"type": "match_update"})
+            except Exception:
+                pass
 
     await bot.process_commands(message)
 
