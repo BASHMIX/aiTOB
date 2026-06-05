@@ -348,6 +348,16 @@ async def get_stations():
         async with db.execute("SELECT * FROM stations ORDER BY id") as cursor:
             return [dict(r) for r in await cursor.fetchall()]
 
+async def get_station(station_id: str) -> dict | None:
+    """Single station row (incl. is_stream_station / room_* / event_id), or None."""
+    if not station_id:
+        return None
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM stations WHERE id = ?", (station_id,)) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
 async def create_station(station_id: str, name: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("INSERT INTO stations (id, name) VALUES (?, ?)", (station_id, name))

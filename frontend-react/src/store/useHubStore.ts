@@ -53,6 +53,8 @@ interface Match {
 interface Station {
   id: string;
   name: string;
+  is_stream_station?: boolean;
+  event_id?: string;
   overlays?: { overlay_name: string }[];
 }
 

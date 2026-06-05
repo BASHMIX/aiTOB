@@ -191,7 +191,7 @@ interface MatchCardProps {
   autoDqEnabled: boolean;
   onAction: (action: string, row: any, data?: any) => void;
   onToggleStream: (setId: string, currentVal: boolean) => void;
-  stations?: { id: string; name: string }[];
+  stations?: { id: string; name: string; is_stream_station?: boolean }[];
 }
 
 function DQMenu({ match, onAction, onOpenChange }: { match: MatchData; onAction: MatchCardProps['onAction']; onOpenChange?: (open: boolean) => void }) {
@@ -277,11 +277,13 @@ function StationMenu({ match, stations, onAction, onOpenChange }: { match: Match
           {stations.length === 0 && <div className="px-3 py-2 text-[10px] text-gray-600 italic">No stations configured</div>}
           {stations.map((s) => {
             const isOccupied = occupiedStationIds.has(s.id);
+            const isStream = !!s.is_stream_station;
             return (
               <button
                 key={s.id}
                 disabled={isOccupied}
                 onClick={() => { setOpen(false); onAction("assignStation", match, s.id); }}
+                title={isStream ? "Stream station — assigning flags this match for stream" : undefined}
                 className={`w-full text-left px-3 py-1.5 text-xs transition-colors rounded flex items-center justify-between
                   ${isOccupied
                     ? "text-red-400/60 bg-red-950/5 cursor-not-allowed border border-red-900/10 mb-0.5"
@@ -290,7 +292,10 @@ function StationMenu({ match, stations, onAction, onOpenChange }: { match: Match
                       : "text-gray-200 hover:bg-[var(--foreground-5)]"
                   }`}
               >
-                <span className="truncate pr-1">{s.name}</span>
+                <span className="truncate pr-1 flex items-center gap-1">
+                  {isStream && <span className="flex-shrink-0" title="Stream station">📺</span>}
+                  <span className="truncate">{s.name}</span>
+                </span>
                 {isOccupied && <span className="text-[8px] leading-none text-red-500 font-extrabold px-1 py-0.5 rounded bg-red-500/10 border border-red-500/20 flex-shrink-0">OCCUPIED</span>}
               </button>
             );

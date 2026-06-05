@@ -4,7 +4,8 @@ from typing import Dict, Any, List, Optional
 from backend.core.database import (
     get_active_matches, get_active_match, upsert_active_match, delete_active_match,
     get_all_player_overrides, add_bot_feed, add_hub_command, get_match_occupying_station,
-    get_station_stream_id,
+    get_station_stream_id, get_station, get_available_stream_station,
+    add_planned_stream, remove_planned_stream,
 )
 from backend.core.providers.registry import get_provider_for_tournament
 from backend.core.score_reporting import report_score_to_provider
@@ -48,30 +49,6 @@ async def _remove_provider_stream(set_id: str, tournament_slug: str) -> None:
         await provider.remove_stream(set_id)
     except Exception as e:
         await add_bot_feed(f"removeStream error for {set_id}: {e}", "warn")
-
-
-async def auto_assign_free_station(set_id: str):
-    from backend.core.database import get_stations, get_used_station_ids, assign_station_to_active_match, upsert_active_match
-    stations = await get_stations()
-    available_stations = [st for st in stations if not st.get("hidden")]
-    if not available_stations:
-        return None
-    used_station_ids = await get_used_station_ids(set_id)
-
-    # Pre-fetch the match once before the loop (tournament_slug doesn't change on assignment)
-    this_match = await get_active_match(set_id)
-
-    for st in available_stations:
-        if st["id"] not in used_station_ids:
-            # Targeted fast UPDATE instead of a full PRAGMA-based upsert
-            updated = await assign_station_to_active_match(set_id, st["id"])
-            if not updated:
-                await upsert_active_match(set_id, station_id=st["id"])
-
-            # If this station is mapped to a start.gg stream, push the set onto it.
-            await _sync_provider_stream(set_id, st["id"], (this_match or {}).get("tournament_slug") or "")
-            return st["id"]
-    return None
 
 
 @router.get(
@@ -198,8 +175,14 @@ async def api_call_match(set_id: str):
     if result.get("error"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result["error"])
     
-    if m.get("is_stream_match"):
-        await auto_assign_free_station(set_id)
+    # A stream-flagged match may only be routed to a *stream* station bound to its
+    # event (never a random free setup). If none is free, leave it for the TO /
+    # dispatcher to place — don't fall back to a non-stream station.
+    if m.get("is_stream_match") and not m.get("station_id"):
+        station = await get_available_stream_station(m.get("event_id") or "")
+        if station:
+            await upsert_active_match(set_id, station_id=station["id"])
+            await _sync_provider_stream(set_id, station["id"], m.get("tournament_slug") or "")
 
     called_at = datetime.datetime.utcnow().isoformat()
     await add_hub_command(f"call_match {set_id}")
@@ -240,16 +223,35 @@ async def api_toggle_stream(set_id: str, body: ToggleStreamRequest):
     m = await get_active_match(set_id)
     if not m:
          raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found")
+    tournament_slug = m.get("tournament_slug") or ""
     await upsert_active_match(set_id, is_stream_match=body.is_stream_match)
     if body.is_stream_match:
-        if m.get("status") in ["called", "in_progress"] and not m.get("station_id"):
-            await auto_assign_free_station(set_id)
-        else:
-            # Station already assigned — try to push onto provider stream queue too.
-            await _sync_provider_stream(set_id, m.get("station_id"), m.get("tournament_slug") or "")
+        # Rule A: a flagged match may only ever sit on a *stream* station bound to
+        # its own event. For not_started matches we leave assignment to the
+        # green-room dispatcher (get_available_stream_station at dispatch time).
+        # For matches already on the wire with no station, route to a free stream
+        # station now; never grab a random free setup.
+        if m.get("station_id"):
+            # Station already assigned — push onto the provider stream queue too.
+            await _sync_provider_stream(set_id, m.get("station_id"), tournament_slug)
+        elif m.get("status") in ["called", "in_progress"]:
+            station = await get_available_stream_station(m.get("event_id") or "")
+            if station:
+                await upsert_active_match(set_id, station_id=station["id"])
+                await _sync_provider_stream(set_id, station["id"], tournament_slug)
+            else:
+                await add_bot_feed(
+                    f"📺 Match {set_id} flagged for stream but no free stream station "
+                    f"for its event — waiting for the dispatcher to route it.", "info"
+                )
     else:
-        # Toggling off — pull from provider stream queue (best effort).
-        await _remove_provider_stream(set_id, m.get("tournament_slug") or "")
+        # Rule C: flag OFF ⟹ strictly un-stream it — pull from the provider queue,
+        # drop the planned-stream wishlist entry, and unassign the station so it
+        # can never be left orphaned on a station it's no longer destined for.
+        await _remove_provider_stream(set_id, tournament_slug)
+        await remove_planned_stream(set_id)
+        if m.get("station_id"):
+            await upsert_active_match(set_id, station_id=None)
     await hub_mgr.broadcast({"type": "match_update"})
     return MessageResponse(message="Stream toggle updated", ok=body.is_stream_match)
 
@@ -387,8 +389,12 @@ async def api_delete_active_match(set_id: str):
 )
 async def api_patch_active_match(set_id: str, body: PatchActiveMatchRequest):
     """Safely update active match configurations (scores, station, bot status) using typed parameters. Requires admin password auth."""
-    d = body.model_dump(exclude_none=True)
-    station_id = d.get("station_id")
+    # exclude_unset (not exclude_none) so an explicit `station_id: null` from the
+    # "Unassign" dropdown is preserved and actually clears the station. Fields the
+    # client didn't send are still omitted.
+    d = body.model_dump(exclude_unset=True)
+    station_provided = "station_id" in d
+    station_id = d.get("station_id")  # may be None when explicitly cleared
     if station_id:
         occupying = await get_match_occupying_station(station_id, exclude_set_id=set_id)
         if occupying:
@@ -398,14 +404,40 @@ async def api_patch_active_match(set_id: str, body: PatchActiveMatchRequest):
             )
     await upsert_active_match(set_id, **d)
 
-    # Assigning a station to a CALLED match elevates it straight to in_progress:
-    # transition_match stamps started_at (so the live timer ticks up) and best-effort
-    # tells the provider the set is now playing. Routed through the state machine
-    # rather than a raw status write so local matches with no start.gg set still work.
-    if station_id:
+    # ── Strict stream-flag ↔ station coupling (only when station was touched) ──
+    if station_provided:
         m = await get_active_match(set_id)
-        if m and m.get("status") == "called":
-            await transition_match(set_id, "in_progress")
+        slug = (m or {}).get("tournament_slug") or ""
+
+        if station_id:
+            # Assigning a station to a CALLED match elevates it straight to
+            # in_progress: transition_match stamps started_at (so the live timer
+            # ticks up) and best-effort tells the provider the set is now playing.
+            # Routed through the state machine rather than a raw status write so
+            # local matches with no start.gg set still work.
+            if m and m.get("status") == "called":
+                await transition_match(set_id, "in_progress")
+                m = await get_active_match(set_id)
+
+            station = await get_station(station_id)
+            if station and station.get("is_stream_station"):
+                # Rule B: a stream station ⟹ this IS a stream match. Flag it on,
+                # mirror it onto the planned-stream wishlist (keeps the Hub's Play
+                # button coupled + toggle-off-able), and push to the provider queue.
+                if not (m or {}).get("is_stream_match"):
+                    await upsert_active_match(set_id, is_stream_match=True)
+                    await add_planned_stream(set_id, slug)
+                await _sync_provider_stream(set_id, station_id, slug)
+            else:
+                # Decision 1: forcing a stream match onto a *non-stream* setup means
+                # the TO is pushing it off-stream to save time — strictly un-flag it
+                # and pull it from the provider queue / wishlist.
+                if (m or {}).get("is_stream_match"):
+                    await upsert_active_match(set_id, is_stream_match=False)
+                    await remove_planned_stream(set_id)
+                    await _remove_provider_stream(set_id, slug)
+        # else: station explicitly cleared (Unassign). Decision 2: keep the stream
+        # flag ON so the dispatcher can re-route the match to another stream station.
 
     await hub_mgr.broadcast({"type": "match_update"})
     return MessageResponse(message="Updated", ok=True)
