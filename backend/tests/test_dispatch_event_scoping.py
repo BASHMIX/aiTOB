@@ -89,6 +89,22 @@ async def test_candidates_without_event_returns_all(setup_test_db):
     assert {m["set_id"] for m in everything} == {"t8_1", "sf6_1"}
 
 
+@pytest.mark.asyncio
+async def test_stream_flagged_match_is_dispatchable(setup_test_db):
+    # workflows.json: a stream-flagged match flows not_started → called like any
+    # other (binding happens later, at in_progress). It must NOT be excluded just
+    # because the Hub also added it to the planned_streams wishlist.
+    from backend.core.database import add_planned_stream
+    await _seed_candidate("stream_1", EVENT_T8, "Tekken 8", is_stream_match=1)
+    await add_planned_stream("stream_1", SLUG)
+
+    cands = await get_dispatch_candidates(SLUG, limit=10, event_id=EVENT_T8)
+    ids = {m["set_id"] for m in cands}
+    assert "stream_1" in ids
+    # And dispatch does NOT pre-bind a station — that's deferred to in_progress.
+    assert next(m for m in cands if m["set_id"] == "stream_1")["station_id"] in (None, "")
+
+
 # ── Concurrency / Top-N counts ────────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_active_dispatched_scoped_per_event(setup_test_db):

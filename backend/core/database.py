@@ -1144,8 +1144,14 @@ async def get_dispatch_candidates(tournament_slug: str, limit: int, event_id: st
 
     Excludes:
       - matches with TBD/missing entrants (upstream bracket unresolved)
-      - matches that are already planned for stream (those wait for the TO / featured queue)
       - anything already called or in progress (those are counted toward concurrency)
+
+    Stream-flagged matches are deliberately INCLUDED: the auto-dispatcher moves
+    them not_started → called like any other match (workflows.json), and the
+    stream station is bound later, at the called → in_progress transition (the
+    `on_stream` overlay). Preview/unready featured picks are still excluded by
+    the entrant/TBD guards above.
+
     When event_id is given, candidates are scoped to that event so a multi-game
     tournament never cross-routes (pass '' to match legacy/untagged rows).
     Orders by phase_group then match_number for predictable pool progression.
@@ -1159,11 +1165,8 @@ async def get_dispatch_candidates(tournament_slug: str, limit: int, event_id: st
           AND p2_entrant_id IS NOT NULL AND p2_entrant_id != ''
           AND p1_name IS NOT NULL AND p1_name != '' AND p1_name != 'TBD'
           AND p2_name IS NOT NULL AND p2_name != '' AND p2_name != 'TBD'
-          AND set_id NOT IN (
-            SELECT set_id FROM planned_streams WHERE tournament_slug = ?
-          )
     """
-    params: list = [tournament_slug, tournament_slug]
+    params: list = [tournament_slug]
     if event_id is not None:
         sql += " AND COALESCE(event_id, '') = ?"
         params.append(event_id)

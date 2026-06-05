@@ -781,8 +781,7 @@ async def auto_dispatch_pool_matches():
     from core.database import (
         get_setting, get_dispatch_eligible_events,
         count_active_dispatched, count_remaining_event_matches,
-        get_dispatch_candidates, get_available_stream_station,
-        update_active_match, add_hub_command, add_bot_feed,
+        get_dispatch_candidates, add_hub_command, add_bot_feed,
     )
 
     # Master kill switch — overrides every per-tournament setting.
@@ -841,28 +840,21 @@ async def auto_dispatch_pool_matches():
         for m in candidates:
             set_id = m["set_id"]
 
-            # Green-room routing: a stream-flagged match may only go to an idle
-            # stream station bound to its event. If none is free, leave it for a
-            # later tick rather than calling it to a non-stream / wrong-game setup.
-            if m.get("is_stream_match"):
-                station = await get_available_stream_station(event_id)
-                if not station:
-                    continue
-                await update_active_match(set_id, station_id=station["id"])
-                tag = f" [STREAM → {station.get('name') or station['id']}]"
-            else:
-                tag = f"{(' [' + evt_tag + ']') if evt_tag else ''}"
-
+            # The dispatcher only moves a match not_started → called (it opens the
+            # Discord thread for check-in). Stream matches flow through the SAME
+            # path — no station is bound here. Station binding is the `on_stream`
+            # overlay, realized strictly at the called → in_progress transition
+            # (see match_state.transition_match), per workflows.json.
+            stream_tag = " 📺" if m.get("is_stream_match") else ""
+            evt = f" [{evt_tag}]" if evt_tag else ""
             await add_hub_command(f"call_match {set_id}")
             await add_bot_feed(
-                f"🤖 Auto-dispatched{tag}: {m.get('p1_name')} vs {m.get('p2_name')} "
+                f"🤖 Auto-dispatched{evt}{stream_tag}: {m.get('p1_name')} vs {m.get('p2_name')} "
                 f"({m.get('round_name') or m.get('phase_group') or 'pool'})",
                 "info"
             )
             dispatched_any = True
 
-        # Only start the cooldown if we actually put something on the wire —
-        # otherwise a stream match with no free station would stall the whole event.
         if dispatched_any:
             _DISPATCH_LAST_TICK[(slug, event_id)] = now
 
@@ -1129,7 +1121,7 @@ async def report(ctx, p1_score: int, p2_score: int):
         await ctx.send(f"Failed to report scores: {result.error_message}")
         return
 
-    await update_active_match(set_id, status="complete")
+    await update_active_match(set_id, status="complete", station_id=None)
     await add_bot_feed(f"📝 Match {set_id} reported via Discord: {p1_score}-{p2_score}", "info")
     await ctx.send(f"✅ Score reported to provider: {p1_score}-{p2_score}")
     await ctx.channel.edit(archived=True, locked=True)
@@ -1287,7 +1279,7 @@ async def handle_score_report_dm(message: discord.Message):
             provider=provider
         )
         if result.success:
-            await update_active_match(set_id, status="complete", p1_score=p1_score, p2_score=p2_score)
+            await update_active_match(set_id, status="complete", p1_score=p1_score, p2_score=p2_score, station_id=None)
             await add_bot_feed(f"🤖 Bot auto-finished match {set_id} ({match['p1_name']} {p1_score} - {p2_score} {match['p2_name']}) via player DM", "success")
             await message.channel.send(f"✅ Match score reported and completed: {p1_score} - {p2_score}. Thanks!")
             thread_id = match.get("discord_thread_id")
@@ -1463,7 +1455,7 @@ async def handle_match_state_update(message: discord.Message, new_state: dict, b
             p2_score=p2_score,
             round_name=round_name,
         )
-        await update_active_match(str(set_id), status="complete")
+        await update_active_match(str(set_id), status="complete", station_id=None)
 
         await add_bot_feed(
             f"🤖 AI Referee → completed (set {set_id}, {p1_score}-{p2_score}, "
@@ -1532,10 +1524,9 @@ async def on_message(message):
                 current_status = state_snapshot.values.get("match_status")
 
                 # Gate: do NOT accept results until both players have checked in.
-                # The check-in states ('waiting_for_checkin' and the stream
-                # green-room 'waiting_for_stream_checkin') are ignored by the
-                # referee; terminal states are likewise skipped.
-                inert = ["waiting_for_checkin", "waiting_for_stream_checkin", "completed", "conflict", "dq"]
+                # 'waiting_for_checkin' (the workflows.json `called` state) is
+                # ignored by the referee; terminal states are likewise skipped.
+                inert = ["waiting_for_checkin", "completed", "conflict", "dq"]
                 if current_status not in inert:
                     new_state = await process_message(
                         thread_id=message.channel.id,
@@ -1654,7 +1645,7 @@ async def dq_player_tool(set_id: str, player_to_dq: str):
         res1 = await sgg.mark_set_dq(set_id, p1_entrant) if p1_entrant else False
         res2 = await sgg.mark_set_dq(set_id, p2_entrant) if p2_entrant else False
         if res1 and res2:
-            await update_active_match(set_id, status="complete", p1_score=-1, p2_score=-1)
+            await update_active_match(set_id, status="complete", p1_score=-1, p2_score=-1, station_id=None)
             await add_bot_feed(f"🤖 Agent DQ'd both players in match {set_id}", "success")
             return f"Successfully DQ'd both players in match {set_id}."
         return "Failed to disqualify both players on Start.gg."
@@ -1668,7 +1659,7 @@ async def dq_player_tool(set_id: str, player_to_dq: str):
             winner_key = "p2" if p_to_dq == "p1" else "p1"
             p1_score = -1 if p_to_dq == "p1" else 0
             p2_score = -1 if p_to_dq == "p2" else 0
-            await update_active_match(set_id, status="complete", p1_score=p1_score, p2_score=p2_score)
+            await update_active_match(set_id, status="complete", p1_score=p1_score, p2_score=p2_score, station_id=None)
             await add_bot_feed(f"🤖 Agent DQ'd {p_to_dq} in match {set_id}", "success")
             return f"Successfully DQ'd player {p_to_dq} in match {set_id}."
         return "Failed to disqualify player on Start.gg."
@@ -1705,7 +1696,7 @@ async def force_score_tool(set_id: str, p1_score: int, p2_score: int):
     if not result.success:
         return f"Failed to report score to provider: {result.error_message}"
         
-    await update_active_match(set_id, status="complete", p1_score=p1_score, p2_score=p2_score)
+    await update_active_match(set_id, status="complete", p1_score=p1_score, p2_score=p2_score, station_id=None)
     await add_bot_feed(f"🤖 Agent forced score on match {set_id}: {p1_score}-{p2_score}", "success")
     return f"Successfully forced score {p1_score}-{p2_score} and completed match {set_id}."
 

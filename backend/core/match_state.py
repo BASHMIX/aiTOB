@@ -42,12 +42,80 @@ def load_workflow_transitions():
     except Exception as e:
         print(f"Warning: Failed to load workflow configuration from docs/workflows.json: {e}")
 
+# Overlay states (e.g. `on_stream`) are DERIVED VIEWS of a real state, not
+# transition targets — see workflows.json. We load them separately so their
+# side-effects (e.g. binding a stream station) can be realized at the exact
+# transition the JSON says they derive from, without ever inventing a new state.
+WORKFLOW_OVERLAYS: dict = {}
+
+def load_workflow_overlays():
+    global WORKFLOW_OVERLAYS
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        root_dir = os.path.dirname(os.path.dirname(current_dir))
+        json_path = os.path.join(root_dir, "docs", "workflows.json")
+        if os.path.exists(json_path):
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                states = data.get("match_workflow", {}).get("states", {})
+                WORKFLOW_OVERLAYS = {
+                    name: cfg for name, cfg in states.items() if cfg.get("overlay")
+                }
+    except Exception as e:
+        print(f"Warning: Failed to load workflow overlays from docs/workflows.json: {e}")
+
 # Initial load
 load_workflow_transitions()
+load_workflow_overlays()
 
 def validate_transition(from_status: str, to_status: str) -> bool:
     allowed = VALID_TRANSITIONS.get(from_status, [])
     return to_status in allowed
+
+def _overlay_condition_holds(condition: str, match: dict) -> bool:
+    """Evaluate a simple workflows.json overlay condition against a match row.
+
+    Supports the `<field> == true|false` form used by the `on_stream` overlay
+    (condition: "is_stream_match == true"). Anything else is treated as not met,
+    keeping behavior strictly bounded to what the JSON declares."""
+    try:
+        field, op, val = condition.partition("==")
+        if not op:
+            return False
+        field = field.strip()
+        want = val.strip().lower() == "true"
+        return bool(match.get(field)) == want
+    except Exception:
+        return False
+
+async def _realize_in_progress_overlays(match: dict, update_kwargs: dict) -> None:
+    """Apply side-effects for any overlay the JSON derives from `in_progress`.
+
+    Today that's `on_stream`: when its condition holds and no station is bound
+    yet, bind an idle Event-matching stream station at this exact transition.
+    If none is free the match still proceeds (the transition is never blocked) —
+    the TO can place it via the manual override once a station frees up."""
+    set_id = match.get("set_id")
+    for name, overlay in WORKFLOW_OVERLAYS.items():
+        if overlay.get("derived_from") != "in_progress":
+            continue
+        if not _overlay_condition_holds(overlay.get("condition", ""), match):
+            continue
+        if name == "on_stream" and not match.get("station_id"):
+            from backend.core.database import get_available_stream_station
+            station = await get_available_stream_station(match.get("event_id") or "")
+            if station:
+                update_kwargs["station_id"] = station["id"]
+                await add_bot_feed(
+                    f"📺 On-stream: bound {station.get('name') or station['id']} to "
+                    f"{match.get('p1_name')} vs {match.get('p2_name')}.", "info"
+                )
+            else:
+                await add_bot_feed(
+                    f"📺 {match.get('p1_name')} vs {match.get('p2_name')} is on stream but no "
+                    f"free stream station for its event — proceeding unbound; TO to place it.",
+                    "warn"
+                )
 
 def generate_lobby_password() -> str:
     return str(random.randint(1000, 9999))
@@ -87,6 +155,15 @@ async def transition_match(set_id: str, to_status: str, **kwargs) -> dict:
                 )
         except Exception as e:
             await add_bot_feed(f"⚠️ markSetInProgress error for {set_id}: {e}", "warn")
+
+        # Realize any JSON-defined overlay derived from in_progress (e.g.
+        # `on_stream`): bind the stream station at this exact transition point.
+        await _realize_in_progress_overlays(match, update_kwargs)
+
+    elif to_status == "complete":
+        # The `on_stream` overlay ends with the match — free the station the
+        # instant it completes so it's available for the next stream match.
+        update_kwargs["station_id"] = None
 
     elif to_status == "not_started":
         update_kwargs["p1_score"] = 0
@@ -131,7 +208,7 @@ async def auto_dq_match(set_id: str) -> dict:
             f"auto_dq_match skipped for {set_id}: start.gg already shows COMPLETED. Syncing local state instead.",
             "info"
         )
-        await update_active_match(set_id, status="complete", dq_player=None)
+        await update_active_match(set_id, status="complete", dq_player=None, station_id=None)
         await hub_mgr.broadcast({"type": "match_update"})
         return {"ok": True, "synced_from_provider": True}
 
@@ -181,7 +258,7 @@ async def auto_dq_match(set_id: str) -> dict:
             # Do not flip local status if provider rejected — keeps states aligned.
             return {"error": True, "dq_player": dq_eid, "message": str(e)}
 
-    await update_active_match(set_id, status="complete", dq_player=dq_eid)
+    await update_active_match(set_id, status="complete", dq_player=dq_eid, station_id=None)
     await hub_mgr.broadcast({"type": "match_update"})
     return {"ok": True, "dq_player": dq_eid}
 

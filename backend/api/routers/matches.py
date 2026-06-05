@@ -175,15 +175,9 @@ async def api_call_match(set_id: str):
     if result.get("error"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result["error"])
     
-    # A stream-flagged match may only be routed to a *stream* station bound to its
-    # event (never a random free setup). If none is free, leave it for the TO /
-    # dispatcher to place — don't fall back to a non-stream station.
-    if m.get("is_stream_match") and not m.get("station_id"):
-        station = await get_available_stream_station(m.get("event_id") or "")
-        if station:
-            await upsert_active_match(set_id, station_id=station["id"])
-            await _sync_provider_stream(set_id, station["id"], m.get("tournament_slug") or "")
-
+    # Calling a match only moves it not_started → called (check-in). No station is
+    # bound here — for a stream match the station is the `on_stream` overlay, bound
+    # at the called → in_progress transition once both players check in.
     called_at = datetime.datetime.utcnow().isoformat()
     await add_hub_command(f"call_match {set_id}")
     await add_bot_feed(f"Players called for match: {m['p1_name']} vs {m['p2_name']}")
@@ -226,15 +220,16 @@ async def api_toggle_stream(set_id: str, body: ToggleStreamRequest):
     tournament_slug = m.get("tournament_slug") or ""
     await upsert_active_match(set_id, is_stream_match=body.is_stream_match)
     if body.is_stream_match:
-        # Rule A: a flagged match may only ever sit on a *stream* station bound to
-        # its own event. For not_started matches we leave assignment to the
-        # green-room dispatcher (get_available_stream_station at dispatch time).
-        # For matches already on the wire with no station, route to a free stream
-        # station now; never grab a random free setup.
+        # Station binding is the `on_stream` overlay, realized at the
+        # called → in_progress transition (match_state.transition_match). So:
+        #   • not_started / called → just set the flag; the match stays in the
+        #     normal flow and binds a station when it reaches in_progress.
+        #   • already in_progress → the transition already passed, so realize the
+        #     overlay NOW: bind a free Event-matching stream station if unbound.
         if m.get("station_id"):
             # Station already assigned — push onto the provider stream queue too.
             await _sync_provider_stream(set_id, m.get("station_id"), tournament_slug)
-        elif m.get("status") in ["called", "in_progress"]:
+        elif m.get("status") == "in_progress":
             station = await get_available_stream_station(m.get("event_id") or "")
             if station:
                 await upsert_active_match(set_id, station_id=station["id"])
@@ -242,7 +237,7 @@ async def api_toggle_stream(set_id: str, body: ToggleStreamRequest):
             else:
                 await add_bot_feed(
                     f"📺 Match {set_id} flagged for stream but no free stream station "
-                    f"for its event — waiting for the dispatcher to route it.", "info"
+                    f"for its event — TO to place it via the manual override.", "info"
                 )
     else:
         # Rule C: flag OFF ⟹ strictly un-stream it — pull from the provider queue,

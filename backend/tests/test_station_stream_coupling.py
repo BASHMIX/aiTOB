@@ -132,9 +132,10 @@ def test_toggle_stream_off_unassigns_station():
     assert _planned("m4") is None
 
 
-# ── Rule A: flag ON ⟹ only a stream station for the match's event ──────────
-def test_toggle_stream_on_routes_to_stream_station_only():
-    run(_seed_station("s_plain", "Plain", stream=False))
+# ── Rule A (workflows.json compliant): binding is the in_progress overlay ──
+def test_toggle_stream_on_called_match_does_not_bind():
+    # Flagging a still-checking-in (called) match must NOT bind a station — that
+    # happens later, at the called → in_progress transition (the on_stream overlay).
     run(_seed_station("s_str", "Stream A", stream=True))
     run(_seed_match("m5", status="called", is_stream_match=0))
 
@@ -142,18 +143,34 @@ def test_toggle_stream_on_routes_to_stream_station_only():
                        json={"is_stream_match": True}, headers=AUTH)
     assert resp.status_code == 200
     m = _match("m5")
-    assert m["is_stream_match"]
-    assert m["station_id"] == "s_str"      # the stream station, never the plain one
+    assert m["is_stream_match"]             # flag set, match stays in the queue
+    assert m["station_id"] in (None, "")   # NOT bound yet
 
 
-def test_toggle_stream_on_without_free_stream_station_stays_unassigned():
-    # Only a station bound to a DIFFERENT event exists → nothing valid to route to.
-    run(_seed_station("s_other", "Other Game Stream", stream=True, event_id="999"))
-    run(_seed_match("m6", status="called", is_stream_match=0))
+def test_toggle_stream_on_inprogress_match_binds_immediately():
+    # The in_progress moment already passed, so flagging a live match realizes the
+    # overlay now: bind a free Event-matching stream station (manual override case).
+    run(_seed_station("s_plain", "Plain", stream=False))
+    run(_seed_station("s_str", "Stream A", stream=True))
+    run(_seed_match("m6", status="in_progress", is_stream_match=0))
 
     resp = client.post("/api/active-matches/m6/toggle-stream",
                        json={"is_stream_match": True}, headers=AUTH)
     assert resp.status_code == 200
     m = _match("m6")
+    assert m["is_stream_match"]
+    assert m["station_id"] == "s_str"      # the stream station, never the plain one
+
+
+def test_toggle_stream_on_inprogress_without_free_station_stays_unassigned():
+    # Live match flagged for stream but only a different-event station exists →
+    # proceed unbound (never blocked); the TO places it via the manual override.
+    run(_seed_station("s_other", "Other Game Stream", stream=True, event_id="999"))
+    run(_seed_match("m7", status="in_progress", is_stream_match=0))
+
+    resp = client.post("/api/active-matches/m7/toggle-stream",
+                       json={"is_stream_match": True}, headers=AUTH)
+    assert resp.status_code == 200
+    m = _match("m7")
     assert m["is_stream_match"]             # flag still set
-    assert m["station_id"] in (None, "")   # but left for the dispatcher to place
+    assert m["station_id"] in (None, "")   # left for the TO to place

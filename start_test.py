@@ -22,6 +22,11 @@ Common flags:
                            instead of the soft reset.
   --matches                Also clear local hub tracking (active_matches +
                            planned_streams).
+  --purge                  Wipe ALL run residue for a 100% clean slate: AI
+                           Organizer Console feed, dispatcher temp settings,
+                           queued bot commands, conflicts, planned streams, and
+                           leftover on-stream/station flags. Auto-applied by
+                           `reset`.
   --yes                    Skip the confirmation prompt for destructive ops.
 """
 import os
@@ -141,7 +146,35 @@ def _player_filter(player_ids):
     return f" WHERE discord_id IN ({placeholders})", list(player_ids)
 
 
-def reset_db(player_ids=None, wipe=False, matches=False, assume_yes=False):
+# Run residue (everything that accumulates across a test run) is wiped here so a
+# fresh test starts from a 100% clean slate. Each statement is guarded so older
+# DBs missing a table don't abort the whole purge.
+_PURGE_STEPS = [
+    ("AI Organizer Console logs",     "DELETE FROM bot_feed"),
+    ("queued bot commands",           "DELETE FROM hub_commands"),
+    ("score conflicts",               "DELETE FROM conflicts"),
+    ("planned-stream wishlist",       "DELETE FROM planned_streams"),
+    ("dispatcher Top-N stop flags",   "DELETE FROM global_settings WHERE key LIKE '_dispatcher_stop_signaled_%'"),
+    ("dispatcher master switch → off", "UPDATE global_settings SET value='off' WHERE key='auto_dispatch_master_switch'"),
+    ("leftover on-stream flags + station bindings",
+     "UPDATE active_matches SET is_stream_match=0, station_id=NULL"),
+]
+
+
+def _purge_residue(cur):
+    """Clear all cross-run residue: console feed, dispatcher temp settings,
+    queued commands, conflicts, planned streams, and leftover stream/station
+    flags. Returns nothing; prints a per-step summary."""
+    for label, sql in _PURGE_STEPS:
+        try:
+            cur.execute(sql)
+            cprint(GREEN, "DB", f"Purged {label} ({cur.rowcount} row(s)).")
+        except sqlite3.OperationalError:
+            # Table/column not present in this DB revision — skip quietly.
+            pass
+
+
+def reset_db(player_ids=None, wipe=False, matches=False, assume_yes=False, purge=False):
     """Reset player (and optionally match) state for a fresh test loop."""
     if not os.path.exists(DB_PATH):
         cprint(YELLOW, "SYS", f"No DB at {DB_PATH} — nothing to reset (it'll be created on next start).")
@@ -155,8 +188,11 @@ def reset_db(player_ids=None, wipe=False, matches=False, assume_yes=False):
         actions.append(f"SOFT-RESET {scope} (avatar=NULL, is_verified=0, step=avatar_upload)")
     if matches:
         actions.append("DELETE all active_matches + planned_streams")
+    if purge:
+        actions.append("PURGE run residue (console feed, dispatcher settings, "
+                       "commands, conflicts, planned streams, stream/station flags)")
 
-    destructive = wipe or matches
+    destructive = wipe or matches or purge
     cprint(CYAN, "DB", f"Target: {DB_PATH}")
     for a in actions:
         cprint(CYAN, "DB", f"  • {a}")
@@ -196,6 +232,9 @@ def reset_db(player_ids=None, wipe=False, matches=False, assume_yes=False):
             except sqlite3.OperationalError:
                 pass
 
+        if purge:
+            _purge_residue(cur)
+
         conn.commit()
     finally:
         conn.close()
@@ -223,6 +262,10 @@ def _add_common(p, with_reset=False):
         p.add_argument("--players", default="", help="Comma-separated Discord IDs to scope the reset.")
         p.add_argument("--wipe", action="store_true", help="Delete players instead of soft reset.")
         p.add_argument("--matches", action="store_true", help="Also clear active_matches + planned_streams.")
+        p.add_argument("--purge", action="store_true",
+                       help="Wipe ALL run residue (console feed, dispatcher settings, queued "
+                            "commands, conflicts, planned streams, stream/station flags). "
+                            "Auto-applied by `reset` for a 100%% clean slate.")
         p.add_argument("--yes", action="store_true", help="Skip the confirmation prompt.")
 
 
@@ -251,14 +294,15 @@ def main():
         start(args.no_frontend)
     elif args.cmd == "reset":
         stop()
-        reset_db(_ids(args.players), args.wipe, args.matches, args.yes)
+        # `reset` is the clean-slate test entrypoint — always purge run residue.
+        reset_db(_ids(args.players), args.wipe, args.matches, args.yes, purge=True)
         start(args.no_frontend)
     elif args.cmd == "reset-db":
         if os.path.exists(PIDS_FILE) and not args.yes:
             cprint(YELLOW, "SYS", "Stack appears to be running (.pids.json present). "
                                   "Stop it first to avoid the bot recreating rows, or pass --yes.")
             return
-        reset_db(_ids(args.players), args.wipe, args.matches, args.yes)
+        reset_db(_ids(args.players), args.wipe, args.matches, args.yes, purge=args.purge)
 
 
 if __name__ == "__main__":

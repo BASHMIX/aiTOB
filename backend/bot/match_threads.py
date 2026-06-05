@@ -80,12 +80,11 @@ async def create_match_thread(bot, tournament, set_data):
 
     # Initialize the AI-referee state for this thread up front, keyed by the
     # Discord thread id but carrying the REAL start.gg set_id + player Discord
-    # IDs + names. Status starts at a check-in gate so the referee does NOT
-    # accept results until both players check in (enforced in on_message).
-    # Stream matches use a distinct 'waiting_for_stream_checkin' state — the
-    # green-room — so we can hold back the broadcaster lobby credentials until
-    # both players confirm they're ready.
-    checkin_status = "waiting_for_stream_checkin" if is_stream else "waiting_for_checkin"
+    # IDs + names. Every match — stream or not — uses the single check-in gate
+    # ('waiting_for_checkin', mirroring the workflows.json `called` state) so the
+    # referee does NOT accept results until both players check in. Stream coverage
+    # is the `on_stream` overlay of `in_progress` (realized at that transition),
+    # never a separate check-in state.
     try:
         from backend.bot.agent.graph import app as _referee_app
         _cfg = {"configurable": {"thread_id": str(thread.id)}}
@@ -99,7 +98,7 @@ async def create_match_thread(bot, tournament, set_data):
             "player1_ready": False,
             "player2_ready": False,
             "chat_history": [],
-            "match_status": checkin_status,
+            "match_status": "waiting_for_checkin",
             "winner_id": None,
             "score_string": None,
         })
@@ -283,15 +282,32 @@ class ReadyCheckView(discord.ui.View):
                     "(DMs may be closed). Please contact a TO for the lobby name & password."
                 )
         else:
-            # Station has no credentials configured (or no stream station was
-            # assigned) — surface it so the TO can fix the routing.
+            # No station bound (none was free at the in_progress transition) OR the
+            # station has no credentials configured. Per the approved fallback, the
+            # match is NOT blocked — DM both players that the TO will share the lobby
+            # shortly (they can be placed via the manual override once one frees up).
+            fallback_dm = (
+                "🎥 **You're on the Stream Match!**\n\n"
+                "A broadcast station is being prepared — the TO will share the lobby "
+                "name and password with you here shortly. Please stand by and keep this "
+                "DM open."
+            )
+            for discord_id in (self.p1_discord, self.p2_discord):
+                if not discord_id:
+                    continue
+                try:
+                    member = await self.bot.fetch_user(int(discord_id))
+                    if member:
+                        await member.send(fallback_dm)
+                except Exception:
+                    pass
             await self.thread.send(
-                "📺 Both players ready for the stream match, but no broadcaster lobby "
-                "is configured on the assigned station. A TO will share the lobby shortly."
+                "📺 Both players ready! No broadcast station is free yet — a TO will "
+                "assign one and share the lobby shortly."
             )
             await add_bot_feed(
                 f"Stream match {self.set_id} ready but station "
-                f"'{station_id or 'unassigned'}' has no lobby credentials.",
+                f"'{station_id or 'unassigned'}' has no lobby credentials — TO to place it.",
                 "warn"
             )
 
