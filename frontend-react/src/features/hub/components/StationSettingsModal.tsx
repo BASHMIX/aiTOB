@@ -30,7 +30,7 @@ function deriveStreamUrl(stream: Stream | undefined): string {
 }
 
 export function StationSettingsModal({ station, onClose, onSaved }: StationSettingsModalProps) {
-  const { currentSlug } = useHubStore();
+  const { currentSlug, events } = useHubStore();
 
   const [name, setName] = useState<string>(station.name || "");
   const [hidden, setHidden] = useState<boolean>(!!station.hidden);
@@ -38,6 +38,11 @@ export function StationSettingsModal({ station, onClose, onSaved }: StationSetti
   const [streamId, setStreamId] = useState<string>(station.startgg_stream_id || "");
   const [streamUrlOverride, setStreamUrlOverride] = useState<string>(station.stream_url || "");
   const [activeOverlay, setActiveOverlay] = useState<string>(station.active_overlay || "");
+  // Green-room: event-binding + broadcaster lobby credentials (commit #7)
+  const [eventId, setEventId] = useState<string>(station.event_id || "");
+  const [isStreamStation, setIsStreamStation] = useState<boolean>(!!station.is_stream_station);
+  const [roomNameOrId, setRoomNameOrId] = useState<string>(station.room_name_or_id || "");
+  const [roomPassword, setRoomPassword] = useState<string>(station.room_password || "");
 
   const [streams, setStreams] = useState<Stream[]>([]);
   const [overlays, setOverlays] = useState<string[]>([]);
@@ -83,6 +88,10 @@ export function StationSettingsModal({ station, onClose, onSaved }: StationSetti
         startgg_stream_id: streamId || "",      // empty = unmap
         stream_url: streamUrlOverride || "",    // empty = use derived
         active_overlay: activeOverlay || "",    // empty = clear
+        event_id: eventId || "",                // empty = unbind (any event)
+        is_stream_station: isStreamStation,
+        room_name_or_id: roomNameOrId.trim() || "",  // empty = clear
+        room_password: roomPassword || "",            // empty = clear
       });
       onSaved();
       onClose();
@@ -169,6 +178,69 @@ export function StationSettingsModal({ station, onClose, onSaved }: StationSetti
               Leave blank to auto-derive from the start.gg stream. Override for Kick, restream pages, etc.
             </span>
           </label>
+
+          {/* ── Stream Station (green-room) ── */}
+          <div className="flex flex-col gap-3 p-3 rounded-lg bg-black/25 border border-accentYellow/20">
+            <label className="flex items-center justify-between cursor-pointer">
+              <div className="flex flex-col gap-0.5">
+                <span className="text-sm font-semibold text-gray-200">Stream Station</span>
+                <span className="text-xs text-textDim">Eligible to host stream-flagged matches via the green-room flow</span>
+              </div>
+              <input
+                type="checkbox"
+                checked={isStreamStation}
+                onChange={e => setIsStreamStation(e.target.checked)}
+                className="w-4 h-4 accent-accentYellow cursor-pointer rounded"
+              />
+            </label>
+
+            {isStreamStation && (
+              <>
+                {/* Event binding */}
+                <label className="flex flex-col gap-1.5">
+                  <span className="text-xs font-semibold text-gray-300">Bound Event (game)</span>
+                  <select
+                    value={eventId}
+                    onChange={e => setEventId(e.target.value)}
+                    className="bg-black/40 border border-white/10 rounded px-2.5 py-1 text-sm text-white focus:outline-none focus:border-accentYellow/50"
+                  >
+                    <option value="" className="text-black">Any event (not recommended)</option>
+                    {events.map(ev => (
+                      <option key={ev.id} value={ev.id} className="text-black">{ev.name}</option>
+                    ))}
+                  </select>
+                  <span className="text-xs text-textDim">
+                    Stream matches only route here when the match's event matches. Prevents cross-game routing (e.g. a Tekken match landing on an SF6 station).
+                  </span>
+                </label>
+
+                {/* Lobby credentials */}
+                <label className="flex flex-col gap-1.5">
+                  <span className="text-xs font-semibold text-gray-300">Lobby Name / ID</span>
+                  <input
+                    type="text"
+                    value={roomNameOrId}
+                    onChange={e => setRoomNameOrId(e.target.value)}
+                    placeholder="FNC-STREAM-1"
+                    className="bg-black/40 border border-white/10 rounded px-2.5 py-1 text-sm text-white focus:outline-none focus:border-accentYellow/50 placeholder:text-textDim"
+                  />
+                </label>
+                <label className="flex flex-col gap-1.5">
+                  <span className="text-xs font-semibold text-gray-300">Lobby Password</span>
+                  <input
+                    type="text"
+                    value={roomPassword}
+                    onChange={e => setRoomPassword(e.target.value)}
+                    placeholder="1234"
+                    className="bg-black/40 border border-white/10 rounded px-2.5 py-1 text-sm text-white focus:outline-none focus:border-accentYellow/50 placeholder:text-textDim"
+                  />
+                  <span className="text-xs text-textDim">
+                    Delivered privately to both players by DM — only after they both check in.
+                  </span>
+                </label>
+              </>
+            )}
+          </div>
 
           {/* Active overlay */}
           <label className="flex flex-col gap-1.5 p-3 rounded-lg bg-black/25 border border-white/5">

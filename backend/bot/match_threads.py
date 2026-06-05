@@ -80,8 +80,12 @@ async def create_match_thread(bot, tournament, set_data):
 
     # Initialize the AI-referee state for this thread up front, keyed by the
     # Discord thread id but carrying the REAL start.gg set_id + player Discord
-    # IDs + names. Status starts at 'waiting_for_checkin' so the referee does
-    # NOT accept results until both players check in (enforced in on_message).
+    # IDs + names. Status starts at a check-in gate so the referee does NOT
+    # accept results until both players check in (enforced in on_message).
+    # Stream matches use a distinct 'waiting_for_stream_checkin' state — the
+    # green-room — so we can hold back the broadcaster lobby credentials until
+    # both players confirm they're ready.
+    checkin_status = "waiting_for_stream_checkin" if is_stream else "waiting_for_checkin"
     try:
         from backend.bot.agent.graph import app as _referee_app
         _cfg = {"configurable": {"thread_id": str(thread.id)}}
@@ -95,7 +99,7 @@ async def create_match_thread(bot, tournament, set_data):
             "player1_ready": False,
             "player2_ready": False,
             "chat_history": [],
-            "match_status": "waiting_for_checkin",
+            "match_status": checkin_status,
             "winner_id": None,
             "score_string": None,
         })
@@ -107,8 +111,19 @@ async def create_match_thread(bot, tournament, set_data):
     if p2_discord: mentions.append(f"<@{p2_discord}>")
     content = " ".join(mentions) if mentions else "Players, your match is ready!"
 
-    desc = f"**{p1_name}** vs **{p2_name}**\n\nClick **I'm Ready** to check in. You have 10 minutes."
-    embed = discord.Embed(title=f"Match Ready: {round_name}", description=desc, color=discord.Color.green())
+    if is_stream:
+        title = f"📺 Stream Match: {round_name}"
+        desc = (
+            f"**{p1_name}** vs **{p2_name}**\n\n"
+            "🎥 **You've been selected for the Stream Match!**\n"
+            "Click **I'm Ready** to check in. The broadcaster's lobby name and "
+            "password will be DM'd to you privately **once both players are ready**. "
+            "You have 10 minutes."
+        )
+        embed = discord.Embed(title=title, description=desc, color=discord.Color.purple())
+    else:
+        desc = f"**{p1_name}** vs **{p2_name}**\n\nClick **I'm Ready** to check in. You have 10 minutes."
+        embed = discord.Embed(title=f"Match Ready: {round_name}", description=desc, color=discord.Color.green())
 
     view = ReadyCheckView(set_id, p1_discord, p2_discord, is_stream, thread, bot)
     await thread.send(content=content, embed=embed, view=view)
@@ -209,23 +224,83 @@ class ReadyCheckView(discord.ui.View):
             self.stop()
 
             if self.is_stream:
-                lobby = await self._handle_stream_match()
+                # The green-room handler sends its own (private credentials +
+                # public confirmation) messages; don't double up here.
+                await self._handle_stream_match()
             else:
                 lobby = await self._handle_offstream_match()
-
-            if lobby:
-                await self.thread.send(f"🚀 Both players ready! {'Lobby password: **' + lobby + '**' if lobby else ''}")
-            else:
-                await self.thread.send("🚀 Both players ready! GLHF!")
+                if lobby:
+                    await self.thread.send(f"🚀 Both players ready! {'Lobby password: **' + lobby + '**' if lobby else ''}")
+                else:
+                    await self.thread.send("🚀 Both players ready! GLHF!")
 
     async def _handle_stream_match(self):
+        """Green-room handoff: both players have checked in, so it's now safe to
+        privately deliver the broadcaster's lobby credentials. Credentials live on
+        the assigned stream station (room_name_or_id / room_password) and are sent
+        by DM — never posted in the thread — so the lobby stays private."""
         match = await get_active_match(self.set_id)
-        p1_cfn = match.get("p1_cfn") or ""
-        p2_cfn = match.get("p2_cfn") or ""
-        if not p1_cfn:
+
+        # Resolve the assigned stream station and its lobby credentials.
+        station = None
+        station_id = match.get("station_id")
+        if station_id:
+            from backend.core.database import get_stations
+            station = next((s for s in await get_stations() if s["id"] == station_id), None)
+
+        room = (station or {}).get("room_name_or_id") or ""
+        pwd = (station or {}).get("room_password") or ""
+
+        if room or pwd:
+            cred_lines = ["🎥 **Stream Match — Broadcaster Lobby**", ""]
+            if room:
+                cred_lines.append(f"**Lobby Name/ID:** `{room}`")
+            if pwd:
+                cred_lines.append(f"**Password:** `{pwd}`")
+            cred_lines.append("")
+            cred_lines.append("Join the broadcaster's lobby above. Please do **not** share these details publicly.")
+            cred_text = "\n".join(cred_lines)
+
+            delivered = 0
+            for discord_id in (self.p1_discord, self.p2_discord):
+                if not discord_id:
+                    continue
+                try:
+                    member = await self.bot.fetch_user(int(discord_id))
+                    if member:
+                        await member.send(cred_text)
+                        delivered += 1
+                except Exception:
+                    pass
+
+            if delivered:
+                await self.thread.send("🔒 Both players ready! Stream lobby details have been **DM'd privately**. Head to the broadcaster's lobby.")
+            else:
+                # DMs closed on both sides — fall back so the match isn't stuck,
+                # but keep creds out of the public thread.
+                await self.thread.send(
+                    "🔒 Both players ready! I couldn't DM the stream lobby details "
+                    "(DMs may be closed). Please contact a TO for the lobby name & password."
+                )
+        else:
+            # Station has no credentials configured (or no stream station was
+            # assigned) — surface it so the TO can fix the routing.
+            await self.thread.send(
+                "📺 Both players ready for the stream match, but no broadcaster lobby "
+                "is configured on the assigned station. A TO will share the lobby shortly."
+            )
+            await add_bot_feed(
+                f"Stream match {self.set_id} ready but station "
+                f"'{station_id or 'unassigned'}' has no lobby credentials.",
+                "warn"
+            )
+
+        # Still collect CFN IDs for the overlay (non-blocking).
+        if not (match.get("p1_cfn") or ""):
             await self.thread.send(f"<@{self.p1_discord}> Please provide your CFN ID for the stream overlay.")
-        if not p2_cfn:
+        if not (match.get("p2_cfn") or ""):
             await self.thread.send(f"<@{self.p2_discord}> Please provide your CFN ID for the stream overlay.")
+
         from backend.api.ws_manager import manager as hub_mgr
         try:
             await hub_mgr.broadcast({"type": "match_update"})

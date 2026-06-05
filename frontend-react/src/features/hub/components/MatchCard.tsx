@@ -73,9 +73,29 @@ export interface MatchData {
   calledAt?: string;
   raw: any;
   stationId?: string;
+  // Owning start.gg event — drives the per-card Event badge so multi-game
+  // tournaments are visually distinguishable at a glance.
+  eventId?: string;
+  eventName?: string;
   // True when the bot has surrendered auto-DQ for this set (partial / no Discord reach).
   // Surfaces as a small banner so the TO knows the bot won't intervene.
   autoDqDisarmed?: boolean;
+}
+
+// Stable, distinct badge color per event (hash → palette index) so the same
+// event always reads the same color across cards.
+const EVENT_BADGE_COLORS = [
+  "bg-purple-500/15 text-purple-300 border-purple-500/30",
+  "bg-sky-500/15 text-sky-300 border-sky-500/30",
+  "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
+  "bg-amber-500/15 text-amber-300 border-amber-500/30",
+  "bg-pink-500/15 text-pink-300 border-pink-500/30",
+  "bg-cyan-500/15 text-cyan-300 border-cyan-500/30",
+];
+function eventBadgeColor(key: string): string {
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+  return EVENT_BADGE_COLORS[h % EVENT_BADGE_COLORS.length];
 }
 
 const STATUS_META: Record<
@@ -384,6 +404,16 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
               {meta.label}
             </span>
           </div>
+
+          {/* Event badge — distinct color per game so SF6 vs Tekken etc. read instantly */}
+          {match.eventName && (
+            <span
+              title={`Event: ${match.eventName}`}
+              className={`self-start max-w-full truncate rounded border px-1.5 py-[1px] text-[9px] font-black uppercase tracking-wider leading-none ${eventBadgeColor(match.eventId || match.eventName)}`}
+            >
+              {match.eventName}
+            </span>
+          )}
 
           {/* Pool */}
           {displayPool ? (

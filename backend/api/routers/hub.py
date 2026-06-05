@@ -222,10 +222,11 @@ async def api_set_dispatcher_master(body: DispatcherMasterRequest):
     global _auto_dispatcher_cache
     _auto_dispatcher_cache = new_state == "on"
     # Clear stop-signaled flags so re-enabling re-emits Top-N notices if applicable.
+    # Keys are now per-event (_dispatcher_stop_signaled_{slug}_{event_id}), so wipe
+    # the whole family in one prefix delete.
     if body.enabled:
-        from backend.core.database import get_tournaments
-        for t in await get_tournaments():
-            await set_setting(f"_dispatcher_stop_signaled_{t['slug']}", "")
+        from backend.core.database import clear_settings_prefix
+        await clear_settings_prefix("_dispatcher_stop_signaled_")
     await add_bot_feed(
         f"🤖 Auto-dispatcher master switch: {new_state.upper()}",
         "warn" if not body.enabled else "info"

@@ -94,6 +94,28 @@ class CreateStationRequest(BaseModel):
 
 class UpdateStationRequest(BaseModel):
     name: Optional[str] = Field(default=None, description="Station display name", min_length=1, examples=["Station 1 - Stream"])
+    event_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Bind this station to a single start.gg event (game). Stream matches are "
+            "only routed here when station.event_id == match.event_id. Empty string unbinds."
+        ),
+        examples=["123456", ""],
+    )
+    is_stream_station: Optional[bool] = Field(
+        default=None,
+        description="Mark this as a broadcaster setup eligible to host stream-flagged matches via the green-room flow.",
+    )
+    room_name_or_id: Optional[str] = Field(
+        default=None,
+        description="Broadcaster lobby name/ID delivered to players (by DM) only after both check in. Empty string clears.",
+        examples=["FNC-STREAM-1", ""],
+    )
+    room_password: Optional[str] = Field(
+        default=None,
+        description="Broadcaster lobby password delivered to players (by DM) only after both check in. Empty string clears.",
+        examples=["1234", ""],
+    )
     startgg_stream_id: Optional[str] = Field(
         default=None,
         description=(

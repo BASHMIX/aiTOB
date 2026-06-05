@@ -57,7 +57,7 @@ function sortTBDLast(rows: MatchData[]): MatchData[] {
 
 // ── Main Component ─────────────────────────────────────────────────────
 export function MatchDashboard() {
-  const { matches, currentSlug, currentEventId, events, tournaments, stations, setMatches, plannedStreamIds, setPlannedStreamIds } = useHubStore();
+  const { matches, currentSlug, currentEventId, setCurrentEventId, events, tournaments, stations, setMatches, plannedStreamIds, setPlannedStreamIds } = useHubStore();
   const [sets, setSets] = useState<any[]>([]);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
 
@@ -151,6 +151,8 @@ export function MatchDashboard() {
       status: mapLocalState(m.status),
       isLocal: true,
       isStreamMatch: plannedStreamIds.includes(m.set_id) || !!m.is_stream_match,
+      eventId: safe(m.event_id),
+      eventName: safe(m.event_name),
       startedAt: m.started_at,
       calledAt: m.called_at,
       autoDqDisarmed: !!m.auto_dq_disarmed,
@@ -192,6 +194,8 @@ export function MatchDashboard() {
       status: mapped,
       isLocal: false,
       isStreamMatch: plannedStreamIds.includes(s.id),
+      eventId: safe(s.event_id),
+      eventName: safe(s.event_name),
       players: [
         { name: safe(s.p1) || 'TBD', avatar: s.p1_avatar, score: undefined, isTBD: isTBD(safe(s.p1)) },
         { name: safe(s.p2) || 'TBD', avatar: s.p2_avatar, score: undefined, isTBD: isTBD(safe(s.p2)) }
@@ -202,9 +206,6 @@ export function MatchDashboard() {
 
     return result;
   }, [matches, sets, currentSlug, currentEventId, plannedStreamIds]);
-
-  // Force an explicit event choice for multi-event tournaments before showing matches.
-  const needsEventSelection = events.length > 1 && !currentEventId;
 
   // ── Action handlers ────────────────────────────────────────────────
   const handleAction = async (action: string, row: any, data?: any) => {
@@ -380,6 +381,26 @@ export function MatchDashboard() {
 
         <div className="w-px h-5 bg-white/10" />
 
+        {/* Event Filter — scopes the match view to one game in a multi-event tournament */}
+        {events.length > 0 && (
+          <>
+            <div className="flex items-center gap-2">
+              <span className="text-textDim">Event:</span>
+              <select
+                value={currentEventId || '__all__'}
+                onChange={e => setCurrentEventId(e.target.value === '__all__' ? null : e.target.value)}
+                className="bg-transparent border border-white/10 rounded px-2 py-1 text-xs text-textLight focus:outline-none focus:border-accentYellow/50"
+              >
+                <option value="__all__" className="text-black">All Events</option>
+                {events.map(ev => (
+                  <option key={ev.id} value={ev.id} className="text-black">{ev.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="w-px h-5 bg-white/10" />
+          </>
+        )}
+
         {/* PhaseGroup Filter */}
         <div className="flex items-center gap-2">
           <span className="text-textDim">Pool:</span>
@@ -409,20 +430,14 @@ export function MatchDashboard() {
       </div>
 
       <div className="flex-1 overflow-y-auto custom-scrollbar pr-1">
-        {needsEventSelection ? (
-          <div className="text-center p-6 text-textDim text-sm">
-            This tournament has multiple events. Select an <span className="text-accentYellow font-bold">Event</span> above to view its matches.
-          </div>
-        ) : (
-          <MatchesList
-            matches={sorted}
-            dqTimerSeconds={dqTimerSeconds}
-            autoDqEnabled={autoDqEnabled}
-            onAction={handleAction}
-            onToggleStream={handleToggleStream}
-            stations={stations ?? []}
-          />
-        )}
+        <MatchesList
+          matches={sorted}
+          dqTimerSeconds={dqTimerSeconds}
+          autoDqEnabled={autoDqEnabled}
+          onAction={handleAction}
+          onToggleStream={handleToggleStream}
+          stations={stations ?? []}
+        />
       </div>
 
       {settingsModalOpen && (

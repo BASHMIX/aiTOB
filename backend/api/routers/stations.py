@@ -78,7 +78,8 @@ async def api_update_station(id: str, body: UpdateStationRequest):
     """Rename a station, toggle bot/hidden, set overlay, or remap stream binding."""
     fields = body.model_dump(exclude_unset=True)
     # Empty-string sentinels mean "clear" — store NULL.
-    for k in ("startgg_stream_id", "stream_url", "active_overlay"):
+    for k in ("startgg_stream_id", "stream_url", "active_overlay",
+              "event_id", "room_name_or_id", "room_password"):
         if fields.get(k) == "":
             fields[k] = None
     if fields:

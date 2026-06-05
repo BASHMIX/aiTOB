@@ -915,6 +915,19 @@ async def get_all_settings() -> dict:
             rows = await c.fetchall()
             return {r[0]: r[1] for r in rows}
 
+async def clear_settings_prefix(prefix: str):
+    """Delete every global_settings row whose key starts with `prefix`.
+
+    Used to reset the per-event one-shot dispatcher stop flags
+    (`_dispatcher_stop_signaled_{slug}_{event_id}`) in one shot, without having
+    to enumerate every event id."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "DELETE FROM global_settings WHERE key LIKE ? ESCAPE '\\'",
+            (prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%",)
+        )
+        await db.commit()
+
 
 # ── Conflicts ──────────────────────────────────────────────────────────────
 async def add_conflict(set_id: str, p1_claim: str, p2_claim: str):
@@ -1056,66 +1069,136 @@ async def get_dispatch_eligible_tournaments() -> list[dict]:
             return [dict(r) for r in await cursor.fetchall()]
 
 
-async def count_active_dispatched(tournament_slug: str) -> int:
-    """Currently-occupying-time matches the dispatcher has on the wire.
-    Counts called + in_progress matches that are bot-managed for the tournament."""
+async def get_dispatch_eligible_events() -> list[dict]:
+    """Each (tournament, event) pair with the auto-dispatcher armed.
+
+    Option A — per-event budget: every event under an armed tournament becomes
+    its own independent dispatch queue, so a multi-game tournament (e.g. SF6 +
+    Tekken 8) never shares concurrency or Top-N thresholds across games.
+    Legacy/single-event rows surface as one bucket with event_id=''.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT COUNT(*) FROM active_matches "
-            "WHERE tournament_slug = ? AND bot_enabled = 1 AND status IN ('called', 'in_progress')",
-            (tournament_slug,)
+            """
+            SELECT t.slug, t.name,
+                   t.auto_dispatch_concurrency, t.auto_dispatch_stop_at,
+                   COALESCE(am.event_id, '')   AS event_id,
+                   COALESCE(am.event_name, '') AS event_name
+            FROM tournaments t
+            JOIN active_matches am ON am.tournament_slug = t.slug
+            WHERE t.auto_dispatch_enabled = 1
+            GROUP BY t.slug, COALESCE(am.event_id, '')
+            """
         ) as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
+
+
+async def count_active_dispatched(tournament_slug: str, event_id: str | None = None) -> int:
+    """Currently-occupying-time matches the dispatcher has on the wire.
+    Counts called + in_progress matches that are bot-managed for the tournament.
+    When event_id is given, the count is scoped to that event (Option A budget);
+    pass '' to match legacy/untagged rows."""
+    sql = ("SELECT COUNT(*) FROM active_matches "
+           "WHERE tournament_slug = ? AND bot_enabled = 1 "
+           "AND status IN ('called', 'in_progress')")
+    params: list = [tournament_slug]
+    if event_id is not None:
+        sql += " AND COALESCE(event_id, '') = ?"
+        params.append(event_id)
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(sql, params) as cursor:
             row = await cursor.fetchone()
     return int(row[0] if row else 0)
 
 
-async def count_remaining_event_matches(tournament_slug: str) -> int:
+async def count_remaining_event_matches(tournament_slug: str, event_id: str | None = None) -> int:
     """Total uncompleted matches the dispatcher knows about for the tournament.
     Includes TBD/unresolved sets so a Top-8 threshold isn't tripped prematurely
-    by pool matches still being resolved."""
+    by pool matches still being resolved. When event_id is given, the Top-N
+    threshold is evaluated per event; pass '' to match legacy/untagged rows."""
+    sql = ("SELECT COUNT(*) FROM active_matches "
+           "WHERE tournament_slug = ? AND status NOT IN ('complete', 'dq')")
+    params: list = [tournament_slug]
+    if event_id is not None:
+        sql += " AND COALESCE(event_id, '') = ?"
+        params.append(event_id)
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            "SELECT COUNT(*) FROM active_matches "
-            "WHERE tournament_slug = ? AND status NOT IN ('complete', 'dq')",
-            (tournament_slug,)
-        ) as cursor:
+        async with db.execute(sql, params) as cursor:
             row = await cursor.fetchone()
     return int(row[0] if row else 0)
 
 
-async def get_dispatch_candidates(tournament_slug: str, limit: int) -> list[dict]:
+async def get_dispatch_candidates(tournament_slug: str, limit: int, event_id: str | None = None) -> list[dict]:
     """Find the next bot-managed matches that are safe to auto-call.
 
     Excludes:
       - matches with TBD/missing entrants (upstream bracket unresolved)
       - matches that are already planned for stream (those wait for the TO / featured queue)
       - anything already called or in progress (those are counted toward concurrency)
+    When event_id is given, candidates are scoped to that event so a multi-game
+    tournament never cross-routes (pass '' to match legacy/untagged rows).
     Orders by phase_group then match_number for predictable pool progression.
+    """
+    sql = """
+        SELECT * FROM active_matches
+        WHERE tournament_slug = ?
+          AND status = 'not_started'
+          AND bot_enabled = 1
+          AND p1_entrant_id IS NOT NULL AND p1_entrant_id != ''
+          AND p2_entrant_id IS NOT NULL AND p2_entrant_id != ''
+          AND p1_name IS NOT NULL AND p1_name != '' AND p1_name != 'TBD'
+          AND p2_name IS NOT NULL AND p2_name != '' AND p2_name != 'TBD'
+          AND set_id NOT IN (
+            SELECT set_id FROM planned_streams WHERE tournament_slug = ?
+          )
+    """
+    params: list = [tournament_slug, tournament_slug]
+    if event_id is not None:
+        sql += " AND COALESCE(event_id, '') = ?"
+        params.append(event_id)
+    sql += """
+        ORDER BY
+          COALESCE(NULLIF(phase_group, ''), 'zzzz'),
+          COALESCE(match_number, 999999),
+          created_at
+        LIMIT ?
+    """
+    params.append(int(limit))
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(sql, params) as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
+
+
+async def get_available_stream_station(event_id: str | None) -> dict | None:
+    """An idle stream station bound to this event, or None.
+
+    Used by the green-room dispatch: a stream-flagged match may only be routed
+    to a station with is_stream_station=1 AND a matching event_id that isn't
+    already hosting a called/in_progress match. Pass '' to match stations left
+    unbound to any event.
     """
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             """
-            SELECT * FROM active_matches
-            WHERE tournament_slug = ?
-              AND status = 'not_started'
-              AND bot_enabled = 1
-              AND p1_entrant_id IS NOT NULL AND p1_entrant_id != ''
-              AND p2_entrant_id IS NOT NULL AND p2_entrant_id != ''
-              AND p1_name IS NOT NULL AND p1_name != '' AND p1_name != 'TBD'
-              AND p2_name IS NOT NULL AND p2_name != '' AND p2_name != 'TBD'
-              AND set_id NOT IN (
-                SELECT set_id FROM planned_streams WHERE tournament_slug = ?
+            SELECT s.* FROM stations s
+            WHERE s.is_stream_station = 1
+              AND COALESCE(s.event_id, '') = ?
+              AND COALESCE(s.hidden, 0) = 0
+              AND s.id NOT IN (
+                SELECT station_id FROM active_matches
+                WHERE station_id IS NOT NULL
+                  AND status IN ('called', 'in_progress')
               )
-            ORDER BY
-              COALESCE(NULLIF(phase_group, ''), 'zzzz'),
-              COALESCE(match_number, 999999),
-              created_at
-            LIMIT ?
+            ORDER BY s.id
+            LIMIT 1
             """,
-            (tournament_slug, tournament_slug, int(limit))
+            (event_id or "",)
         ) as cursor:
-            return [dict(r) for r in await cursor.fetchall()]
+            row = await cursor.fetchone()
+            return dict(row) if row else None
 
 def should_bot_manage_match(round_name: str, phase_group: str, limit_setting: str) -> bool:
     limit_lower = (limit_setting or "").lower()

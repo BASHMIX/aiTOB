@@ -224,4 +224,12 @@ MIGRATIONS = [
     # tournaments (e.g. Tekken 8 + SF6) don't cross-contaminate the hub.
     "ALTER TABLE active_matches ADD COLUMN event_id TEXT",
     "ALTER TABLE active_matches ADD COLUMN event_name TEXT",
+    # Stream-station binding & green-room credentials (commit #7).
+    # event_id binds a station to one game so stream matches never cross-route;
+    # is_stream_station marks broadcaster setups; room_* hold the lobby creds the
+    # bot delivers privately only after both players check in.
+    "ALTER TABLE stations ADD COLUMN event_id TEXT",
+    "ALTER TABLE stations ADD COLUMN is_stream_station BOOLEAN DEFAULT 0",
+    "ALTER TABLE stations ADD COLUMN room_name_or_id TEXT",
+    "ALTER TABLE stations ADD COLUMN room_password TEXT",
 ]

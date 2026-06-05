@@ -772,16 +772,17 @@ async def update_heartbeat():
 #   • Skips matches with TBD entrants (upstream bracket unresolved)
 #   • Every dispatch and every gate logs to bot_feed so the TO can audit
 
-_DISPATCH_LAST_TICK: dict[str, float] = {}  # per-tournament cooldown
-_DISPATCH_COOLDOWN_SECONDS = 30.0           # minimum gap between dispatches per tournament
+_DISPATCH_LAST_TICK: dict[tuple[str, str], float] = {}  # per-(tournament, event) cooldown
+_DISPATCH_COOLDOWN_SECONDS = 30.0                        # minimum gap between dispatches per event
 
 @tasks.loop(seconds=20.0)
 async def auto_dispatch_pool_matches():
     import time
     from core.database import (
-        get_setting, get_dispatch_eligible_tournaments,
+        get_setting, get_dispatch_eligible_events,
         count_active_dispatched, count_remaining_event_matches,
-        get_dispatch_candidates, add_hub_command, add_bot_feed,
+        get_dispatch_candidates, get_available_stream_station,
+        update_active_match, add_hub_command, add_bot_feed,
     )
 
     # Master kill switch — overrides every per-tournament setting.
@@ -789,56 +790,81 @@ async def auto_dispatch_pool_matches():
     if master != "on":
         return
 
-    tournaments = await get_dispatch_eligible_tournaments()
+    # Option A — per-event budget: each (tournament, event) is its own queue, so
+    # a multi-game tournament never shares concurrency or Top-N across games.
+    events = await get_dispatch_eligible_events()
     now = time.time()
 
-    for t in tournaments:
+    for t in events:
         slug = t["slug"]
+        event_id = t.get("event_id") or ""
+        event_name = t.get("event_name") or ""
+        # A readable tag for the bot feed — game name when known, else a short id.
+        evt_tag = event_name or (f"event {event_id}" if event_id else "")
         concurrency = max(1, int(t.get("auto_dispatch_concurrency") or 1))
         stop_at = max(0, int(t.get("auto_dispatch_stop_at") or 8))
 
         # Cooldown — prevents back-to-back dispatches from one tick if the loop
         # interval is reduced. The 30s gap also gives players time to react.
-        last = _DISPATCH_LAST_TICK.get(slug, 0.0)
+        last = _DISPATCH_LAST_TICK.get((slug, event_id), 0.0)
         if now - last < _DISPATCH_COOLDOWN_SECONDS:
             continue
 
-        # Top-N changeover: when fewer than (stop_at) uncompleted matches remain,
-        # we treat the bracket as "in TO territory" and stop calling.
-        remaining = await count_remaining_event_matches(slug)
+        # Top-N changeover: when fewer than (stop_at) uncompleted matches remain
+        # IN THIS EVENT, we treat its bracket as "in TO territory" and stop calling.
+        remaining = await count_remaining_event_matches(slug, event_id)
         if remaining <= stop_at:
             # One-shot signal so the operator sees it once, not every tick.
-            key = f"_dispatcher_stop_signaled_{slug}"
+            key = f"_dispatcher_stop_signaled_{slug}_{event_id}"
             if not await get_setting(key):
                 from core.database import set_setting as _set
                 await _set(key, "1")
+                label = f"{t['name']}{(' / ' + evt_tag) if evt_tag else ''}"
                 await add_bot_feed(
-                    f"🤖 Auto-dispatcher stopped for {t['name']}: {remaining} matches remain "
+                    f"🤖 Auto-dispatcher stopped for {label}: {remaining} matches remain "
                     f"(threshold ≤ {stop_at}). TO takes over from here.",
                     "info"
                 )
             continue
 
-        # Compute open slots.
-        in_flight = await count_active_dispatched(slug)
+        # Compute open slots for THIS event.
+        in_flight = await count_active_dispatched(slug, event_id)
         slots = concurrency - in_flight
         if slots <= 0:
             continue
 
-        candidates = await get_dispatch_candidates(slug, limit=slots)
+        candidates = await get_dispatch_candidates(slug, limit=slots, event_id=event_id)
         if not candidates:
             continue
 
+        dispatched_any = False
         for m in candidates:
             set_id = m["set_id"]
+
+            # Green-room routing: a stream-flagged match may only go to an idle
+            # stream station bound to its event. If none is free, leave it for a
+            # later tick rather than calling it to a non-stream / wrong-game setup.
+            if m.get("is_stream_match"):
+                station = await get_available_stream_station(event_id)
+                if not station:
+                    continue
+                await update_active_match(set_id, station_id=station["id"])
+                tag = f" [STREAM → {station.get('name') or station['id']}]"
+            else:
+                tag = f"{(' [' + evt_tag + ']') if evt_tag else ''}"
+
             await add_hub_command(f"call_match {set_id}")
             await add_bot_feed(
-                f"🤖 Auto-dispatched: {m.get('p1_name')} vs {m.get('p2_name')} "
+                f"🤖 Auto-dispatched{tag}: {m.get('p1_name')} vs {m.get('p2_name')} "
                 f"({m.get('round_name') or m.get('phase_group') or 'pool'})",
                 "info"
             )
+            dispatched_any = True
 
-        _DISPATCH_LAST_TICK[slug] = now
+        # Only start the cooldown if we actually put something on the wire —
+        # otherwise a stream match with no free station would stall the whole event.
+        if dispatched_any:
+            _DISPATCH_LAST_TICK[(slug, event_id)] = now
 
 class RegistrationView(discord.ui.View):
     def __init__(self):
@@ -1506,9 +1532,10 @@ async def on_message(message):
                 current_status = state_snapshot.values.get("match_status")
 
                 # Gate: do NOT accept results until both players have checked in.
-                # 'waiting_for_checkin' chat is ignored by the referee; terminal
-                # states are likewise skipped.
-                inert = ["waiting_for_checkin", "completed", "conflict", "dq"]
+                # The check-in states ('waiting_for_checkin' and the stream
+                # green-room 'waiting_for_stream_checkin') are ignored by the
+                # referee; terminal states are likewise skipped.
+                inert = ["waiting_for_checkin", "waiting_for_stream_checkin", "completed", "conflict", "dq"]
                 if current_status not in inert:
                     new_state = await process_message(
                         thread_id=message.channel.id,
