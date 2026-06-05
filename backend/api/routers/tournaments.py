@@ -278,7 +278,13 @@ async def api_list_tournament_streams(slug: str):
 )
 async def api_update_tournament_settings(slug: str, body: PatchTournamentSettingsRequest):
     """Update auto-checkin timers and AI bot coordination limits. Requires admin password auth."""
-    d = body.model_dump(exclude_none=True)
+    # exclude_unset (not exclude_none): persist exactly the fields the client sent,
+    # and nothing else. Zeros/false already round-trip under either flag, but
+    # exclude_none silently drops an explicitly-sent null — the same class of trap
+    # we fixed in the matches PATCH (#8). This keeps the idiom consistent so a
+    # future "send null to clear" can't be quietly swallowed. Unsent fields are
+    # left untouched.
+    d = body.model_dump(exclude_unset=True)
     await update_tournament_settings(slug, **d)
     return MessageResponse(message="Updated", ok=True)
 
