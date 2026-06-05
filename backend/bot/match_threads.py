@@ -78,6 +78,30 @@ async def create_match_thread(bot, tournament, set_data):
         auto_dq_disarmed=(1 if (fully_unreachable or partial) else 0),
     )
 
+    # Initialize the AI-referee state for this thread up front, keyed by the
+    # Discord thread id but carrying the REAL start.gg set_id + player Discord
+    # IDs + names. Status starts at 'waiting_for_checkin' so the referee does
+    # NOT accept results until both players check in (enforced in on_message).
+    try:
+        from backend.bot.agent.graph import app as _referee_app
+        _cfg = {"configurable": {"thread_id": str(thread.id)}}
+        _referee_app.update_state(_cfg, {
+            "set_id": set_id,
+            "thread_id": thread.id,
+            "player1_discord": p1_discord,
+            "player2_discord": p2_discord,
+            "player1_name": p1_name,
+            "player2_name": p2_name,
+            "player1_ready": False,
+            "player2_ready": False,
+            "chat_history": [],
+            "match_status": "waiting_for_checkin",
+            "winner_id": None,
+            "score_string": None,
+        })
+    except Exception as e:
+        await add_bot_feed(f"Referee state init failed for {set_id}: {e}", "warn")
+
     mentions = []
     if p1_discord: mentions.append(f"<@{p1_discord}>")
     if p2_discord: mentions.append(f"<@{p2_discord}>")
@@ -163,7 +187,25 @@ class ReadyCheckView(discord.ui.View):
             return
 
         if match and match.get("p1_ready") and match.get("p2_ready"):
-            await update_active_match(self.set_id, started_at=discord.utils.utcnow().isoformat())
+            # Both checked in → advance through the state machine (called → in_progress).
+            # transition_match stamps started_at, best-effort marks the provider
+            # in_progress, queues the score-request DM, and broadcasts to the Hub.
+            from backend.core.match_state import transition_match
+            await transition_match(self.set_id, "in_progress")
+
+            # Arm the AI referee: flip the thread's graph state to 'playing' so
+            # chat results are now accepted (they were gated during check-in).
+            try:
+                from backend.bot.agent.graph import app as _referee_app
+                _cfg = {"configurable": {"thread_id": str(self.thread.id)}}
+                _referee_app.update_state(_cfg, {
+                    "match_status": "playing",
+                    "player1_ready": True,
+                    "player2_ready": True,
+                })
+            except Exception as e:
+                await add_bot_feed(f"Referee arm failed for {self.set_id}: {e}", "warn")
+
             self.stop()
 
             if self.is_stream:

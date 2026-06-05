@@ -1532,44 +1532,35 @@ async def get_players_tool():
 
 @tool
 async def create_discord_thread_tool(p1_discord_id: str, p2_discord_id: str, match_title: str):
-    """Creates a Discord match thread for the two players and starts the match referee."""
-    guild = bot.guilds[0]
-    channel = discord.utils.get(guild.text_channels, name="tournament") or guild.text_channels[0]
-    
-    p1 = guild.get_member(int(p1_discord_id))
-    p2 = guild.get_member(int(p2_discord_id))
-    
-    if not p1 or not p2: 
-        return f"Failed to find players. P1 exists: {bool(p1)}, P2 exists: {bool(p2)}"
-    
-    thread = await channel.create_thread(
-        name=match_title,
-        type=discord.ChannelType.public_thread,
-        invitable=False
+    """Calls two players to their tracked match by opening the standard check-in thread.
+
+    Finds the active (bracket-synced) match for the two Discord IDs and routes it
+    through the unified match-thread flow — players must click 'I'm Ready' to check
+    in before the match goes in-progress. Does NOT create an ad-hoc 'instantly
+    playing' thread; both players must belong to the same tracked set."""
+    from core.database import get_active_matches, get_tournament
+    from bot.match_threads import create_match_thread
+
+    p1, p2 = str(p1_discord_id), str(p2_discord_id)
+    match = None
+    for m in await get_active_matches():
+        d1, d2 = str(m.get("p1_discord")), str(m.get("p2_discord"))
+        if {d1, d2} == {p1, p2}:
+            match = m
+            break
+    if not match:
+        return (
+            "Failed: I couldn't find a tracked bracket match for those two players. "
+            "Make sure both are verified and the set has synced into the hub, then use "
+            "the Call button (or auto-dispatch) instead of an ad-hoc thread."
+        )
+
+    t = await get_tournament(match.get("tournament_slug") or "")
+    await create_match_thread(bot, t, match)
+    return (
+        f"Called {match.get('p1_name')} vs {match.get('p2_name')} — check-in thread "
+        f"created for set {match.get('set_id')}. Waiting for both players to ready up."
     )
-    await thread.add_user(p1)
-    await thread.add_user(p2)
-    
-    config = {"configurable": {"thread_id": str(thread.id)}}
-    initial_state = {
-        "set_id": thread.id, 
-        "thread_id": thread.id,
-        "player1_discord": p1.id,
-        "player2_discord": p2.id,
-        "player1_ready": False,
-        "player2_ready": False,
-        "chat_history": [],
-        "match_status": "playing",
-        "winner_id": None,
-        "score_string": None
-    }
-    app.update_state(config, initial_state)
-    
-    await thread.send(
-        f"Match Started! {p1.mention} vs {p2.mention}\n"
-        "Please coordinate and play your match. Once finished, report the scores here (e.g., 'I won 2-1')."
-    )
-    return f"Successfully created thread {thread.id}."
 
 @tool
 async def post_announcement_tool(announcement_text: str):
