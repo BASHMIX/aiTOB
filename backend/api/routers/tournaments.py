@@ -25,6 +25,8 @@ def serialize_provider_set_for_frontend(ps: ProviderSet) -> dict:
         "round": ps.round_name,
         "fullRoundText": ps.round_name,
         "identifier": ps.identifier,
+        "event_id": ps.event_id,
+        "event_name": ps.event_name,
         "phaseGroup": {
             "displayIdentifier": ps.phase_group
         },
@@ -214,6 +216,38 @@ async def api_refresh_tournament(slug: str):
         for s in info.streams
     ])
     return MessageResponse(message="Tournament data refreshed.", ok=True)
+
+
+@router.get(
+    "/{slug:path}/events",
+    summary="List the events (games) under a tournament",
+    responses={404: {"model": ErrorResponse}},
+    operation_id="listTournamentEvents"
+)
+async def api_list_tournament_events(slug: str):
+    """Return the events under a tournament so the hub can populate the Event
+    dropdown. Each event is a separate game/bracket (e.g. Tekken 8, SF6).
+
+    The frontend uses this to scope attendees/matches by event and avoid
+    cross-game contamination. Auto-select when there is exactly one event.
+    """
+    t = await get_tournament(slug)
+    if not t:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tournament not found")
+    try:
+        raw = json.loads(t.get("raw_data") or "{}")
+    except Exception:
+        raw = {}
+    events = [
+        {
+            "id": str(ev.get("id")),
+            "name": ev.get("name") or "",
+            "game": (ev.get("videogame") or {}).get("name") or "",
+        }
+        for ev in (raw.get("events") or [])
+        if ev.get("id") is not None
+    ]
+    return {"events": events}
 
 
 @router.get(

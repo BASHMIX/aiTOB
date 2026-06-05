@@ -81,10 +81,11 @@ async def auto_assign_free_station(set_id: str):
     operation_id="listActiveMatches"
 )
 async def api_active_matches(
-    tournament_slug: Optional[str] = Query(default=None, description="Optional tournament slug to filter the active matches list by")
+    tournament_slug: Optional[str] = Query(default=None, description="Optional tournament slug to filter the active matches list by"),
+    event_id: Optional[str] = Query(default=None, description="Optional event ID to scope matches to a single game/bracket (prevents cross-event contamination)")
 ):
-    """Retrieve all active matches that are currently registered for tracking. Supports filtering by tournament slug."""
-    matches = await get_active_matches(tournament_slug)
+    """Retrieve all active matches that are currently registered for tracking. Supports filtering by tournament slug and event."""
+    matches = await get_active_matches(tournament_slug, event_id)
     overrides = await get_all_player_overrides()
     for m in matches:
         p1_eid = m.get("p1_entrant_id")

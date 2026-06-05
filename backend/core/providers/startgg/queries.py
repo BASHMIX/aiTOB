@@ -123,6 +123,8 @@ TOURNAMENT_SETS = """
 query TournamentSets($slug: String!, $page: Int!, $perPage: Int!, $phaseIds: [ID!]) {
   tournament(slug: $slug) {
     events {
+      id
+      name
       sets(page: $page, perPage: $perPage, filters: { phaseIds: $phaseIds }) {
         pageInfo { totalPages }
         nodes {

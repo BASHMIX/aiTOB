@@ -78,7 +78,7 @@ class StartGGProvider(ITournamentProvider):
                 {"slug": slug_or_id, "page": page, "perPage": per_page, "phaseIds": active_phase_ids}
             )
             page_sets = [
-                map_set(n)
+                map_set(n, event_id=str(ev.get("id") or ""), event_name=ev.get("name") or "")
                 for ev in ((data or {}).get("tournament") or {}).get("events", []) or []
                 for n in ((ev.get("sets") or {}).get("nodes") or [])
             ]

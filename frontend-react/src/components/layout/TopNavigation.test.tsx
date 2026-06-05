@@ -18,6 +18,8 @@ describe('TopNavigation Component', () => {
   const mockSetTournaments = vi.fn();
   const mockSetCurrentSlug = vi.fn();
   const mockSetMatches = vi.fn();
+  const mockSetEvents = vi.fn();
+  const mockSetCurrentEventId = vi.fn();
   const mockLogout = vi.fn();
 
   const baseStoreState = {
@@ -26,8 +28,12 @@ describe('TopNavigation Component', () => {
       { slug: 'tourney-2', name: 'Tournament 2' }
     ],
     currentSlug: 'tourney-1',
+    events: [],
+    currentEventId: null,
     setTournaments: mockSetTournaments,
     setCurrentSlug: mockSetCurrentSlug,
+    setEvents: mockSetEvents,
+    setCurrentEventId: mockSetCurrentEventId,
     setMatches: mockSetMatches,
     logout: mockLogout,
     status: {

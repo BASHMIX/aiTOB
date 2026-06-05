@@ -41,6 +41,10 @@ class ProviderSet:
     phase_group: str = ""
     entrant1: Optional[ProviderEntrant] = None
     entrant2: Optional[ProviderEntrant] = None
+    # Owning event — lets the hub scope matches per game (Tekken 8 vs SF6) so
+    # multi-event tournaments don't cross-contaminate the dashboard/dispatch.
+    event_id: str = ""
+    event_name: str = ""
 
 @dataclass(frozen=True)
 class ProviderEvent:

@@ -455,16 +455,25 @@ async def get_used_station_ids(exclude_set_id: str) -> set:
             rows = await cursor.fetchall()
             return {row[0] for row in rows}
 
-async def get_active_matches(tournament_slug: str = None):
+async def get_active_matches(tournament_slug: str = None, event_id: str = None):
+    """List active matches, optionally scoped to a tournament and/or event.
+
+    Event scoping prevents cross-game contamination in multi-event tournaments:
+    the hub passes the selected event_id so only that game's matches surface.
+    """
+    clauses, params = [], []
+    if tournament_slug:
+        clauses.append("tournament_slug = ?")
+        params.append(tournament_slug)
+    if event_id:
+        clauses.append("event_id = ?")
+        params.append(str(event_id))
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        if tournament_slug:
-            async with db.execute(
-                "SELECT * FROM active_matches WHERE tournament_slug = ? ORDER BY created_at",
-                (tournament_slug,)
-            ) as cursor:
-                return [dict(r) for r in await cursor.fetchall()]
-        async with db.execute("SELECT * FROM active_matches ORDER BY created_at") as cursor:
+        async with db.execute(
+            f"SELECT * FROM active_matches{where} ORDER BY created_at", params
+        ) as cursor:
             return [dict(r) for r in await cursor.fetchall()]
 
 async def get_active_match(set_id: str):
@@ -638,12 +647,14 @@ async def _update_existing_match(
             p2_entrant_id=COALESCE(NULLIF(p2_entrant_id,''), ?),
             p1_discord=COALESCE(NULLIF(p1_discord,''), ?),
             p2_discord=COALESCE(NULLIF(p2_discord,''), ?),
-            round_name=?, match_number=?, phase_group=?, status=?{', p1_score = 0, p2_score = 0' if reset_scores else ''}
+            round_name=?, match_number=?, phase_group=?,
+            event_id=?, event_name=?, status=?{', p1_score = 0, p2_score = 0' if reset_scores else ''}
         WHERE set_id=?
     """, (p1_name, p2_name, p1_avatar, p2_avatar,
            p1_eid, p2_eid,
            p1_discord, p2_discord,
-           round_name, match_num, str(phase_group), new_status, sid))
+           round_name, match_num, str(phase_group),
+           ps.event_id or "", ps.event_name or "", new_status, sid))
 
     if sid in planned:
         preferred_stream = planned.get(sid)
@@ -681,12 +692,12 @@ async def _insert_new_match(
 
         await db.execute("""
             INSERT INTO active_matches (
-                set_id, tournament_slug, p1_name, p2_name, p1_avatar, p2_avatar,
+                set_id, tournament_slug, event_id, event_name, p1_name, p2_name, p1_avatar, p2_avatar,
                 p1_entrant_id, p2_entrant_id, p1_discord, p2_discord,
                 round_name, match_number, phase_group,
                 status, bot_enabled, is_stream_match, station_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (sid, tournament_slug, p1_name, p2_name, p1_avatar, p2_avatar,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (sid, tournament_slug, ps.event_id or "", ps.event_name or "", p1_name, p2_name, p1_avatar, p2_avatar,
                p1_eid, p2_eid, p1_discord, p2_discord,
                round_name, match_num, str(phase_group),
                new_status, bot_enabled, is_stream, station_id))

@@ -71,8 +71,12 @@ def is_preview_set(raw: Dict[str, Any]) -> bool:
     return sid.startswith("preview")
 
 
-def map_set(raw: Dict[str, Any]) -> ProviderSet:
-    """Map a raw start.gg set node to ProviderSet."""
+def map_set(raw: Dict[str, Any], event_id: str = "", event_name: str = "") -> ProviderSet:
+    """Map a raw start.gg set node to ProviderSet.
+
+    `event_id`/`event_name` are supplied by the caller (the provider iterates
+    events when paginating sets) so each set knows which event it belongs to.
+    """
     state_int = raw.get("state", 1)
     state = SGG_STATE_MAP.get(state_int, ProviderSetState.NOT_STARTED)
 
@@ -91,6 +95,8 @@ def map_set(raw: Dict[str, Any]) -> ProviderSet:
         phase_group=phase_group,
         entrant1=entrant1,
         entrant2=entrant2,
+        event_id=str(event_id or ""),
+        event_name=event_name or "",
     )
 
 

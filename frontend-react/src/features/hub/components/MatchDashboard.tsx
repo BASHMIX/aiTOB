@@ -57,7 +57,7 @@ function sortTBDLast(rows: MatchData[]): MatchData[] {
 
 // ── Main Component ─────────────────────────────────────────────────────
 export function MatchDashboard() {
-  const { matches, currentSlug, tournaments, stations, setMatches, plannedStreamIds, setPlannedStreamIds } = useHubStore();
+  const { matches, currentSlug, currentEventId, events, tournaments, stations, setMatches, plannedStreamIds, setPlannedStreamIds } = useHubStore();
   const [sets, setSets] = useState<any[]>([]);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
 
@@ -141,6 +141,8 @@ export function MatchDashboard() {
 
     // Skip if wrong tournament
     if (currentSlug && m.tournament_slug && m.tournament_slug !== currentSlug) return;
+    // Skip if wrong event (scopes multi-game tournaments to the selected event)
+    if (currentEventId && m.event_id && m.event_id !== currentEventId) return;
 
     result.push({
       id: safe(m.match_number) || shortId(m.set_id),
@@ -178,6 +180,8 @@ export function MatchDashboard() {
     if (!s || !s.id) return;
     const sid = safe(s.id);
     if (localMatchIds.has(sid)) return;
+    // Scope provider sets to the selected event as well.
+    if (currentEventId && s.event_id && s.event_id !== currentEventId) return;
 
     const mapped = mapStartggState(s.state);
 
@@ -197,7 +201,10 @@ export function MatchDashboard() {
   });
 
     return result;
-  }, [matches, sets, currentSlug, plannedStreamIds]);
+  }, [matches, sets, currentSlug, currentEventId, plannedStreamIds]);
+
+  // Force an explicit event choice for multi-event tournaments before showing matches.
+  const needsEventSelection = events.length > 1 && !currentEventId;
 
   // ── Action handlers ────────────────────────────────────────────────
   const handleAction = async (action: string, row: any, data?: any) => {
@@ -402,14 +409,20 @@ export function MatchDashboard() {
       </div>
 
       <div className="flex-1 overflow-y-auto custom-scrollbar pr-1">
-        <MatchesList
-          matches={sorted}
-          dqTimerSeconds={dqTimerSeconds}
-          autoDqEnabled={autoDqEnabled}
-          onAction={handleAction}
-          onToggleStream={handleToggleStream}
-          stations={stations ?? []}
-        />
+        {needsEventSelection ? (
+          <div className="text-center p-6 text-textDim text-sm">
+            This tournament has multiple events. Select an <span className="text-accentYellow font-bold">Event</span> above to view its matches.
+          </div>
+        ) : (
+          <MatchesList
+            matches={sorted}
+            dqTimerSeconds={dqTimerSeconds}
+            autoDqEnabled={autoDqEnabled}
+            onAction={handleAction}
+            onToggleStream={handleToggleStream}
+            stations={stations ?? []}
+          />
+        )}
       </div>
 
       {settingsModalOpen && (

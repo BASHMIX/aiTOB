@@ -33,6 +33,8 @@ interface Match {
   // New lifecycle fields
   is_stream_match?: boolean;
   tournament_slug?: string;
+  event_id?: string;
+  event_name?: string;
   phase_group?: string;
   p1_cfn?: string;
   p2_cfn?: string;
@@ -54,9 +56,17 @@ interface Station {
   overlays?: { overlay_name: string }[];
 }
 
+interface EventOpt {
+  id: string;
+  name: string;
+  game?: string;
+}
+
 interface HubState {
   tournaments: Tournament[];
   currentSlug: string | null;
+  events: EventOpt[];
+  currentEventId: string | null;
   matches: Match[];
   stations: Station[];
   status: {
@@ -70,6 +80,8 @@ interface HubState {
   hubPassword: string;
   setTournaments: (tournaments: Tournament[]) => void;
   setCurrentSlug: (slug: string | null) => void;
+  setEvents: (events: EventOpt[]) => void;
+  setCurrentEventId: (id: string | null) => void;
   setMatches: (matches: Match[]) => void;
   setStations: (stations: Station[]) => void;
   setStatus: (status: {
@@ -88,6 +100,8 @@ interface HubState {
 export const useHubStore = create<HubState>((set) => ({
   tournaments: [],
   currentSlug: localStorage.getItem('hub_current_slug'),
+  events: [],
+  currentEventId: localStorage.getItem('hub_current_event'),
   matches: [],
   stations: [],
   status: { startgg_api: false, websockets: false, discord_bot: false, token_scope: null },
@@ -97,10 +111,23 @@ export const useHubStore = create<HubState>((set) => ({
   setCurrentSlug: (currentSlug) => {
     if (currentSlug) localStorage.setItem('hub_current_slug', currentSlug);
     else localStorage.removeItem('hub_current_slug');
-    set((state) => ({ 
-      currentSlug, 
-      matches: currentSlug ? state.matches : [] 
-    }));
+    set((state) => {
+      // Switching tournaments invalidates the selected event (a different game).
+      const slugChanged = currentSlug !== state.currentSlug;
+      if (slugChanged) localStorage.removeItem('hub_current_event');
+      return {
+        currentSlug,
+        matches: currentSlug ? state.matches : [],
+        events: slugChanged ? [] : state.events,
+        currentEventId: slugChanged ? null : state.currentEventId,
+      };
+    });
+  },
+  setEvents: (events) => set({ events }),
+  setCurrentEventId: (currentEventId) => {
+    if (currentEventId) localStorage.setItem('hub_current_event', currentEventId);
+    else localStorage.removeItem('hub_current_event');
+    set({ currentEventId });
   },
   setMatches: (matches) => set({ matches }),
   setStations: (stations) => set({ stations }),

@@ -73,6 +73,8 @@ TABLE_SCHEMAS = [
     CREATE TABLE IF NOT EXISTS active_matches (
         set_id TEXT PRIMARY KEY,
         tournament_slug TEXT,
+        event_id TEXT,
+        event_name TEXT,
         station_id TEXT,
         p1_name TEXT, p1_score INTEGER DEFAULT 0,
         p2_name TEXT, p2_score INTEGER DEFAULT 0,
@@ -218,4 +220,8 @@ MIGRATIONS = [
     "ALTER TABLE active_matches ADD COLUMN auto_dq_disarmed BOOLEAN DEFAULT 0",
     # AI Discord conflict-investigation summary (one-line dispute synopsis)
     "ALTER TABLE conflicts ADD COLUMN ai_summary TEXT",
+    # Event scoping — tag each match with its owning event so multi-event
+    # tournaments (e.g. Tekken 8 + SF6) don't cross-contaminate the hub.
+    "ALTER TABLE active_matches ADD COLUMN event_id TEXT",
+    "ALTER TABLE active_matches ADD COLUMN event_name TEXT",
 ]

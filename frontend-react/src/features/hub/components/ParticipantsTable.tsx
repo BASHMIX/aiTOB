@@ -3,7 +3,7 @@ import { useHubStore } from '@/store/useHubStore';
 import axios from 'axios';
 
 export function ParticipantsTable() {
-  const { tournaments, currentSlug } = useHubStore();
+  const { tournaments, currentSlug, currentEventId, events } = useHubStore();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ name: '', team: '', country: '', cfn: '' });
   const [overrides, setOverrides] = useState<Record<string, any>>({});
@@ -24,6 +24,10 @@ export function ParticipantsTable() {
 
   if (!currentSlug) return <div className="text-center p-5 text-textDim text-sm">Select a tournament</div>;
   if (!currentTournament || !currentTournament.raw_data) return <div className="text-center p-5 text-textDim text-sm">No data</div>;
+  // Multi-event tournaments must pick an event before attendees are shown (no cross-game mixing).
+  if (events.length > 1 && !currentEventId) {
+    return <div className="text-center p-5 text-textDim text-sm">Select an <span className="text-accentYellow font-bold">Event</span> above to view its attendees.</div>;
+  }
 
   let entrants = [];
   try {
@@ -31,10 +35,13 @@ export function ParticipantsTable() {
     if (raw.mock) {
       entrants = raw.entrants || [];
     } else {
-      // Try various paths in the Start.gg response
-      const event = raw.events?.[0] || {};
-      entrants = event.entrants?.nodes || raw.tournament?.events?.[0]?.entrants?.nodes || raw.entrants?.nodes || [];
-      
+      // Scope to the SELECTED event (not always the first) to avoid cross-game contamination.
+      const evList = raw.events || raw.tournament?.events || [];
+      const event = currentEventId
+        ? (evList.find((ev: any) => String(ev.id) === String(currentEventId)) || {})
+        : (evList[0] || {});
+      entrants = event.entrants?.nodes || raw.entrants?.nodes || [];
+
       // If still empty but we have participants directly
       if (entrants.length === 0 && raw.participants) {
         entrants = raw.participants;
