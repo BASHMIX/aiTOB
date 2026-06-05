@@ -47,14 +47,14 @@ Your job is to execute these commands by using the tools provided to you.
 You have access to a rich set of tools:
 1. get_active_matches_tool: List active matches with their set_ids, players, scores, and statuses.
 2. get_players_tool: List registered players with their gamer tags and Discord IDs.
-3. create_discord_thread_tool: Call players and start a match by creating a Discord thread.
+3. call_match_tool: Call a tracked match into check-in (not_started -> called) by its set_id. The bot opens the standard check-in thread; players must ready up before it goes in-progress.
 4. post_announcement_tool: Announce a message to the public Discord channel.
 5. dq_player_tool: Disqualify a player in a match (e.g. 'p1', 'p2', or 'both').
 6. force_score_tool: Manually set match scores and complete a match.
 7. reopen_match_tool: Reset and reopen a completed match so it can be re-played or corrected.
 
 Guidelines for actions:
-- To call a match: Lookup active matches to find the details, lookup players to get their Discord IDs, then call create_discord_thread_tool.
+- To call a match: use get_active_matches_tool to find the match's set_id, then call call_match_tool with that set_id. Always identify matches by set_id (never a thread id).
 - To disqualify a player: Use dq_player_tool with the appropriate set_id and player target ('p1', 'p2', or 'both').
 - To force/submit a score: Use force_score_tool with the correct scores.
 - To reopen a match: Use reopen_match_tool.
@@ -85,14 +85,14 @@ Your job is to execute these commands by using the tools provided to you.
 You have access to a rich set of tools:
 1. get_active_matches_tool: List active matches with their set_ids, players, scores, and statuses.
 2. get_players_tool: List registered players with their gamer tags and Discord IDs.
-3. create_discord_thread_tool: Call players and start a match by creating a Discord thread.
+3. call_match_tool: Call a tracked match into check-in (not_started -> called) by its set_id. The bot opens the standard check-in thread; players must ready up before it goes in-progress.
 4. post_announcement_tool: Announce a message to the public Discord channel.
 5. dq_player_tool: Disqualify a player in a match (e.g. 'p1', 'p2', or 'both').
 6. force_score_tool: Manually set match scores and complete a match.
 7. reopen_match_tool: Reset and reopen a completed match so it can be re-played or corrected.
 
 Guidelines for actions:
-- To call a match: Lookup active matches to find the details, lookup players to get their Discord IDs, then call create_discord_thread_tool.
+- To call a match: use get_active_matches_tool to find the match's set_id, then call call_match_tool with that set_id. Always identify matches by set_id (never a thread id).
 - To disqualify a player: Use dq_player_tool with the appropriate set_id and player target ('p1', 'p2', or 'both').
 - To force/submit a score: Use force_score_tool with the correct scores.
 - To reopen a match: Use reopen_match_tool.

@@ -62,14 +62,9 @@ mutation AssignStream($setId: ID!, $streamId: ID!) {
 }
 """
 
-REMOVE_STREAM = """
-mutation RemoveStream($setId: ID!) {
-  removeStream(setId: $setId) {
-    id
-    state
-  }
-}
-"""
+# NOTE: start.gg exposes no `removeStream` mutation — only `assignStream`. There
+# is no API to pull a set off the public stream queue, so client.remove_stream is
+# a local-only no-op (see its docstring). The query is intentionally not defined.
 
 # Fetch a start.gg user by URL slug. Used by bio-code verification — we read
 # the user's bio to check for a temporary verification code the player added

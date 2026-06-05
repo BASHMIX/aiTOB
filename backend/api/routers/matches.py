@@ -167,21 +167,20 @@ async def api_force_in_progress(set_id: str):
     operation_id="callMatch"
 )
 async def api_call_match(set_id: str):
-    """Transition match status to called, trigger bot notification, and start the check-in timer. Requires admin password auth."""
-    m = await get_active_match(set_id)
-    if not m:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found")
-    result = await transition_match(set_id, "called")
+    """Transition match status to called, trigger bot notification, and start the check-in timer. Requires admin password auth.
+
+    Routes through the shared call_match_core so the Hub button and the AI agent
+    take the exact same path: not_started → called (state machine) + enqueue the
+    standard `call_match` hub command. No station is bound here — for a stream
+    match that's the `on_stream` overlay, bound at the called → in_progress
+    transition once both players check in.
+    """
+    from backend.core.match_state import call_match_core
+    result = await call_match_core(set_id)
     if result.get("error"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result["error"])
-    
-    # Calling a match only moves it not_started → called (check-in). No station is
-    # bound here — for a stream match the station is the `on_stream` overlay, bound
-    # at the called → in_progress transition once both players check in.
-    called_at = datetime.datetime.utcnow().isoformat()
-    await add_hub_command(f"call_match {set_id}")
-    await add_bot_feed(f"Players called for match: {m['p1_name']} vs {m['p2_name']}")
-    return MessageResponse(message=f"Players called at {called_at}", ok=True)
+        code = status.HTTP_404_NOT_FOUND if result["error"] == "Match not found" else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=code, detail=result["error"])
+    return MessageResponse(message="Players called", ok=True)
 
 
 @router.post(

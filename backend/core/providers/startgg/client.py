@@ -486,16 +486,15 @@ class StartGGClient:
             return False
 
     async def remove_stream(self, set_id: str) -> bool:
-        """Remove a set from the start.gg stream queue."""
-        if str(set_id).startswith("preview"):
-            return False
-        from backend.core.providers.startgg.queries import REMOVE_STREAM
-        try:
-            await self.query(REMOVE_STREAM, {"setId": set_id})
-            return True
-        except Exception as e:
-            print(f"Failed to remove stream: {e}")
-            return False
+        """Unassign a set from the start.gg stream queue.
+
+        start.gg's schema exposes NO removeStream mutation (only assignStream,
+        whose streamId is required so null can't clear it) — calling it returned
+        `Cannot query field "removeStream" on type "Mutation"`. There's no API to
+        pull a set off the public stream queue, so this is a safe no-op: the Hub
+        already clears the local stream flag / station binding. Returns True so
+        callers treat the unassign as handled."""
+        return True
 
     async def fetch_user_by_slug(self, slug: str) -> Optional[Dict[str, Any]]:
         """Fetch a start.gg user by URL slug. Returns the raw `user` node or None.

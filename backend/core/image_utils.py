@@ -51,8 +51,10 @@ async def validate_avatar_safety(image_bytes: bytes) -> tuple[bool, str]:
         return True, "Safety check skipped (no API key)"
         
     genai.configure(api_key=api_key)
-    # Using a reliable model name
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    # 'gemini-1.5-flash' 404s on the current v1beta API. Default to the model the
+    # rest of the codebase uses (gemini-2.5-flash); override via GEMINI_VISION_MODEL.
+    model_name = os.getenv("GEMINI_VISION_MODEL", "gemini-2.5-flash")
+    model = genai.GenerativeModel(model_name)
     
     try:
         prompt = "Analyze this image for a tournament profile. Is it offensive, inappropriate, or harmful? Respond with 'SAFE' or a short reason why it is not safe."

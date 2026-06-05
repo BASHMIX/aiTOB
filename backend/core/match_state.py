@@ -120,6 +120,32 @@ async def _realize_in_progress_overlays(match: dict, update_kwargs: dict) -> Non
 def generate_lobby_password() -> str:
     return str(random.randint(1000, 9999))
 
+async def call_match_core(set_id: str) -> dict:
+    """The single 'Call Match' path shared by the Hub button AND the AI agent.
+
+    Moves the set not_started → called THROUGH the state machine (validated by
+    transition_match), then enqueues the standard `call_match` hub command — which
+    the bot drains to open the check-in thread. No raw status writes, no ad-hoc
+    Discord logic: every caller respects workflows.json and the check-in gate.
+
+    Returns {"ok": True, set_id, p1_name, p2_name} or {"error": "..."}.
+    """
+    from backend.core.database import get_active_match, add_hub_command, add_bot_feed as _feed
+    match = await get_active_match(set_id)
+    if not match:
+        return {"error": "Match not found"}
+    result = await transition_match(set_id, "called")
+    if result.get("error"):
+        return result
+    await add_hub_command(f"call_match {set_id}")
+    await _feed(f"Players called for match: {match.get('p1_name')} vs {match.get('p2_name')}")
+    return {
+        "ok": True,
+        "set_id": set_id,
+        "p1_name": match.get("p1_name"),
+        "p2_name": match.get("p2_name"),
+    }
+
 async def transition_match(set_id: str, to_status: str, **kwargs) -> dict:
     match = await get_active_match(set_id)
     if not match:

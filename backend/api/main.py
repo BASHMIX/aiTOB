@@ -1,4 +1,5 @@
 import os, json
+import asyncio
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -146,10 +147,33 @@ async def reconciliation_loop():
             print(f"[SYS] Error in reconciliation loop: {e}")
 
 # Startup
+async def _send_drain_to_bot():
+    """Push an event-driven drain nudge to the bot over its WebSocket so it
+    executes a just-queued hub command immediately (no polling). No-op when the
+    bot is offline — the row stays in the queue for the bot's 60s fallback sweep."""
+    if ws_manager.bot_connection:
+        try:
+            await ws_manager.bot_connection.send_text(json.dumps({"type": "drain"}))
+        except Exception as e:
+            print(f"[API] drain nudge to bot failed: {e}")
+
+
+def _notify_bot_drain():
+    """Sync listener fired by add_hub_command (API process) — schedule the nudge."""
+    try:
+        asyncio.get_running_loop().create_task(_send_drain_to_bot())
+    except RuntimeError:
+        pass  # no running loop (shouldn't happen inside a request)
+
+
 @app.on_event("startup")
 async def startup_event():
     import asyncio
     await init_db()
+    # Wire the event-driven hub-command outbox: when the API enqueues a command,
+    # immediately nudge the bot to drain it instead of waiting on a poll.
+    from backend.core.database import set_hub_command_listener
+    set_hub_command_listener(_notify_bot_drain)
     # Migration of env to DB
     important_vars = ["STARTGG_API_TOKEN", "DISCORD_BOT_TOKEN", "GOOGLE_API_KEY", "HUB_PASSWORD"]
     all_settings = await get_all_settings()

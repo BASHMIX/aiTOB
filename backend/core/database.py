@@ -1033,6 +1033,28 @@ async def clear_bot_feed():
         await db.commit()
 
 # ── Hub Commands ───────────────────────────────────────────────────────────
+# Event-driven outbox: the hub_commands table is the durable queue, but instead
+# of polling it, each process registers a listener that is fired the instant a
+# command is enqueued so the consumer (the bot) can drain immediately. The API
+# process registers a listener that nudges the bot over its WebSocket; the bot
+# process registers one that triggers its own in-process drain.
+_hub_command_listener = None
+
+def set_hub_command_listener(callback):
+    """Register a zero-arg callback fired (best-effort) right after a hub command
+    is committed. Used to drain the queue event-driven instead of by polling."""
+    global _hub_command_listener
+    _hub_command_listener = callback
+
+def _fire_hub_command_listener():
+    cb = _hub_command_listener
+    if cb is None:
+        return
+    try:
+        cb()
+    except Exception as e:
+        print(f"[DB] hub command listener error: {e}")
+
 async def add_hub_command(command_text: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
@@ -1040,6 +1062,8 @@ async def add_hub_command(command_text: str):
             (command_text,)
         )
         await db.commit()
+    # Fire AFTER commit so the consumer sees the row when it drains.
+    _fire_hub_command_listener()
 
 async def get_pending_hub_commands():
     async with aiosqlite.connect(DB_PATH) as db:

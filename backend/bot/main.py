@@ -48,6 +48,16 @@ async def on_ready():
     if not auto_dispatch_pool_matches.is_running():
         auto_dispatch_pool_matches.start()
 
+    # Event-driven hub-command outbox: register the in-process listener (fires on
+    # bot-side enqueues) and start the 60s fallback sweeper. API-side enqueues
+    # arrive as {"type":"drain"} nudges over the bot WS (handled below).
+    from core.database import set_hub_command_listener
+    set_hub_command_listener(_on_hub_command_enqueued)
+    if not drain_hub_commands.is_running():
+        drain_hub_commands.start()
+    # Drain anything queued before the bot came online.
+    asyncio.create_task(run_drain())
+
     # Sync the slash command tree. Per-guild sync propagates instantly;
     # global sync can take up to an hour. We sync to every guild the bot is
     # in for snappy UX during testing AND globally so newly-joined guilds work.
@@ -858,6 +868,61 @@ async def auto_dispatch_pool_matches():
         if dispatched_any:
             _DISPATCH_LAST_TICK[(slug, event_id)] = now
 
+
+# ── Hub-command drain (event-driven outbox) ──────────────────────────────
+# add_hub_command() writes rows to the hub_commands queue from BOTH the API
+# (the "Call Match" button, role grants) and the in-process auto-dispatcher.
+# The queue is the durable record; delivery is EVENT-DRIVEN, not polled:
+#   • API enqueue → API fires a {"type":"drain"} nudge over the bot WS → run_drain()
+#   • Bot enqueue (dispatcher / transition_match) → in-process listener → run_drain()
+#   • drain_hub_commands (below) is only a 60s safety-net sweeper.
+# Without draining, queued commands (call_match, dm_score_request,
+# apply_verified_role) never execute and the bot looks "silent". The _drain_lock
+# serializes overlapping triggers and claim-before-run prevents double execution.
+_drain_lock = asyncio.Lock()
+
+async def run_drain():
+    """Execute every pending hub command once, in order. Safe to call from any
+    trigger (WS nudge, in-process listener, fallback sweeper) — the lock serializes
+    and 'processing' claims guard against double execution."""
+    from core.database import get_pending_hub_commands, update_hub_command_status
+    async with _drain_lock:
+        try:
+            pending = await get_pending_hub_commands()
+        except Exception as e:
+            print(f"[BOT] drain fetch failed: {e}")
+            return
+        for row in pending:
+            cmd_id = row.get("id")
+            cmd_text = row.get("command_text")
+            if not cmd_text:
+                await update_hub_command_status(cmd_id, "done")
+                continue
+            await update_hub_command_status(cmd_id, "processing")  # claim
+            try:
+                await handle_ws_command(cmd_text)
+                await update_hub_command_status(cmd_id, "done")
+            except Exception as e:
+                await update_hub_command_status(cmd_id, "error")
+                print(f"[BOT] hub command {cmd_id} ('{cmd_text}') failed: {e}")
+
+
+@tasks.loop(seconds=60.0)
+async def drain_hub_commands():
+    """Fallback sweeper only — catches anything queued while the bot's WS was down
+    (e.g. an API enqueue that couldn't be nudged). The primary path is event-driven."""
+    await run_drain()
+
+
+def _on_hub_command_enqueued():
+    """In-process listener: a command was just queued in the BOT process (dispatcher,
+    transition_match). Drain immediately; the lock coalesces with any WS-nudged drain."""
+    try:
+        asyncio.create_task(run_drain())
+    except RuntimeError:
+        pass  # no running loop yet (import time) — the 60s sweeper will catch it
+
+
 class RegistrationView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -1564,10 +1629,13 @@ async def on_message(message):
 
 @tool
 async def get_active_matches_tool():
-    """Returns a list of all active or called matches from the database."""
+    """Returns active/called matches as JSON. Use the `set_id` field (NOT any
+    thread id) when reporting scores, DQ'ing, or calling a match."""
+    import json
     from core.database import get_active_matches
+    from bot.agent.tool_helpers import project_match_for_agent
     matches = await get_active_matches()
-    return str(matches)
+    return json.dumps([project_match_for_agent(m) for m in matches])
 
 @tool
 async def get_players_tool():
@@ -1579,35 +1647,39 @@ async def get_players_tool():
             return str([dict(zip([col[0] for col in c.description], row)) for row in rows])
 
 @tool
-async def create_discord_thread_tool(p1_discord_id: str, p2_discord_id: str, match_title: str):
-    """Calls two players to their tracked match by opening the standard check-in thread.
+async def call_match_tool(set_id: str = "", p1_discord_id: str = "", p2_discord_id: str = ""):
+    """Call a tracked match into the standard check-in flow (not_started → called).
 
-    Finds the active (bracket-synced) match for the two Discord IDs and routes it
-    through the unified match-thread flow — players must click 'I'm Ready' to check
-    in before the match goes in-progress. Does NOT create an ad-hoc 'instantly
-    playing' thread; both players must belong to the same tracked set."""
-    from core.database import get_active_matches, get_tournament
-    from bot.match_threads import create_match_thread
+    Pass the `set_id` from get_active_matches_tool (preferred). If you only know the
+    two players, pass both their Discord IDs and the set will be resolved. This goes
+    through the SAME core path as the Hub's Call button — it transitions the match
+    via the state machine and the bot opens the check-in thread; players must click
+    'I'm Ready' before the match goes in-progress. It does NOT create an ad-hoc
+    'instantly playing' thread and never bypasses check-in."""
+    from core.database import get_active_matches
+    from core.match_state import call_match_core
 
-    p1, p2 = str(p1_discord_id), str(p2_discord_id)
-    match = None
-    for m in await get_active_matches():
-        d1, d2 = str(m.get("p1_discord")), str(m.get("p2_discord"))
-        if {d1, d2} == {p1, p2}:
-            match = m
-            break
-    if not match:
+    sid = str(set_id or "").strip()
+    if not sid and p1_discord_id and p2_discord_id:
+        p1, p2 = str(p1_discord_id), str(p2_discord_id)
+        for m in await get_active_matches():
+            if {str(m.get("p1_discord")), str(m.get("p2_discord"))} == {p1, p2}:
+                sid = str(m.get("set_id"))
+                break
+
+    if not sid:
         return (
-            "Failed: I couldn't find a tracked bracket match for those two players. "
-            "Make sure both are verified and the set has synced into the hub, then use "
-            "the Call button (or auto-dispatch) instead of an ad-hoc thread."
+            "Failed: provide a set_id (from get_active_matches_tool) — or both players' "
+            "Discord IDs for a synced bracket match — so I can call the right set."
         )
 
-    t = await get_tournament(match.get("tournament_slug") or "")
-    await create_match_thread(bot, t, match)
+    result = await call_match_core(sid)
+    if result.get("error"):
+        return f"Failed to call match {sid}: {result['error']}"
     return (
-        f"Called {match.get('p1_name')} vs {match.get('p2_name')} — check-in thread "
-        f"created for set {match.get('set_id')}. Waiting for both players to ready up."
+        f"Called {result.get('p1_name')} vs {result.get('p2_name')} (set {sid}) — "
+        "transitioned to 'called'; the check-in thread is being opened. Waiting for "
+        "both players to ready up."
     )
 
 @tool
@@ -1787,7 +1859,7 @@ async def remind_players_missing_avatars_tool(tournament_slug: str = None):
 hub_tools = [
     get_active_matches_tool,
     get_players_tool,
-    create_discord_thread_tool,
+    call_match_tool,
     post_announcement_tool,
     dq_player_tool,
     force_score_tool,
@@ -2028,6 +2100,9 @@ async def bot_ws_listener():
                         if cmd_text:
                             # Run immediately inside an isolated task
                             asyncio.create_task(handle_ws_command(cmd_text))
+                    elif msg.get("type") == "drain":
+                        # Event-driven nudge: a command was just queued API-side.
+                        asyncio.create_task(run_drain())
         except Exception as e:
             bot_ws = None
             print(f"[BOT] WebSocket connection failed: {e}. Retrying in 5 seconds...")
