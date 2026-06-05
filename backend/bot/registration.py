@@ -3,7 +3,8 @@ import os
 from backend.core.database import (
     create_or_update_player, get_player, add_hub_command, add_bot_feed,
 )
-from backend.core.image_utils import validate_avatar_quality, validate_avatar_safety, process_avatar
+from backend.core.image_utils import validate_avatar_quality, validate_avatar_safety
+from backend.core.image_store import store_avatar
 from backend.bot.messages import get_msg
 
 
@@ -151,10 +152,10 @@ class RegistrationManager:
                 await message.channel.send(get_msg("error_safety", lang, reason=msg_s))
                 return None
 
-            # Process and save
+            # Process + store (Cloudinary when configured, local fallback otherwise).
             p = await get_player(discord_id)
             filename_id = (p or {}).get('startgg_id') or discord_id
-            return process_avatar(image_bytes, filename_id)
+            return await store_avatar(image_bytes, filename_id)
 
         except Exception as e:
             print(f"Registration Avatar Error: {e}")

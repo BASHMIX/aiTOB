@@ -154,6 +154,7 @@ class PatchEnvRequest(BaseModel):
     AI_PROVIDER: Optional[str] = Field(default=None, description="LLM provider configuration (gemini or openai)")
     AI_MODEL: Optional[str] = Field(default=None, description="Exact LLM model slug to run")
     GEMINI_API_KEY: Optional[str] = Field(default=None, description="Direct API key override for Google Gemini client")
+    CLOUDINARY_URL: Optional[str] = Field(default=None, description="Cloudinary URL (cloudinary://key:secret@cloud) for broadcast avatar hosting. If unset, avatars save locally under /static.")
 
 
 class CreatePlannedStreamRequest(BaseModel):

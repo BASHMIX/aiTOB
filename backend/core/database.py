@@ -580,7 +580,16 @@ async def _preload_sync_data(db, tournament_slug: str):
     ) as cursor:
         discord_by_startgg = {str(row[0]): str(row[1]) for row in await cursor.fetchall()}
 
-    return bot_manage_limit, local_matches, planned, station_by_stream, discord_by_startgg
+    # Player-uploaded broadcast avatars (Cloudinary/local URL), keyed by start.gg
+    # user id. These OVERRIDE the low-quality start.gg profile picture on overlays.
+    async with db.execute(
+        "SELECT startgg_id, avatar_path FROM players "
+        "WHERE startgg_id IS NOT NULL AND startgg_id != '' "
+        "AND avatar_path IS NOT NULL AND avatar_path != ''"
+    ) as cursor:
+        avatar_by_startgg = {str(row[0]): str(row[1]) for row in await cursor.fetchall()}
+
+    return bot_manage_limit, local_matches, planned, station_by_stream, discord_by_startgg, avatar_by_startgg
 
 async def _update_existing_match(
     db, sid, ps, local_status, provider_status, planned, station_by_stream, discord_by_startgg,
@@ -673,7 +682,7 @@ async def sync_active_matches(tournament_slug: str, provider_sets: list[Provider
     is_stream_match=TRUE and (if a stream_id is set) a matching station assigned.
     """
     async with aiosqlite.connect(DB_PATH) as db:
-        bot_manage_limit, local_matches, planned, station_by_stream, discord_by_startgg = await _preload_sync_data(db, tournament_slug)
+        bot_manage_limit, local_matches, planned, station_by_stream, discord_by_startgg, avatar_by_startgg = await _preload_sync_data(db, tournament_slug)
 
         found_sids = set()
 
@@ -691,6 +700,14 @@ async def sync_active_matches(tournament_slug: str, provider_sets: list[Provider
             p2_name  = ps.entrant2.name if ps.entrant2 else "TBD"
             p1_avatar = ps.entrant1.avatar_url if ps.entrant1 else None
             p2_avatar = ps.entrant2.avatar_url if ps.entrant2 else None
+            # Broadcast override: a player's uploaded avatar (Cloudinary/local URL)
+            # wins over start.gg's low-res profile picture on the overlay.
+            uid1 = ps.entrant1.user_id if ps.entrant1 else None
+            uid2 = ps.entrant2.user_id if ps.entrant2 else None
+            if uid1 and avatar_by_startgg.get(str(uid1)):
+                p1_avatar = avatar_by_startgg[str(uid1)]
+            if uid2 and avatar_by_startgg.get(str(uid2)):
+                p2_avatar = avatar_by_startgg[str(uid2)]
             p1_eid   = ps.entrant1.id if ps.entrant1 else None
             p2_eid   = ps.entrant2.id if ps.entrant2 else None
             round_name  = ps.round_name
