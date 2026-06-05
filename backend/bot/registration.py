@@ -81,8 +81,12 @@ class RegistrationManager:
             await message.channel.send(get_msg("avatar_prompt", lang))
         elif step == "verified":
             # Fully registered (full flow OR bio-code fast path).
-            # Reply so verified players who DM the bot aren't met with silence.
-            await message.channel.send(get_msg("profile_update", lang))
+            # If they DM an IMAGE, treat it as a broadcast-avatar update rather
+            # than swallowing it behind the generic "update your profile?" reply.
+            if message.attachments:
+                await self._handle_broadcast_avatar_step(message, discord_id, lang)
+            else:
+                await message.channel.send(get_msg("profile_update", lang))
 
     async def _handle_language_step(self, message, discord_id, current_lang):
         text = message.content.strip().lower()

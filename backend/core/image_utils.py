@@ -3,29 +3,44 @@ from io import BytesIO
 import os
 import google.generativeai as genai
 
+# Broadcast avatars must be high enough resolution to render cleanly on stream
+# overlays. 512x512 is the minimum we accept (start.gg profile pics are often
+# smaller, which is exactly why we collect our own).
+MIN_AVATAR_DIM = 512
+MAX_AVATAR_BYTES = 5 * 1024 * 1024
+MAX_ASPECT_RATIO = 3.0
+AVATAR_OUTPUT_SIZE = 512
+
+
 def validate_avatar_quality(image_bytes: bytes) -> tuple[bool, str]:
-    """
-    Checks if the image is of sufficient resolution and not too distorted.
+    """Validate an uploaded avatar, returning (ok, specific_reason).
+
+    Each failure path returns a precise, user-facing explanation of EXACTLY
+    why the image was rejected — never a silent/generic failure.
     """
     try:
         img = Image.open(BytesIO(image_bytes))
         width, height = img.size
-        
-        if width < 100 or height < 100:
-            return False, "Image resolution is too low. Please upload a larger image (at least 100x100)."
-        
-        # Check size (5MB)
-        if len(image_bytes) > 5 * 1024 * 1024:
-            return False, "File size is too large. Max 5MB."
-
-        # Check aspect ratio
-        ratio = max(width, height) / min(width, height)
-        if ratio > 3.0:
-            return False, "The image is too narrow or too wide. Please provide a more square-like photo."
-            
-        return True, "OK"
     except Exception as e:
-        return False, f"Invalid image file: {e}"
+        return False, f"Invalid image file — I couldn't read that as an image ({e})."
+
+    if width < MIN_AVATAR_DIM or height < MIN_AVATAR_DIM:
+        return False, (
+            f"Image resolution is too low ({width}x{height}). Broadcast avatars must be at "
+            f"least {MIN_AVATAR_DIM}x{MIN_AVATAR_DIM}px — please upload a larger, higher-quality image."
+        )
+
+    if len(image_bytes) > MAX_AVATAR_BYTES:
+        return False, "File size is too large (max 5MB). Please upload a smaller file."
+
+    ratio = max(width, height) / min(width, height)
+    if ratio > MAX_ASPECT_RATIO:
+        return False, (
+            f"The image is too narrow or too wide ({width}x{height}). Please provide a more "
+            "square photo (aspect ratio under 3:1)."
+        )
+
+    return True, "OK"
 
 async def validate_avatar_safety(image_bytes: bytes) -> tuple[bool, str]:
     """
@@ -57,34 +72,48 @@ async def validate_avatar_safety(image_bytes: bytes) -> tuple[bool, str]:
         print(f"[IMAGE] Safety check error: {e}")
         return True, "Safety check failed to run" # Fallback
 
-def process_avatar(image_bytes: bytes, filename_id: str) -> str:
-    """
-    Accepts an image, center-crops it, resizes it, and saves it.
+def crop_resize_to_jpeg_bytes(image_bytes: bytes, size: int = AVATAR_OUTPUT_SIZE) -> bytes:
+    """Center-crop to a square, resize to `size`x`size`, return JPEG bytes.
+
+    Single source of truth for avatar normalization — used by both the local
+    saver (process_avatar) and the Cloudinary uploader (image_store).
     """
     img = Image.open(BytesIO(image_bytes))
-    
-    # Center crop
+
     width, height = img.size
     new_size = min(width, height)
     left = (width - new_size) / 2
     top = (height - new_size) / 2
-    right = (width + new_size) / 2
-    bottom = (height + new_size) / 2
+    img = img.crop((left, top, left + new_size, top + new_size))
 
-    img = img.crop((left, top, right, bottom))
-    
-    # Resize
-    img = img.resize((500, 500), Image.Resampling.LANCZOS)
-    
-    # Ensure directory exists
-    save_dir = os.path.join("backend", "api", "static", "avatars")
-    os.makedirs(save_dir, exist_ok=True)
-    
-    # Convert to RGB
+    img = img.resize((size, size), Image.Resampling.LANCZOS)
+
     if img.mode in ('RGBA', 'P'):
         img = img.convert('RGB')
-        
+
+    buf = BytesIO()
+    img.save(buf, "JPEG", quality=90)
+    return buf.getvalue()
+
+
+def save_jpeg_bytes(jpeg_bytes: bytes, filename_id: str) -> str:
+    """Write already-encoded JPEG bytes into the static avatars dir.
+
+    Returns the filesystem path written. Centralizes the disk-write so the
+    local-save fallback and process_avatar share one location.
+    """
+    save_dir = os.path.join("backend", "api", "static", "avatars")
+    os.makedirs(save_dir, exist_ok=True)
     save_path = os.path.join(save_dir, f"{filename_id}.jpg")
-    img.save(save_path, "JPEG", quality=90)
-    
+    with open(save_path, "wb") as f:
+        f.write(jpeg_bytes)
     return save_path
+
+
+def process_avatar(image_bytes: bytes, filename_id: str) -> str:
+    """Accepts an image, center-crops, resizes, and saves it locally.
+
+    Returns the filesystem path. Kept as the local-disk path used as the
+    Cloudinary fallback (see image_store.store_avatar).
+    """
+    return save_jpeg_bytes(crop_resize_to_jpeg_bytes(image_bytes), filename_id)

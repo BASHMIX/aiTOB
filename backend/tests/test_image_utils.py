@@ -24,39 +24,38 @@ def generate_image_bytes(width, height, format='JPEG', padding=0):
     return img_bytes
 
 def test_validate_avatar_quality_valid():
-    """Test with a valid 200x200 image."""
-    img_bytes = generate_image_bytes(200, 200)
+    """Test with a valid 600x600 image (>= 512 broadcast minimum)."""
+    img_bytes = generate_image_bytes(600, 600)
     is_valid, msg = validate_avatar_quality(img_bytes)
     assert is_valid is True
     assert msg == "OK"
 
 def test_validate_avatar_quality_low_resolution():
-    """Test with images smaller than 100x100."""
+    """Test with images smaller than the 512x512 broadcast minimum."""
     # Both width and height too small
     img_bytes = generate_image_bytes(50, 50)
     is_valid, msg = validate_avatar_quality(img_bytes)
     assert is_valid is False
     assert "resolution is too low" in msg
 
-    # Width too small
-    img_bytes = generate_image_bytes(99, 100)
+    # Width too small (just under 512)
+    img_bytes = generate_image_bytes(511, 600)
     is_valid, msg = validate_avatar_quality(img_bytes)
     assert is_valid is False
     assert "resolution is too low" in msg
 
-    # Height too small
-    img_bytes = generate_image_bytes(100, 99)
+    # Height too small (just under 512)
+    img_bytes = generate_image_bytes(600, 511)
     is_valid, msg = validate_avatar_quality(img_bytes)
     assert is_valid is False
     assert "resolution is too low" in msg
 
 def test_validate_avatar_quality_too_large():
-    """Test with an image larger than 5MB."""
-    # Generate a normal image but pad it to be over 5MB
+    """Test with an image larger than 5MB (using a >=512 base so it reaches the size check)."""
     # 5MB = 5 * 1024 * 1024 = 5242880 bytes
-    base_bytes = generate_image_bytes(200, 200)
+    base_bytes = generate_image_bytes(600, 600)
     padding_needed = (5 * 1024 * 1024) + 1 - len(base_bytes)
-    img_bytes = generate_image_bytes(200, 200, padding=padding_needed)
+    img_bytes = generate_image_bytes(600, 600, padding=padding_needed)
 
     is_valid, msg = validate_avatar_quality(img_bytes)
     assert is_valid is False
@@ -64,20 +63,20 @@ def test_validate_avatar_quality_too_large():
 
 def test_validate_avatar_quality_aspect_ratio_too_high():
     """Test with images that are too narrow or too wide (ratio > 3.0)."""
-    # Width is much larger than height
-    img_bytes = generate_image_bytes(301, 100)
+    # Width is much larger than height (both dims >= 512)
+    img_bytes = generate_image_bytes(1537, 512)
     is_valid, msg = validate_avatar_quality(img_bytes)
     assert is_valid is False
     assert "too narrow or too wide" in msg
 
     # Height is much larger than width
-    img_bytes = generate_image_bytes(100, 301)
+    img_bytes = generate_image_bytes(512, 1537)
     is_valid, msg = validate_avatar_quality(img_bytes)
     assert is_valid is False
     assert "too narrow or too wide" in msg
 
     # Edge case: exactly 3.0 should be valid
-    img_bytes = generate_image_bytes(300, 100)
+    img_bytes = generate_image_bytes(1536, 512)
     is_valid, msg = validate_avatar_quality(img_bytes)
     assert is_valid is True
     assert msg == "OK"
@@ -120,7 +119,7 @@ def test_process_avatar_saves_correctly(tmp_path):
 
         # Verify crop and resize
         saved_img = Image.open(saved_path)
-        assert saved_img.size == (500, 500)
+        assert saved_img.size == (512, 512)
         assert saved_img.mode == "RGB"
         assert saved_img.format == "JPEG"
 
@@ -139,7 +138,7 @@ def test_process_avatar_rgba_conversion(tmp_path):
 
         # Verify conversion to RGB and JPEG format
         saved_img = Image.open(saved_path)
-        assert saved_img.size == (500, 500)
+        assert saved_img.size == (512, 512)
         assert saved_img.mode == "RGB"
         assert saved_img.format == "JPEG"
 
@@ -158,7 +157,7 @@ def test_process_avatar_cropping(tmp_path):
 
         # Open and verify
         saved_img = Image.open(saved_path)
-        assert saved_img.size == (500, 500)
+        assert saved_img.size == (512, 512)
         assert saved_img.mode == "RGB"
         # The center crop logic in the code:
         # width=1000, height=500
