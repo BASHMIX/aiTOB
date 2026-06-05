@@ -58,14 +58,30 @@ async def evaluate_chat(state: MatchState) -> dict:
     Node that calls the LLM to evaluate the current chat history.
     """
     chat_context = "\n".join(state.get("chat_history", []))
-    
+
     if not chat_context.strip():
         return {}
+
+    # Explicit roster so the LLM maps winner_discord_id to a REAL player in this
+    # match (fixes the "winner didn't match either player" mismatch). The chat
+    # lines are tagged "(ID: <discord_id>)", so the model can tie a self-report
+    # ("I won 2-1") to the correct Discord ID.
+    p1_name = state.get("player1_name") or "Player 1"
+    p2_name = state.get("player2_name") or "Player 2"
+    p1_did = state.get("player1_discord")
+    p2_did = state.get("player2_discord")
+    roster = (
+        f"Players in this match (winner_discord_id MUST be one of these two Discord IDs):\n"
+        f"  • {p1_name} — Discord ID: {p1_did}\n"
+        f"  • {p2_name} — Discord ID: {p2_did}\n\n"
+    )
 
     prompt = (
         "Evaluate the following match chat and extract the match result.\n"
         "Look for indications of who won, the score, and if there are any conflicts or disputes.\n"
-        "Pay close attention to who is reporting the score based on their Discord ID.\n\n"
+        "Each chat line is tagged with the sender's Discord ID. Set winner_discord_id to the "
+        "Discord ID of the player who WON — it must be exactly one of the two IDs listed below.\n\n"
+        f"{roster}"
         f"Chat History:\n{chat_context}"
     )
     

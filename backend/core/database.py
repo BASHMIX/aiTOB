@@ -474,6 +474,24 @@ async def get_active_match(set_id: str):
             row = await cursor.fetchone()
             return dict(row) if row else None
 
+async def get_active_match_by_thread(discord_thread_id: str):
+    """Resolve the active match owning a Discord match thread.
+
+    The AI referee receives a thread/channel id, not a start.gg set id. Looking
+    the match up by discord_thread_id is the reliable bridge back to the real
+    set_id + player Discord IDs (fixes the winner-mapping mismatch).
+    """
+    if not discord_thread_id:
+        return None
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM active_matches WHERE discord_thread_id = ?",
+            (str(discord_thread_id),),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
 async def get_active_matches_by_set_ids(set_ids: list[str]) -> list[dict]:
     """Batch-fetch active matches for many set_ids in one query (avoids N+1)."""
     if not set_ids:

@@ -5,10 +5,12 @@ class MatchState(TypedDict):
     thread_id: int
     player1_discord: int
     player2_discord: int
+    player1_name: Optional[str]
+    player2_name: Optional[str]
     player1_ready: bool
     player2_ready: bool
     chat_history: List[str]
-    match_status: str # 'waiting_checkin', 'playing', 'conflict', 'completed', 'dq'
+    match_status: str # 'waiting_for_checkin', 'playing', 'conflict', 'completed', 'dq'
     winner_id: Optional[int]
     score_string: Optional[str]
     # One-line LLM explanation surfaced to bot_feed when status flips —

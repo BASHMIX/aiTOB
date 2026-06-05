@@ -1360,17 +1360,24 @@ async def handle_match_state_update(message: discord.Message, new_state: dict, b
     status = new_state.get("match_status")
     reasoning = new_state.get("reasoning") or "(no reasoning provided)"
 
+    # ── Resolve the owning match by Discord THREAD id first ──────────────
+    # The referee runs in a thread; mapping thread → active_match is the reliable
+    # bridge back to the real start.gg set_id + player Discord IDs. Falling back
+    # to the state's set_id covers any legacy thread created before this fix.
+    from core.database import (
+        save_match_result, update_active_match, get_active_match,
+        get_active_match_by_thread, add_conflict, add_bot_feed,
+    )
+    match_details = await get_active_match_by_thread(str(message.channel.id))
+    if not match_details:
+        _sid = new_state.get("set_id")
+        match_details = await get_active_match(str(_sid)) if _sid else None
+    set_id = match_details.get("set_id") if match_details else new_state.get("set_id")
+
     if status == "completed":
         winner_id = new_state.get("winner_id")
         score = new_state.get("score_string")
 
-        # ── LLM winner_id sanity check (cleanup #3) ──
-        from core.database import (
-            save_match_result, update_active_match, get_active_match,
-            add_conflict, add_bot_feed,
-        )
-        set_id = new_state.get("set_id")
-        match_details = await get_active_match(str(set_id)) if set_id else None
         valid_players = {
             str(match_details.get("p1_discord")) if match_details else None,
             str(match_details.get("p2_discord")) if match_details else None,
@@ -1442,13 +1449,11 @@ async def handle_match_state_update(message: discord.Message, new_state: dict, b
             "⚠️ **Conflict Detected!**\n"
             "The reported scores do not match or a dispute was found. An Admin has been pinged."
         )
-        from core.database import add_conflict, update_active_match, add_bot_feed, get_active_match
-        set_id = new_state.get("set_id")
         if set_id:
             await add_conflict(str(set_id), "", "")
             await update_active_match(str(set_id), status="conflict")
 
-            cmatch = await get_active_match(str(set_id))
+            cmatch = match_details or await get_active_match(str(set_id))
             if cmatch:
                 investigate_msg = (
                     "⚠️ **Score conflict on your match.**\n"
