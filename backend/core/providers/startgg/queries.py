@@ -201,3 +201,23 @@ mutation ResetSet($setId: ID!) {
   resetSet(setId: $setId) { id state }
 }
 """
+
+# Fetch every entrant's connectedAccounts for a tournament so we can look up a
+# user's linked Capcom Fighter Network ID without requiring a separate entrant query.
+# connectedAccounts is a JSON blob; the Capcom CFN lives at connectedAccounts.capcom.value.
+ENTRANT_CONNECTED_ACCOUNTS = """
+query EntrantConnectedAccounts($slug: String!) {
+  tournament(slug: $slug) {
+    events {
+      entrants(query: {page: 1, perPage: 500}) {
+        nodes {
+          participants {
+            user { id }
+            connectedAccounts
+          }
+        }
+      }
+    }
+  }
+}
+"""

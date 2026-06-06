@@ -26,6 +26,8 @@ MESSAGES = {
         "avatar_cmd_prompt": "📸 Please **DM me a photo** (min 512x512, square-ish) to set as your broadcast avatar. Once it passes our quality check it'll be saved.",
         "avatar_need_verify": "❌ You need to link your start.gg account first. Please run `/verify` to get started.",
         "avatar_reminder_dm": "📸 **Reminder:** you're verified but haven't uploaded a broadcast avatar yet. Please run the `/avatar` command and DM me a photo before the broadcast begins — thanks!",
+        "cfn_post_verify_prompt": "Almost done! Please reply here with your **CFN ID** (Capcom Fighter Network ID) to complete your registration. You can find it in Street Fighter 6 under Profile → CFN.",
+        "cfn_reminder_dm": "Almost done with your profile! Please **DM the bot** with your **CFN ID** (Capcom Fighter Network ID) to complete your registration — or link your Capcom account on start.gg so it's picked up automatically next time.",
     },
     "ar": {
         "welcome": "مرحباً بك في البطولة! لنبدأ عملية التسجيل.",
@@ -54,6 +56,8 @@ MESSAGES = {
         "avatar_cmd_prompt": "📸 يرجى **إرسال صورة لي** (بحد أدنى 512x512، قريبة من المربّع) لضبطها كصورتك الرمزية للبث. سيتم حفظها بمجرد اجتيازها فحص الجودة.",
         "avatar_need_verify": "❌ تحتاج أولاً إلى ربط حساب start.gg الخاص بك. يرجى تشغيل الأمر `/verify` للبدء.",
         "avatar_reminder_dm": "📸 **تذكير:** تم التحقق منك لكنك لم ترفع صورة رمزية للبث بعد. يرجى تشغيل الأمر `/avatar` وإرسال صورة لي قبل بدء البث — شكراً!",
+        "cfn_post_verify_prompt": "لم يتبقَ سوى خطوة أخيرة! يرجى الرد هنا بـ **CFN ID** الخاص بك (معرف شبكة Capcom Fighter Network) لإتمام تسجيلك. يمكنك العثور عليه في لعبة Street Fighter 6 ضمن الملف الشخصي ← CFN.",
+        "cfn_reminder_dm": "ملفك الشخصي يكاد يكتمل! يرجى **مراسلة البوت** بـ **CFN ID** الخاص بك (معرف شبكة Capcom Fighter Network) لإتمام تسجيلك — أو اربط حسابك على Capcom في start.gg وسيُكتشف تلقائياً في المرة القادمة.",
     }
 }
 

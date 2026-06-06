@@ -311,12 +311,6 @@ class ReadyCheckView(discord.ui.View):
                 "warn"
             )
 
-        # Still collect CFN IDs for the overlay (non-blocking).
-        if not (match.get("p1_cfn") or ""):
-            await self.thread.send(f"<@{self.p1_discord}> Please provide your CFN ID for the stream overlay.")
-        if not (match.get("p2_cfn") or ""):
-            await self.thread.send(f"<@{self.p2_discord}> Please provide your CFN ID for the stream overlay.")
-
         from backend.api.ws_manager import manager as hub_mgr
         try:
             await hub_mgr.broadcast({"type": "match_update"})

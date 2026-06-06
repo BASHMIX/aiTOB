@@ -2,6 +2,7 @@ import discord
 import os
 from backend.core.database import (
     create_or_update_player, get_player, add_hub_command, add_bot_feed,
+    sync_player_cfns_to_matches,
 )
 from backend.core.image_utils import validate_avatar_quality, validate_avatar_safety
 from backend.core.image_store import store_avatar
@@ -48,6 +49,8 @@ class RegistrationManager:
         "language_set":  "language_selected",
         "cfn_provided":  "cfn_entered",
         "complete":      "verified",
+        # cfn_pending is a Path-B only state added in the CFN fallback commit.
+        # No legacy alias needed — it's new — but listed here for documentation.
     }
 
     def _normalize_step(self, step: str | None) -> str:
@@ -77,6 +80,9 @@ class RegistrationManager:
             # Bio-code (Path B) broadcast-avatar collection. No language/CFN was
             # gathered on this path, so we fall back to the stored language.
             await self._handle_broadcast_avatar_step(message, discord_id, lang)
+        elif step == "cfn_pending":
+            # Path B post-avatar: CFN was not found on start.gg, player is DMing it now.
+            await self._handle_cfn_pending_step(message, discord_id, lang)
         elif step == "avatar_uploaded":
             # Avatar was attempted but didn't finalize; nudge them to retry.
             await message.channel.send(get_msg("avatar_prompt", lang))
@@ -174,19 +180,41 @@ class RegistrationManager:
         )
         await message.channel.send(get_msg("reg_complete", lang))
 
+    async def _handle_cfn_pending_step(self, message, discord_id, lang):
+        """Path B post-avatar: player is DMing their CFN ID to complete registration.
+
+        Reached when start.gg had no linked Capcom account and the avatar step
+        already completed. Any text reply ≥ 3 chars is accepted as the CFN ID.
+        """
+        cfn_id = message.content.strip()
+        if not cfn_id or len(cfn_id) < 3:
+            await message.channel.send(get_msg("cfn_post_verify_prompt", lang))
+            return
+        await create_or_update_player(discord_id, cfn_id=cfn_id)
+        await sync_player_cfns_to_matches(discord_id)
+        player = await get_player(discord_id)
+        gamer_tag = (player or {}).get("gamer_tag")
+        await finalize_verification(discord_id, gamer_tag, avatar_path=None)
+        await message.channel.send(get_msg("reg_complete", lang))
+
     async def _handle_broadcast_avatar_step(self, message, discord_id, lang):
-        """Bio-code (Path B): collect the broadcast avatar, then finalize.
+        """Bio-code (Path B): collect the broadcast avatar, then finalize or request CFN.
 
         Reached when a new (or replacing) bio-verified player DMs their photo.
-        On a passing image we save it and flip verification on via the shared
-        ``finalize_verification`` so role/nick assignment fires exactly as it
-        does for the full registration flow.
+        If CFN was pre-populated from start.gg at verify-confirm, we finalize immediately.
+        If CFN is still missing, we park the player in cfn_pending and prompt them to DM it.
         """
         saved_path = await self._process_and_save_avatar(message, discord_id, lang)
         if not saved_path:
             return
         player = await get_player(discord_id)
         gamer_tag = (player or {}).get("gamer_tag")
+        cfn_id = (player or {}).get("cfn_id")
+        if not cfn_id:
+            # CFN was not on start.gg — park in cfn_pending, avatar is already saved.
+            await create_or_update_player(discord_id, avatar_path=saved_path, registration_step="cfn_pending")
+            await message.channel.send(get_msg("cfn_post_verify_prompt", lang))
+            return
         await finalize_verification(discord_id, gamer_tag, saved_path)
         await message.channel.send(get_msg("reg_complete", lang))
 

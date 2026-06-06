@@ -170,6 +170,41 @@ async def _avatar_display_url(avatar: str | None) -> str | None:
     return f"{api_base.rstrip('/')}/static/avatars/{base}"
 
 
+async def _finalize_or_request_cfn(
+    discord_id: str,
+    gamer_tag: str | None,
+    lang: str,
+    *,
+    followup,
+    done_msg: str,
+    avatar_path: str | None = None,
+):
+    """Gate point shared by all Path-B avatar finalization callbacks.
+
+    If the player already has a cfn_id (pre-fetched from start.gg at verify-confirm),
+    call finalize_verification immediately and send done_msg via the interaction followup.
+    If CFN is still missing, park the player in cfn_pending, DM the prompt, and send
+    a holding reply via the followup so the interaction doesn't expire silently.
+    """
+    from core.database import get_player, create_or_update_player, sync_player_cfns_to_matches
+    player = await get_player(discord_id)
+    cfn_id = (player or {}).get("cfn_id")
+    if not cfn_id:
+        await create_or_update_player(discord_id, registration_step="cfn_pending")
+        try:
+            member = await bot.fetch_user(int(discord_id))
+            await member.send(get_msg("cfn_post_verify_prompt", lang))
+        except Exception:
+            pass
+        await followup.send(
+            "✅ Avatar confirmed! Check your DMs — one last step to complete registration.",
+            ephemeral=True,
+        )
+        return
+    await finalize_verification(discord_id, gamer_tag, avatar_path)
+    await followup.send(done_msg, ephemeral=True)
+
+
 class BroadcastAvatarView(discord.ui.View):
     """Returning-player avatar gate shown after a successful bio-code match.
 
@@ -221,11 +256,11 @@ class BroadcastAvatarView(discord.ui.View):
         if not await self._guard(interaction):
             return
         await self._disable_all(interaction)
-        await finalize_verification(self.discord_id, self.gamer_tag)
-        await interaction.followup.send(
-            get_msg("avatar_kept_done", self.lang, gamer_tag=self.gamer_tag or "")
-            or f"✅ Verified as **{self.gamer_tag}** with your existing avatar.",
-            ephemeral=True,
+        await _finalize_or_request_cfn(
+            self.discord_id, self.gamer_tag, self.lang,
+            followup=interaction.followup,
+            done_msg=get_msg("avatar_kept_done", self.lang, gamer_tag=self.gamer_tag or "")
+                     or f"✅ Verified as **{self.gamer_tag}** with your existing avatar.",
         )
 
     async def _upload_new(self, interaction: discord.Interaction):
@@ -277,12 +312,14 @@ class NewAvatarPromptView(discord.ui.View):
         except Exception:
             pass
         # Finalize WITHOUT an avatar — role applied, avatar_path left NULL.
-        await finalize_verification(self.discord_id, self.gamer_tag)
-        await interaction.followup.send(
-            get_msg("avatar_skipped", self.lang)
-            or "✅ Verification complete! Remember to upload your avatar later using "
-               "the `/avatar` command before the broadcast begins.",
-            ephemeral=True,
+        await _finalize_or_request_cfn(
+            self.discord_id, self.gamer_tag, self.lang,
+            followup=interaction.followup,
+            done_msg=(
+                get_msg("avatar_skipped", self.lang)
+                or "✅ Verification complete! Remember to upload your avatar later using "
+                   "the `/avatar` command before the broadcast begins."
+            ),
         )
 
 
@@ -400,15 +437,31 @@ async def verify_confirm_command(interaction: discord.Interaction):
     existing_player = await get_player(discord_id)
     existing_avatar = (existing_player or {}).get("avatar_path")
 
-    # Persist the language FIRST — before the avatar_upload state or any DM — so
+    # Attempt to pre-fetch CFN from start.gg so the player never has to type it.
+    # connectedAccounts.capcom.value holds the CFN if they linked Capcom on start.gg.
+    cfn_from_sgg: str | None = None
+    try:
+        from core.database import get_all_tournament_slugs
+        slugs = await get_all_tournament_slugs()
+        if slugs:
+            cfn_from_sgg = await sgg.fetch_user_cfn(sgg_user_id, slugs)
+    except Exception as _cfn_err:
+        pass  # Non-fatal: cfn_pending DM flow handles the gap
+
+    # Persist identity + language FIRST — before the avatar_upload state or any DM — so
     # every subsequent prompt (and future match threads) speaks their language.
-    await create_or_update_player(
-        discord_id=discord_id,
+    player_fields = dict(
         startgg_id=sgg_user_id,
         gamer_tag=gamer_tag,
         preferred_language=lang_pref,
         registration_step="avatar_upload",
     )
+    if cfn_from_sgg:
+        player_fields["cfn_id"] = cfn_from_sgg
+    await create_or_update_player(discord_id=discord_id, **player_fields)
+    if cfn_from_sgg:
+        from core.database import sync_player_cfns_to_matches
+        await sync_player_cfns_to_matches(discord_id)
     await delete_pending_verification(discord_id)
     await add_bot_feed(
         f"🔗 Bio-code matched: Discord <{discord_id}> ↔ start.gg user {sgg_user_id} "

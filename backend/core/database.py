@@ -72,6 +72,34 @@ async def get_player(discord_id: str):
             row = await cursor.fetchone()
             return dict(row) if row else None
 
+async def get_all_tournament_slugs() -> list[str]:
+    """Return the slugs of all tournaments currently tracked in the DB."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT slug FROM tournaments") as cursor:
+            return [row[0] for row in await cursor.fetchall()]
+
+
+async def sync_player_cfns_to_matches(discord_id: str):
+    """Copy a player's cfn_id from the players table into any active matches they appear in.
+
+    Called after cfn_id is written (either at verify-confirm from start.gg or via the
+    cfn_pending DM step) so the stream overlay always has an up-to-date CFN without
+    requiring a full bracket re-sync.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE active_matches SET p1_cfn = (SELECT cfn_id FROM players WHERE discord_id = ?) "
+            "WHERE p1_discord = ?",
+            (discord_id, discord_id),
+        )
+        await db.execute(
+            "UPDATE active_matches SET p2_cfn = (SELECT cfn_id FROM players WHERE discord_id = ?) "
+            "WHERE p2_discord = ?",
+            (discord_id, discord_id),
+        )
+        await db.commit()
+
+
 async def get_verified_players_missing_avatar() -> list[dict]:
     """Verified players who still have no broadcast avatar on file.
 

@@ -510,6 +510,33 @@ class StartGGClient:
             print(f"Failed to fetch user by slug '{slug}': {e}")
             return None
 
+    async def fetch_user_cfn(self, startgg_user_id: str, tournament_slugs: list) -> str | None:
+        """Return a player's Capcom Fighter Network ID from start.gg's connectedAccounts.
+
+        Iterates the supplied tournament slugs and scans each entrant's participant node for a
+        linked Capcom account (connectedAccounts.capcom.value). Returns the first value found,
+        or None if the user has no Capcom account linked on start.gg.
+        """
+        from backend.core.providers.startgg.queries import ENTRANT_CONNECTED_ACCOUNTS
+        uid = str(startgg_user_id)
+        for slug in tournament_slugs:
+            try:
+                data = await self.query(ENTRANT_CONNECTED_ACCOUNTS, {"slug": slug})
+                events = ((data or {}).get("tournament") or {}).get("events") or []
+                for event in events:
+                    nodes = (event.get("entrants") or {}).get("nodes") or []
+                    for node in nodes:
+                        for participant in (node.get("participants") or []):
+                            user_id = str((participant.get("user") or {}).get("id") or "")
+                            if user_id == uid:
+                                capcom = (participant.get("connectedAccounts") or {}).get("capcom") or {}
+                                val = capcom.get("value")
+                                if val:
+                                    return str(val)
+            except Exception as e:
+                print(f"[STARTGG] CFN lookup failed for slug '{slug}': {e}")
+        return None
+
     async def probe_token_permissions(self) -> Dict[str, Any]:
         """Verify token validity and check for tournament admin / write permissions."""
         # Ensure we have a token (fetch from DB if needed, cached with 60s TTL)
