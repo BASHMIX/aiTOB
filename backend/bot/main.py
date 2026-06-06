@@ -532,7 +532,7 @@ async def avatar_command(interaction: discord.Interaction):
 
     await interaction.response.send_message(
         get_msg("avatar_cmd_prompt", lang)
-        or "📸 Please **DM me a photo** (min 100x100, square-ish) to set as your broadcast avatar.",
+        or "📸 Please **DM me a photo** (min 500x500, square-ish) to set as your broadcast avatar.",
         ephemeral=True,
     )
 

@@ -4,9 +4,9 @@ import os
 import google.generativeai as genai
 
 # Broadcast avatars must be high enough resolution to render cleanly on stream
-# overlays. 512x512 is the minimum we accept (start.gg profile pics are often
+# overlays. 500x500 is the minimum we accept (start.gg profile pics are often
 # smaller, which is exactly why we collect our own).
-MIN_AVATAR_DIM = 512
+MIN_AVATAR_DIM = 500
 MAX_AVATAR_BYTES = 5 * 1024 * 1024
 MAX_ASPECT_RATIO = 3.0
 AVATAR_OUTPUT_SIZE = 512
@@ -74,11 +74,12 @@ async def validate_avatar_safety(image_bytes: bytes) -> tuple[bool, str]:
         print(f"[IMAGE] Safety check error: {e}")
         return True, "Safety check failed to run" # Fallback
 
-def crop_resize_to_jpeg_bytes(image_bytes: bytes, size: int = AVATAR_OUTPUT_SIZE) -> bytes:
-    """Center-crop to a square, resize to `size`x`size`, return JPEG bytes.
+def crop_resize_to_png_bytes(image_bytes: bytes, size: int = AVATAR_OUTPUT_SIZE) -> bytes:
+    """Center-crop to a square, resize to `size`x`size`, return PNG bytes.
 
-    Single source of truth for avatar normalization — used by both the local
-    saver (process_avatar) and the Cloudinary uploader (image_store).
+    PNG is used instead of JPEG so transparent images (RGBA mode) are preserved
+    without alpha-channel loss. Single source of truth for avatar normalization —
+    used by both the local saver (process_avatar) and the Cloudinary uploader (image_store).
     """
     img = Image.open(BytesIO(image_bytes))
 
@@ -90,25 +91,27 @@ def crop_resize_to_jpeg_bytes(image_bytes: bytes, size: int = AVATAR_OUTPUT_SIZE
 
     img = img.resize((size, size), Image.Resampling.LANCZOS)
 
-    if img.mode in ('RGBA', 'P'):
-        img = img.convert('RGB')
+    # Palette images must be converted before saving as PNG to avoid color issues.
+    # RGBA and RGB are left as-is so the alpha channel is preserved.
+    if img.mode == "P":
+        img = img.convert("RGBA")
 
     buf = BytesIO()
-    img.save(buf, "JPEG", quality=90)
+    img.save(buf, "PNG")
     return buf.getvalue()
 
 
-def save_jpeg_bytes(jpeg_bytes: bytes, filename_id: str) -> str:
-    """Write already-encoded JPEG bytes into the static avatars dir.
+def save_png_bytes(png_bytes: bytes, filename_id: str) -> str:
+    """Write already-encoded PNG bytes into the static avatars dir.
 
     Returns the filesystem path written. Centralizes the disk-write so the
     local-save fallback and process_avatar share one location.
     """
     save_dir = os.path.join("backend", "api", "static", "avatars")
     os.makedirs(save_dir, exist_ok=True)
-    save_path = os.path.join(save_dir, f"{filename_id}.jpg")
+    save_path = os.path.join(save_dir, f"{filename_id}.png")
     with open(save_path, "wb") as f:
-        f.write(jpeg_bytes)
+        f.write(png_bytes)
     return save_path
 
 
@@ -118,4 +121,4 @@ def process_avatar(image_bytes: bytes, filename_id: str) -> str:
     Returns the filesystem path. Kept as the local-disk path used as the
     Cloudinary fallback (see image_store.store_avatar).
     """
-    return save_jpeg_bytes(crop_resize_to_jpeg_bytes(image_bytes), filename_id)
+    return save_png_bytes(crop_resize_to_png_bytes(image_bytes), filename_id)

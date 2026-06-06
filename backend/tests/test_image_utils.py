@@ -24,28 +24,28 @@ def generate_image_bytes(width, height, format='JPEG', padding=0):
     return img_bytes
 
 def test_validate_avatar_quality_valid():
-    """Test with a valid 600x600 image (>= 512 broadcast minimum)."""
+    """Test with a valid 600x600 image (>= 500 broadcast minimum)."""
     img_bytes = generate_image_bytes(600, 600)
     is_valid, msg = validate_avatar_quality(img_bytes)
     assert is_valid is True
     assert msg == "OK"
 
 def test_validate_avatar_quality_low_resolution():
-    """Test with images smaller than the 512x512 broadcast minimum."""
+    """Test with images smaller than the 500x500 broadcast minimum."""
     # Both width and height too small
     img_bytes = generate_image_bytes(50, 50)
     is_valid, msg = validate_avatar_quality(img_bytes)
     assert is_valid is False
     assert "resolution is too low" in msg
 
-    # Width too small (just under 512)
-    img_bytes = generate_image_bytes(511, 600)
+    # Width too small (just under 500)
+    img_bytes = generate_image_bytes(499, 600)
     is_valid, msg = validate_avatar_quality(img_bytes)
     assert is_valid is False
     assert "resolution is too low" in msg
 
-    # Height too small (just under 512)
-    img_bytes = generate_image_bytes(600, 511)
+    # Height too small (just under 500)
+    img_bytes = generate_image_bytes(600, 499)
     is_valid, msg = validate_avatar_quality(img_bytes)
     assert is_valid is False
     assert "resolution is too low" in msg
@@ -63,20 +63,20 @@ def test_validate_avatar_quality_too_large():
 
 def test_validate_avatar_quality_aspect_ratio_too_high():
     """Test with images that are too narrow or too wide (ratio > 3.0)."""
-    # Width is much larger than height (both dims >= 512)
-    img_bytes = generate_image_bytes(1537, 512)
+    # Width is much larger than height (both dims >= 500)
+    img_bytes = generate_image_bytes(1501, 500)
     is_valid, msg = validate_avatar_quality(img_bytes)
     assert is_valid is False
     assert "too narrow or too wide" in msg
 
     # Height is much larger than width
-    img_bytes = generate_image_bytes(512, 1537)
+    img_bytes = generate_image_bytes(500, 1501)
     is_valid, msg = validate_avatar_quality(img_bytes)
     assert is_valid is False
     assert "too narrow or too wide" in msg
 
     # Edge case: exactly 3.0 should be valid
-    img_bytes = generate_image_bytes(1536, 512)
+    img_bytes = generate_image_bytes(1500, 500)
     is_valid, msg = validate_avatar_quality(img_bytes)
     assert is_valid is True
     assert msg == "OK"
@@ -115,16 +115,15 @@ def test_process_avatar_saves_correctly(tmp_path):
         # Verify the file was saved
         assert os.path.exists(saved_path)
         assert str(tmp_path) in saved_path
-        assert saved_path.endswith("test_rgb_avatar.jpg")
+        assert saved_path.endswith("test_rgb_avatar.png")
 
         # Verify crop and resize
         saved_img = Image.open(saved_path)
         assert saved_img.size == (512, 512)
-        assert saved_img.mode == "RGB"
-        assert saved_img.format == "JPEG"
+        assert saved_img.format == "PNG"
 
-def test_process_avatar_rgba_conversion(tmp_path):
-    # Setup an RGBA image
+def test_process_avatar_rgba_preserves_alpha(tmp_path):
+    # RGBA images must NOT be flattened to RGB — alpha channel should survive.
     image_bytes = create_test_image_bytes(size=(1000, 1000), mode="RGBA")
 
     original_join = os.path.join
@@ -136,11 +135,10 @@ def test_process_avatar_rgba_conversion(tmp_path):
     with patch("os.path.join", side_effect=mock_join):
         saved_path = process_avatar(image_bytes, "test_rgba_avatar")
 
-        # Verify conversion to RGB and JPEG format
         saved_img = Image.open(saved_path)
         assert saved_img.size == (512, 512)
-        assert saved_img.mode == "RGB"
-        assert saved_img.format == "JPEG"
+        assert saved_img.mode == "RGBA"
+        assert saved_img.format == "PNG"
 
 def test_process_avatar_cropping(tmp_path):
     # Create an image with a non-square aspect ratio to test cropping
@@ -158,14 +156,14 @@ def test_process_avatar_cropping(tmp_path):
         # Open and verify
         saved_img = Image.open(saved_path)
         assert saved_img.size == (512, 512)
-        assert saved_img.mode == "RGB"
+        assert saved_img.format == "PNG"
         # The center crop logic in the code:
         # width=1000, height=500
         # new_size=500
         # left=(1000-500)/2 = 250, top=(500-500)/2 = 0
         # right=750, bottom=500
         # Since the original image is uniformly blue, the result should also just be blue
-        # But we at least verify the dimensions match 500x500
+        # But we at least verify the dimensions match 512x512
 
 # ===== from PR #45 =====
 

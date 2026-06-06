@@ -18,11 +18,11 @@ def _img_bytes(size=(600, 600)):
 async def test_store_avatar_local_fallback_returns_static_url():
     """With no Cloudinary config, store_avatar saves locally and returns a /static URL."""
     with patch.object(image_store, "_resolve_cloudinary_url", AsyncMock(return_value=None)), \
-         patch.object(image_store, "save_jpeg_bytes", return_value="backend/api/static/avatars/abc.jpg") as mock_save:
+         patch.object(image_store, "save_png_bytes", return_value="backend/api/static/avatars/abc.png") as mock_save:
         url = await image_store.store_avatar(_img_bytes(), "abc")
 
-    assert url == "/static/avatars/abc.jpg"
-    # The saver receives normalized JPEG bytes, not the raw upload.
+    assert url == "/static/avatars/abc.png"
+    # The saver receives normalized PNG bytes, not the raw upload.
     assert mock_save.call_count == 1
     saved_bytes, public_id = mock_save.call_args[0]
     assert public_id == "abc"
@@ -49,7 +49,7 @@ async def test_store_avatar_falls_back_when_cloudinary_raises():
 
     with patch.object(image_store, "_resolve_cloudinary_url", AsyncMock(return_value="cloudinary://k:s@demo")), \
          patch.object(image_store, "_upload_to_cloudinary", side_effect=_boom), \
-         patch.object(image_store, "save_jpeg_bytes", return_value="backend/api/static/avatars/abc.jpg"):
+         patch.object(image_store, "save_png_bytes", return_value="backend/api/static/avatars/abc.png"):
         url = await image_store.store_avatar(_img_bytes(), "abc")
 
-    assert url == "/static/avatars/abc.jpg"
+    assert url == "/static/avatars/abc.png"

@@ -137,7 +137,7 @@ class RegistrationManager:
             return None
 
         attachment = message.attachments[0]
-        if not any(attachment.filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg']):
+        if not any(attachment.filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.webp']):
             await message.channel.send(get_msg("error_quality", lang))
             return None
 
