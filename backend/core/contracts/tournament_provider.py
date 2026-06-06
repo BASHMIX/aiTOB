@@ -98,6 +98,18 @@ class ITournamentProvider(ABC):
         """Mark a set as in-progress on the provider."""
         ...
 
+    async def mark_called(self, set_id: str) -> ProviderSetResult:
+        """Call a set on the provider (state -> CALLED), triggering its native check-in.
+
+        Optional capability. Providers without a distinct 'called' concept should leave
+        this default, which reports failure so callers can fall back (e.g. to a Discord-
+        driven check-in). Implementations must not raise.
+        """
+        return ProviderSetResult(
+            success=False, set_id=set_id,
+            error_message="Provider does not support calling sets."
+        )
+
     @abstractmethod
     async def mark_dq(self, set_id: str, winner_id: str) -> ProviderSetResult:
         """DQ the opponent and advance the winner."""

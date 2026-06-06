@@ -466,6 +466,23 @@ class StartGGClient:
             print(f"Failed to mark in progress: {e}")
             return False
 
+    async def mark_called(self, set_id: str) -> bool:
+        """Call a set on Start.gg (state -> CALLED), triggering its native check-in wave.
+
+        Best-effort: start.gg rejects calling a preview set or one not in a callable
+        state — we log and return False so the caller can surface it without crashing.
+        """
+        if str(set_id).startswith("preview"):
+            print(f"[STARTGG] Cannot call preview set {set_id}")
+            return False
+        from backend.core.providers.startgg.queries import MARK_SET_CALLED
+        try:
+            await self.query(MARK_SET_CALLED, {"setId": set_id})
+            return True
+        except Exception as e:
+            print(f"Failed to mark set called: {e}")
+            return False
+
     async def fetch_streams(self, slug: str) -> list:
         """Fetch streams configured on a tournament (raw start.gg shape)."""
         from backend.core.providers.startgg.queries import TOURNAMENT_STREAMS

@@ -143,6 +143,24 @@ class StartGGProvider(ITournamentProvider):
             error_message=None if success else "markSetInProgress failed (check token scope / upstream bracket state)"
         )
 
+    async def mark_called(self, set_id: str) -> ProviderSetResult:
+        """Call a set on start.gg (state -> CALLED), triggering its native check-in wave.
+
+        Spike-verified to fire start.gg's player-facing check-in timer + notifications.
+        Best-effort, mirroring mark_in_progress: a preview/non-callable set fails cleanly.
+        """
+        if str(set_id).startswith("preview"):
+            return ProviderSetResult(
+                success=False, set_id=set_id,
+                error_message="Preview sets cannot be called."
+            )
+        success = await self._client.mark_called(set_id)
+        return ProviderSetResult(
+            success=success, set_id=set_id,
+            new_state=ProviderSetState.CALLED if success else None,
+            error_message=None if success else "markSetCalled failed (check token scope / set state)"
+        )
+
     async def mark_dq(self, set_id: str, winner_id: str) -> ProviderSetResult:
         success = await self._client.mark_set_dq(set_id, winner_id)
         return ProviderSetResult(

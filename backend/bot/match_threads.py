@@ -64,6 +64,18 @@ async def create_match_thread(bot, tournament, set_data):
     p1_discord = set_data.get('p1_discord') or await get_discord_id_from_startgg(set_data.get('p1_id') or set_data.get('p1_entrant_id'))
     p2_discord = set_data.get('p2_discord') or await get_discord_id_from_startgg(set_data.get('p2_id') or set_data.get('p2_entrant_id'))
 
+    # ── Dual-mode check-in: 'startgg' hands check-in + DQ to start.gg ──────
+    # The bot still opens the thread and pings players, but with a "go to start.gg"
+    # embed (no I'm-Ready buttons, no auto-DQ timer). markSetCalled fires start.gg's
+    # native check-in wave; the reconciliation poll mirrors the resulting state.
+    check_in_source = (tournament or {}).get("check_in_source") or "discord"
+    if check_in_source == "startgg":
+        await _create_startgg_checkin_thread(
+            bot, thread, set_id, p1_name, p2_name, round_name,
+            p1_discord, p2_discord, is_stream, set_data,
+        )
+        return
+
     # If NEITHER side is reachable on Discord, there's nothing the bot can do.
     # Disarm immediately and surface a thread message so the TO sees the state.
     fully_unreachable = not p1_discord and not p2_discord
@@ -147,6 +159,77 @@ async def create_match_thread(bot, tournament, set_data):
     t = await get_tournament(set_data.get('tournament_slug', ''))
     timeout = (t.get('dq_timer_seconds') or 600) if t else 600
     asyncio.create_task(run_ready_check_timeout(bot, thread, set_id, timeout))
+
+async def _create_startgg_checkin_thread(
+    bot, thread, set_id, p1_name, p2_name, round_name,
+    p1_discord, p2_discord, is_stream, set_data,
+):
+    """'startgg' check_in_source: post a buttonless 'check in on start.gg' thread and
+    fire markSetCalled so start.gg owns the check-in wave + DQ.
+
+    No ReadyCheckView, no auto-DQ timer, no Discord referee — the reconciliation poll
+    (sync_active_matches) mirrors start.gg's state changes into our local match and
+    drives the in_progress / complete side-effects via hub commands.
+    """
+    # auto_dq_disarmed=1: the bot issues no DQ in this mode (start.gg owns the timer).
+    await update_active_match(
+        set_id,
+        discord_thread_id=str(thread.id),
+        status="called",
+        p1_discord=p1_discord,
+        p2_discord=p2_discord,
+        auto_dq_disarmed=1,
+    )
+
+    mentions = []
+    if p1_discord:
+        mentions.append(f"<@{p1_discord}>")
+    if p2_discord:
+        mentions.append(f"<@{p2_discord}>")
+    content = " ".join(mentions) if mentions else "Players, your match is ready!"
+
+    title = f"{'📺 Stream Match' if is_stream else 'Match Ready'}: {round_name}"
+    desc = (
+        f"**{p1_name}** vs **{p2_name}**\n\n"
+        "✅ **Your match is ready!** Please proceed **immediately to Start.gg** to check in.\n"
+        "⏱️ The **10-minute disqualification timer has started there** — check in on Start.gg "
+        "to avoid being DQ'd.\n\n"
+    )
+    if is_stream:
+        desc += "🎥 You're on the **Stream Match** — once you both check in on Start.gg, the broadcaster's lobby details will be DM'd to you here."
+    else:
+        desc += "Coordinate and report your result on Start.gg. The hub will sync the result automatically."
+    embed = discord.Embed(title=title, description=desc, color=discord.Color.blurple())
+    await thread.send(content=content, embed=embed)
+
+    # Fire start.gg's native check-in wave. Best-effort: surface failures to the TO
+    # (e.g. set not yet in a callable state) without breaking the thread.
+    try:
+        from backend.core.providers.registry import get_provider_for_tournament
+        provider = await get_provider_for_tournament(set_data.get("tournament_slug") or "")
+        result = await provider.mark_called(set_id)
+        if result.success:
+            await add_bot_feed(
+                f"📣 Called on start.gg: {p1_name} vs {p2_name} — start.gg check-in started.", "info"
+            )
+        else:
+            await add_bot_feed(
+                f"⚠️ markSetCalled failed for {set_id} ({p1_name} vs {p2_name}): "
+                f"{result.error_message}. Players were pinged but start.gg check-in may not have started.",
+                "warn",
+            )
+            await thread.send(
+                "⚠️ I couldn't start check-in on Start.gg automatically — a TO may need to call this set manually."
+            )
+    except Exception as e:
+        await add_bot_feed(f"⚠️ markSetCalled error for {set_id}: {e}", "warn")
+
+    from backend.api.ws_manager import manager as hub_mgr
+    try:
+        await hub_mgr.broadcast({"type": "match_update"})
+    except Exception:
+        pass
+
 
 async def get_discord_id_from_startgg(sgg_id: str) -> str | None:
     if not sgg_id:

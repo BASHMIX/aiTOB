@@ -196,6 +196,16 @@ mutation MarkInProgress($setId: ID!) {
 }
 """
 
+# Call a set on start.gg (state -> CALLED). Spike-verified: this triggers start.gg's
+# NATIVE check-in wave — the player-facing check-in timer + push notifications — when
+# the event has check-in enabled. Used by 'startgg' check_in_source mode so start.gg
+# (not the bot) owns check-in and DQ.
+MARK_SET_CALLED = """
+mutation MarkSetCalled($setId: ID!) {
+  markSetCalled(setId: $setId) { id state }
+}
+"""
+
 RESET_SET = """
 mutation ResetSet($setId: ID!) {
   resetSet(setId: $setId) { id state }
