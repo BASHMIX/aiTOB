@@ -115,6 +115,24 @@ async def get_verified_players_missing_avatar() -> list[dict]:
         ) as cursor:
             return [dict(r) for r in await cursor.fetchall()]
 
+
+async def get_verified_players_missing_profile() -> list[dict]:
+    """Verified players missing an avatar, a CFN ID, or both.
+
+    Backs audit_registration_tool. Returns enough fields for the agent to send
+    targeted DM reminders for whichever piece(s) of the profile are absent.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT discord_id, gamer_tag, preferred_language, avatar_path, cfn_id "
+            "FROM players "
+            "WHERE is_verified = 1 "
+            "  AND ((avatar_path IS NULL OR avatar_path = '') "
+            "       OR (cfn_id IS NULL OR cfn_id = ''))"
+        ) as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
+
 # ── Overlays ───────────────────────────────────────────────────────────────
 async def save_overlay(name: str, config: str):
     if not isinstance(config, str):

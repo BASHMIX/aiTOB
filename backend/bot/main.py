@@ -1863,19 +1863,21 @@ async def _tournament_discord_ids(tournament_slug: str) -> set[str]:
 
 
 @tool
-async def remind_players_missing_avatars_tool(tournament_slug: str = None):
-    """DMs a reminder to every VERIFIED player who has not yet uploaded a broadcast avatar.
+async def audit_registration_tool(tournament_slug: str = None):
+    """Chase down verified players who are missing an avatar, a CFN ID, or both.
 
-    Use this when the tournament organizer asks to remind/nudge players to add their
-    avatars before a broadcast. Pass `tournament_slug` to scope the reminder to players
-    in that tournament's synced matches; omit it to remind across all tracked tournaments.
-    Returns a human-readable summary of how many were reminded and how many were unreachable.
+    Use this when you want to remind players to complete their profile before the
+    bracket starts. The tool sends a targeted DM for each missing item — avatar-only
+    players get the avatar reminder, CFN-only players get the CFN reminder, and
+    players missing both get a combined message. Pass `tournament_slug` to scope the
+    audit to players in that tournament's synced matches; omit it to audit all tracked
+    tournaments. Returns a human-readable summary of what was sent.
     """
-    from core.database import get_verified_players_missing_avatar, add_bot_feed
+    from core.database import get_verified_players_missing_profile, add_bot_feed
 
-    players = await get_verified_players_missing_avatar()
+    players = await get_verified_players_missing_profile()
     if not players:
-        return "All verified players already have a broadcast avatar on file — nobody to remind."
+        return "All verified players have a complete profile (avatar + CFN ID) — nobody to remind."
 
     scope_label = ""
     if tournament_slug:
@@ -1884,31 +1886,48 @@ async def remind_players_missing_avatars_tool(tournament_slug: str = None):
         scope_label = f" in '{tournament_slug}'"
         if not players:
             return (
-                f"No verified players missing avatars are currently in synced matches{scope_label}. "
+                f"No verified players with incomplete profiles are in synced matches{scope_label}. "
                 "(Only players already placed in the bracket can be scoped by tournament.)"
             )
 
-    sent, failed = 0, 0
+    sent_avatar, sent_cfn, sent_both, failed = 0, 0, 0, 0
     for p in players:
         did = p.get("discord_id")
         lang = p.get("preferred_language") or "en"
         if not did:
             continue
+        missing_avatar = not (p.get("avatar_path") or "")
+        missing_cfn = not (p.get("cfn_id") or "")
         try:
             member = await bot.fetch_user(int(did))
-            await member.send(get_msg("avatar_reminder_dm", lang))
-            sent += 1
+            if missing_avatar and missing_cfn:
+                combined = (
+                    get_msg("avatar_reminder_dm", lang)
+                    + "\n\n"
+                    + get_msg("cfn_reminder_dm", lang)
+                )
+                await member.send(combined)
+                sent_both += 1
+            elif missing_avatar:
+                await member.send(get_msg("avatar_reminder_dm", lang))
+                sent_avatar += 1
+            else:
+                await member.send(get_msg("cfn_reminder_dm", lang))
+                sent_cfn += 1
         except Exception:
-            # DMs closed / user not reachable — count it and keep going.
             failed += 1
 
+    total_sent = sent_avatar + sent_cfn + sent_both
     await add_bot_feed(
-        f"📨 Avatar reminder DMed to {sent} player(s){scope_label} ({failed} unreachable).",
+        f"📋 Registration audit{scope_label}: {total_sent} DM(s) sent "
+        f"({sent_avatar} avatar, {sent_cfn} CFN, {sent_both} both missing). "
+        f"{failed} unreachable.",
         "info",
     )
     return (
-        f"Reminded {sent} of {len(players)} verified player(s) missing avatars{scope_label}. "
-        f"{failed} could not be DMed (DMs likely closed)."
+        f"Audited {len(players)} player(s){scope_label} with incomplete profiles: "
+        f"{sent_avatar} need avatar, {sent_cfn} need CFN ID, {sent_both} need both. "
+        f"DMs sent to {total_sent}; {failed} could not be reached (DMs likely closed)."
     )
 
 hub_tools = [
@@ -1919,7 +1938,7 @@ hub_tools = [
     dq_player_tool,
     force_score_tool,
     reopen_match_tool,
-    remind_players_missing_avatars_tool,
+    audit_registration_tool,
 ]
 hub_agent = build_hub_agent(hub_tools)  # fast-path: uses env key if present
 

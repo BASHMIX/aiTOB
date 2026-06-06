@@ -52,6 +52,7 @@ You have access to a rich set of tools:
 5. dq_player_tool: Disqualify a player in a match (e.g. 'p1', 'p2', or 'both').
 6. force_score_tool: Manually set match scores and complete a match.
 7. reopen_match_tool: Reset and reopen a completed match so it can be re-played or corrected.
+8. audit_registration_tool: Chase down verified players who are missing an avatar, a CFN ID, or both. Sends targeted DM reminders. Optionally scoped to a specific tournament_slug.
 
 Guidelines for actions:
 - To call a match: use get_active_matches_tool to find the match's set_id, then call call_match_tool with that set_id. Always identify matches by set_id (never a thread id).
@@ -59,6 +60,7 @@ Guidelines for actions:
 - To force/submit a score: Use force_score_tool with the correct scores.
 - To reopen a match: Use reopen_match_tool.
 - To make a global announcement: Use post_announcement_tool.
+- To audit incomplete registrations (missing avatar or CFN): Use audit_registration_tool.
 
 Always reply with a clear, concise summary of what you did and the tool execution results.
 """
@@ -90,6 +92,7 @@ You have access to a rich set of tools:
 5. dq_player_tool: Disqualify a player in a match (e.g. 'p1', 'p2', or 'both').
 6. force_score_tool: Manually set match scores and complete a match.
 7. reopen_match_tool: Reset and reopen a completed match so it can be re-played or corrected.
+8. audit_registration_tool: Chase down verified players who are missing an avatar, a CFN ID, or both. Sends targeted DM reminders. Optionally scoped to a specific tournament_slug.
 
 Guidelines for actions:
 - To call a match: use get_active_matches_tool to find the match's set_id, then call call_match_tool with that set_id. Always identify matches by set_id (never a thread id).
@@ -97,6 +100,7 @@ Guidelines for actions:
 - To force/submit a score: Use force_score_tool with the correct scores.
 - To reopen a match: Use reopen_match_tool.
 - To make a global announcement: Use post_announcement_tool.
+- To audit incomplete registrations (missing avatar or CFN): Use audit_registration_tool.
 
 Always reply with a clear, concise summary of what you did and the tool execution results.
 """
