@@ -181,5 +181,6 @@ logs/
 *.md
 !specs/**/*.md
 !AGENTS.md
+!docs/CHANGELOG.md
 .doc/
 .docs/
