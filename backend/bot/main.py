@@ -1,9 +1,13 @@
 import discord
 from discord.ext import commands, tasks
+import logging
 import os
 from dotenv import load_dotenv
 import asyncio
 from langchain_core.tools import tool
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 import sys
 # Add project root and backend to sys.path
@@ -913,10 +917,13 @@ async def auto_dispatch_pool_matches():
             stream_tag = " 📺" if m.get("is_stream_match") else ""
             evt = f" [{evt_tag}]" if evt_tag else ""
             await add_hub_command(f"call_match {set_id}")
-            await add_bot_feed(
-                f"🤖 Auto-dispatched{evt}{stream_tag}: {m.get('p1_name')} vs {m.get('p2_name')} "
-                f"({m.get('round_name') or m.get('phase_group') or 'pool'})",
-                "info"
+            # Routine dispatch traffic: terminal-only (DEBUG) to keep the Hub UI feed clean.
+            # Meaningful signals (stopped/threshold, master switch) remain in bot_feed.
+            logger.debug(
+                "Auto-dispatched%s%s: %s vs %s (%s)",
+                evt, stream_tag,
+                m.get("p1_name"), m.get("p2_name"),
+                m.get("round_name") or m.get("phase_group") or "pool",
             )
             dispatched_any = True
 
