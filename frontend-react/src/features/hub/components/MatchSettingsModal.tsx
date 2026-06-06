@@ -11,6 +11,7 @@ interface MatchSettingsModalProps {
   initialAutoDispatchConcurrency?: number;
   initialAutoDispatchStopAt?: number;
   initialIgnoreActivityGuard?: boolean;
+  initialCheckInSource?: string;
   phaseGroups: string[];
   onClose: () => void;
   onSave: () => void;
@@ -26,6 +27,7 @@ export function MatchSettingsModal({
   initialAutoDispatchConcurrency = 1,
   initialAutoDispatchStopAt = 8,
   initialIgnoreActivityGuard = false,
+  initialCheckInSource = "discord",
   phaseGroups,
   onClose,
   onSave,
@@ -38,6 +40,7 @@ export function MatchSettingsModal({
   const [autoDispatchConcurrency, setAutoDispatchConcurrency] = useState(initialAutoDispatchConcurrency);
   const [autoDispatchStopAt, setAutoDispatchStopAt] = useState(initialAutoDispatchStopAt);
   const [ignoreActivityGuard, setIgnoreActivityGuard] = useState(initialIgnoreActivityGuard);
+  const [checkInSource, setCheckInSource] = useState(initialCheckInSource);
   const [saving, setSaving] = useState(false);
 
   const handleSave = async () => {
@@ -52,6 +55,7 @@ export function MatchSettingsModal({
         auto_dispatch_concurrency: autoDispatchConcurrency,
         auto_dispatch_stop_at: autoDispatchStopAt,
         ignore_activity_guard: ignoreActivityGuard,
+        check_in_source: checkInSource,
       });
       onSave();
       onClose();
@@ -85,6 +89,25 @@ export function MatchSettingsModal({
         </div>
         
         <div className="p-5 flex flex-col gap-4 overflow-y-auto custom-scrollbar">
+          {/* Check-in Source — governs the whole check-in mode */}
+          <div className="flex flex-col gap-2 p-3 rounded-lg bg-black/40 border border-blue-500/30">
+            <span className="text-sm font-bold text-blue-300">🎯 Check-in Source</span>
+            <select
+              value={checkInSource}
+              onChange={e => setCheckInSource(e.target.value)}
+              className="w-full bg-black/40 border border-white/10 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500/50"
+            >
+              <option value="discord" className="text-black">Discord-run (bot buttons + bot auto-DQ)</option>
+              <option value="startgg" className="text-black">Start.gg-run (start.gg check-in wave + DQ)</option>
+            </select>
+            <span className="text-[11px] text-textDim leading-snug">
+              <strong>Discord:</strong> bot posts "I'm Ready" buttons and runs the auto-DQ timer below.{' '}
+              <strong>Start.gg:</strong> bot posts a buttonless "check in on start.gg" notice and lets
+              start.gg own the check-in timer, notifications, and DQ. The Auto-DQ settings below have no
+              effect in Start.gg mode.
+            </span>
+          </div>
+
           {/* Auto DQ Toggle */}
           <div className="flex items-center justify-between p-3 rounded-lg bg-black/25 border border-white/5">
             <div className="flex flex-col gap-0.5">

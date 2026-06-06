@@ -216,6 +216,9 @@ MIGRATIONS = [
     # TO override for the activity guard — when ON, fetch_sets loads
     # matches even for tournaments/phases that aren't ACTIVE on start.gg.
     "ALTER TABLE tournaments ADD COLUMN ignore_activity_guard BOOLEAN DEFAULT 0",
+    # Dual-mode check-in: 'discord' (bot-driven I'm-Ready + auto-DQ) or
+    # 'startgg' (markSetCalled → start.gg owns the check-in wave + DQ).
+    "ALTER TABLE tournaments ADD COLUMN check_in_source TEXT DEFAULT 'discord'",
     # Reachability / Emergency-fallback workflow per match
     "ALTER TABLE active_matches ADD COLUMN auto_dq_disarmed BOOLEAN DEFAULT 0",
     # AI Discord conflict-investigation summary (one-line dispute synopsis)

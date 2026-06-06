@@ -222,6 +222,22 @@ class PatchTournamentSettingsRequest(BaseModel):
             "still fail since start.gg refuses mutations on completed sets."
         ),
     )
+    check_in_source: Optional[str] = Field(
+        default=None,
+        description=(
+            "Who drives match check-in. 'discord' (default): the bot posts I'm-Ready buttons and "
+            "runs its own auto-DQ timer. 'startgg': the bot posts a buttonless 'go to start.gg' "
+            "embed and fires markSetCalled so start.gg owns the check-in wave + DQ."
+        ),
+        examples=["discord", "startgg"],
+    )
+
+    @field_validator("check_in_source")
+    @classmethod
+    def _validate_check_in_source(cls, v):
+        if v is not None and v not in ("discord", "startgg"):
+            raise ValueError("check_in_source must be 'discord' or 'startgg'")
+        return v
 
 
 class DispatcherMasterRequest(BaseModel):

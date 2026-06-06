@@ -451,6 +451,7 @@ export function MatchDashboard() {
           initialAutoDispatchConcurrency={Number((actualTourney as any)?.auto_dispatch_concurrency ?? 1)}
           initialAutoDispatchStopAt={Number((actualTourney as any)?.auto_dispatch_stop_at ?? 8)}
           initialIgnoreActivityGuard={!!(actualTourney as any)?.ignore_activity_guard}
+          initialCheckInSource={(actualTourney as any)?.check_in_source || 'discord'}
           phaseGroups={phaseGroups}
           onClose={() => setSettingsModalOpen(false)}
           onSave={() => {
