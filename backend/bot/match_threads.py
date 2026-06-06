@@ -317,89 +317,10 @@ class ReadyCheckView(discord.ui.View):
                     await self.thread.send("🚀 Both players ready! GLHF!")
 
     async def _handle_stream_match(self):
-        """Green-room handoff: both players have checked in, so it's now safe to
-        privately deliver the broadcaster's lobby credentials. Credentials live on
-        the assigned stream station (room_name_or_id / room_password) and are sent
-        by DM — never posted in the thread — so the lobby stays private."""
-        match = await get_active_match(self.set_id)
-
-        # Resolve the assigned stream station and its lobby credentials.
-        station = None
-        station_id = match.get("station_id")
-        if station_id:
-            from backend.core.database import get_stations
-            station = next((s for s in await get_stations() if s["id"] == station_id), None)
-
-        room = (station or {}).get("room_name_or_id") or ""
-        pwd = (station or {}).get("room_password") or ""
-
-        if room or pwd:
-            cred_lines = ["🎥 **Stream Match — Broadcaster Lobby**", ""]
-            if room:
-                cred_lines.append(f"**Lobby Name/ID:** `{room}`")
-            if pwd:
-                cred_lines.append(f"**Password:** `{pwd}`")
-            cred_lines.append("")
-            cred_lines.append("Join the broadcaster's lobby above. Please do **not** share these details publicly.")
-            cred_text = "\n".join(cred_lines)
-
-            delivered = 0
-            for discord_id in (self.p1_discord, self.p2_discord):
-                if not discord_id:
-                    continue
-                try:
-                    member = await self.bot.fetch_user(int(discord_id))
-                    if member:
-                        await member.send(cred_text)
-                        delivered += 1
-                except Exception:
-                    pass
-
-            if delivered:
-                await self.thread.send("🔒 Both players ready! Stream lobby details have been **DM'd privately**. Head to the broadcaster's lobby.")
-            else:
-                # DMs closed on both sides — fall back so the match isn't stuck,
-                # but keep creds out of the public thread.
-                await self.thread.send(
-                    "🔒 Both players ready! I couldn't DM the stream lobby details "
-                    "(DMs may be closed). Please contact a TO for the lobby name & password."
-                )
-        else:
-            # No station bound (none was free at the in_progress transition) OR the
-            # station has no credentials configured. Per the approved fallback, the
-            # match is NOT blocked — DM both players that the TO will share the lobby
-            # shortly (they can be placed via the manual override once one frees up).
-            fallback_dm = (
-                "🎥 **You're on the Stream Match!**\n\n"
-                "A broadcast station is being prepared — the TO will share the lobby "
-                "name and password with you here shortly. Please stand by and keep this "
-                "DM open."
-            )
-            for discord_id in (self.p1_discord, self.p2_discord):
-                if not discord_id:
-                    continue
-                try:
-                    member = await self.bot.fetch_user(int(discord_id))
-                    if member:
-                        await member.send(fallback_dm)
-                except Exception:
-                    pass
-            await self.thread.send(
-                "📺 Both players ready! No broadcast station is free yet — a TO will "
-                "assign one and share the lobby shortly."
-            )
-            await add_bot_feed(
-                f"Stream match {self.set_id} ready but station "
-                f"'{station_id or 'unassigned'}' has no lobby credentials — TO to place it.",
-                "warn"
-            )
-
-        from backend.api.ws_manager import manager as hub_mgr
-        try:
-            await hub_mgr.broadcast({"type": "match_update"})
-        except Exception:
-            pass
-        return None
+        """Green-room handoff (thin wrapper). Both players have checked in, so deliver
+        the broadcaster's lobby credentials privately. The implementation lives in the
+        module-level deliver_stream_credentials so the start.gg-mode sync path can reuse it."""
+        await deliver_stream_credentials(self.bot, self.thread, self.set_id, self.p1_discord, self.p2_discord)
 
     async def _handle_offstream_match(self):
         password = generate_lobby_password()
@@ -416,6 +337,89 @@ class ReadyCheckView(discord.ui.View):
         except Exception:
             pass
         return password
+
+async def deliver_stream_credentials(bot, thread, set_id, p1_discord, p2_discord):
+    """Privately DM the assigned stream station's broadcaster-lobby credentials to both
+    players, posting only a non-sensitive confirmation in the thread.
+
+    Shared by the Discord ready-check flow (ReadyCheckView._handle_stream_match) and the
+    start.gg-mode sync path (startgg_go_live drain handler). Credentials live on the
+    assigned stream station (room_name_or_id / room_password); they are never posted
+    publicly. Best-effort throughout — DMs may be closed."""
+    match = await get_active_match(set_id)
+    if not match:
+        return
+
+    station = None
+    station_id = match.get("station_id")
+    if station_id:
+        from backend.core.database import get_stations
+        station = next((s for s in await get_stations() if s["id"] == station_id), None)
+
+    room = (station or {}).get("room_name_or_id") or ""
+    pwd = (station or {}).get("room_password") or ""
+
+    if room or pwd:
+        cred_lines = ["🎥 **Stream Match — Broadcaster Lobby**", ""]
+        if room:
+            cred_lines.append(f"**Lobby Name/ID:** `{room}`")
+        if pwd:
+            cred_lines.append(f"**Password:** `{pwd}`")
+        cred_lines.append("")
+        cred_lines.append("Join the broadcaster's lobby above. Please do **not** share these details publicly.")
+        cred_text = "\n".join(cred_lines)
+
+        delivered = 0
+        for discord_id in (p1_discord, p2_discord):
+            if not discord_id:
+                continue
+            try:
+                member = await bot.fetch_user(int(discord_id))
+                if member:
+                    await member.send(cred_text)
+                    delivered += 1
+            except Exception:
+                pass
+
+        if delivered:
+            await thread.send("🔒 Both players ready! Stream lobby details have been **DM'd privately**. Head to the broadcaster's lobby.")
+        else:
+            await thread.send(
+                "🔒 Both players ready! I couldn't DM the stream lobby details "
+                "(DMs may be closed). Please contact a TO for the lobby name & password."
+            )
+    else:
+        fallback_dm = (
+            "🎥 **You're on the Stream Match!**\n\n"
+            "A broadcast station is being prepared — the TO will share the lobby "
+            "name and password with you here shortly. Please stand by and keep this "
+            "DM open."
+        )
+        for discord_id in (p1_discord, p2_discord):
+            if not discord_id:
+                continue
+            try:
+                member = await bot.fetch_user(int(discord_id))
+                if member:
+                    await member.send(fallback_dm)
+            except Exception:
+                pass
+        await thread.send(
+            "📺 Both players ready! No broadcast station is free yet — a TO will "
+            "assign one and share the lobby shortly."
+        )
+        await add_bot_feed(
+            f"Stream match {set_id} ready but station "
+            f"'{station_id or 'unassigned'}' has no lobby credentials — TO to place it.",
+            "warn"
+        )
+
+    from backend.api.ws_manager import manager as hub_mgr
+    try:
+        await hub_mgr.broadcast({"type": "match_update"})
+    except Exception:
+        pass
+
 
 async def run_ready_check_timeout(bot, thread, set_id, timeout_seconds: int = 600):
     warning_at = max(0, timeout_seconds - 180)

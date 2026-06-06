@@ -2075,6 +2075,63 @@ async def handle_ws_command(cmd_text: str):
                 await send_score_report_dms(bot, match)
             return
 
+        # ── start.gg-mode lifecycle (driven by the reconciliation poll) ──────
+        # The API-process sync detects start.gg state changes and enqueues these so the
+        # bot can do the Discord-only side-effects (it has no Discord access itself).
+        if cmd_text.strip().lower().startswith("startgg_go_live "):
+            set_id = cmd_text.split(" ")[1].strip()
+            from core.database import get_active_match, get_available_stream_station, update_active_match
+            match = await get_active_match(set_id)
+            if not match:
+                return
+            # Only stream matches need a green-room handoff; off-stream start.gg matches
+            # coordinate entirely on start.gg (no lobby DM).
+            if match.get("is_stream_match"):
+                # Bind an idle event-matching stream station if one isn't already bound
+                # (the on_stream overlay, realized at the in_progress edge).
+                if not match.get("station_id"):
+                    station = await get_available_stream_station(match.get("event_id") or "")
+                    if station:
+                        await update_active_match(set_id, station_id=station["id"])
+                        match = await get_active_match(set_id)
+                thread_id = match.get("discord_thread_id")
+                thread = bot.get_channel(int(thread_id)) if thread_id else None
+                if thread:
+                    from bot.match_threads import deliver_stream_credentials
+                    await deliver_stream_credentials(
+                        bot, thread, set_id, match.get("p1_discord"), match.get("p2_discord")
+                    )
+            await ws_add_bot_feed(
+                f"▶️ start.gg check-in complete — {match.get('p1_name')} vs {match.get('p2_name')} is now live.",
+                "info",
+            )
+            return
+
+        if cmd_text.strip().lower().startswith("startgg_finish "):
+            # Format: "startgg_finish <set_id> [<thread_id>]". The optional thread id lets
+            # us still archive when the row was orphan-swept before this command drained.
+            parts = cmd_text.split(" ")
+            set_id = parts[1].strip() if len(parts) > 1 else ""
+            explicit_thread_id = parts[2].strip() if len(parts) > 2 else ""
+            from core.database import get_active_match
+            match = await get_active_match(set_id)
+            thread_id = explicit_thread_id or ((match or {}).get("discord_thread_id") or "")
+            if thread_id:
+                try:
+                    thread = bot.get_channel(int(thread_id))
+                    if thread:
+                        if match:
+                            await thread.send(
+                                f"✅ Match completed on Start.gg — "
+                                f"{match.get('p1_name')} vs {match.get('p2_name')}. Archiving."
+                            )
+                        else:
+                            await thread.send("✅ Match completed on Start.gg. Archiving.")
+                        await thread.edit(archived=True, locked=True)
+                except Exception:
+                    pass
+            return
+
         if cmd_text.strip().lower().startswith("apply_verified_role "):
             parts = cmd_text.split(" ", 2)
             if len(parts) < 2:

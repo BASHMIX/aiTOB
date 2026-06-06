@@ -1,4 +1,5 @@
 import aiosqlite
+import datetime
 import os
 import json
 from typing import Optional
@@ -639,9 +640,13 @@ _AUTO_ADD_STATES = {
 
 
 async def _preload_sync_data(db, tournament_slug: str):
-    async with db.execute("SELECT bot_manage_limit FROM tournaments WHERE slug = ?", (tournament_slug,)) as t_cursor:
+    async with db.execute(
+        "SELECT bot_manage_limit, check_in_source FROM tournaments WHERE slug = ?",
+        (tournament_slug,),
+    ) as t_cursor:
         t_row = await t_cursor.fetchone()
         bot_manage_limit = t_row[0] if t_row else "off"
+        check_in_source = (t_row[1] if t_row and t_row[1] else "discord")
 
     async with db.execute("SELECT set_id, status FROM active_matches WHERE tournament_slug = ?", (tournament_slug,)) as cursor:
         rows = await cursor.fetchall()
@@ -672,16 +677,26 @@ async def _preload_sync_data(db, tournament_slug: str):
     ) as cursor:
         avatar_by_startgg = {str(row[0]): str(row[1]) for row in await cursor.fetchall()}
 
-    return bot_manage_limit, local_matches, planned, station_by_stream, discord_by_startgg, avatar_by_startgg
+    return bot_manage_limit, check_in_source, local_matches, planned, station_by_stream, discord_by_startgg, avatar_by_startgg
 
 async def _update_existing_match(
     db, sid, ps, local_status, provider_status, planned, station_by_stream, discord_by_startgg,
-    p1_name, p2_name, p1_avatar, p2_avatar, p1_eid, p2_eid, round_name, match_num, phase_group
+    p1_name, p2_name, p1_avatar, p2_avatar, p1_eid, p2_eid, round_name, match_num, phase_group,
+    check_in_source='discord',
 ):
+    """Reconcile one existing match against the provider state. Returns a list of hub
+    commands the CALLER must enqueue AFTER commit (enqueuing mid-transaction would risk a
+    SQLite write-lock against this still-open connection)."""
+    pending_cmds: list[str] = []
+
     if ps.state in _TERMINAL_STATES:
         new_status = 'complete'
     elif ps.state == ProviderSetState.NOT_STARTED and local_status in ('complete', 'dq'):
         new_status = 'not_started'
+    elif check_in_source == 'startgg' and local_status == 'called' and ps.state == ProviderSetState.IN_PROGRESS:
+        # start.gg-mode check-in: players checked in on start.gg → the set went ACTIVE.
+        # The bot has no I'm-Ready buttons in this mode, so the poll drives the advance.
+        new_status = 'in_progress'
     elif provider_status and local_status == 'not_started':
         new_status = provider_status
     else:
@@ -726,6 +741,35 @@ async def _update_existing_match(
                 (sid,)
             )
 
+    # ── start.gg-mode edge-triggered side-effects ─────────────────────────
+    # Fire ONLY on the tick where the status actually changes (edge), never on every
+    # tick the provider sits in a state (level) — else we'd re-DM/re-archive repeatedly.
+    # DB-level work happens here on the open connection; Discord work is handed to the bot.
+    if check_in_source == 'startgg' and new_status != local_status:
+        if local_status == 'called' and new_status == 'in_progress':
+            await db.execute(
+                "UPDATE active_matches SET started_at = ? WHERE set_id = ?",
+                (datetime.datetime.utcnow().isoformat(), sid),
+            )
+            # The bot handler binds a stream station (if applicable) and DMs lobby creds.
+            pending_cmds.append(f"startgg_go_live {sid}")
+        elif new_status == 'complete' and local_status not in ('complete', 'dq'):
+            # Free any bound stream station the instant the match resolves on start.gg.
+            await db.execute(
+                "UPDATE active_matches SET station_id = NULL WHERE set_id = ?", (sid,)
+            )
+            # Pass the thread id explicitly so the archive still works even if a later
+            # orphan-sweep deletes the row before the bot drains the command.
+            async with db.execute(
+                "SELECT discord_thread_id FROM active_matches WHERE set_id = ?", (sid,)
+            ) as c:
+                row = await c.fetchone()
+            thread_id = row[0] if row and row[0] else ""
+            if thread_id:
+                pending_cmds.append(f"startgg_finish {sid} {thread_id}")
+
+    return pending_cmds
+
 async def _insert_new_match(
     db, sid, ps, tournament_slug, bot_manage_limit, planned, station_by_stream, discord_by_startgg,
     p1_name, p2_name, p1_avatar, p2_avatar, p1_eid, p2_eid, round_name, match_num, phase_group
@@ -767,9 +811,12 @@ async def sync_active_matches(tournament_slug: str, provider_sets: list[Provider
     is_stream_match=TRUE and (if a stream_id is set) a matching station assigned.
     """
     async with aiosqlite.connect(DB_PATH) as db:
-        bot_manage_limit, local_matches, planned, station_by_stream, discord_by_startgg, avatar_by_startgg = await _preload_sync_data(db, tournament_slug)
+        bot_manage_limit, check_in_source, local_matches, planned, station_by_stream, discord_by_startgg, avatar_by_startgg = await _preload_sync_data(db, tournament_slug)
 
         found_sids = set()
+        # Hub commands to enqueue AFTER commit (enqueuing mid-transaction risks a
+        # SQLite write-lock against this open connection).
+        pending_cmds: list[str] = []
 
         for ps in provider_sets:
             sid = ps.id
@@ -803,10 +850,13 @@ async def sync_active_matches(tournament_slug: str, provider_sets: list[Provider
 
             if sid in local_matches:
                 local_status = local_matches[sid]
-                await _update_existing_match(
+                cmds = await _update_existing_match(
                     db, sid, ps, local_status, provider_status, planned, station_by_stream, discord_by_startgg,
-                    p1_name, p2_name, p1_avatar, p2_avatar, p1_eid, p2_eid, round_name, match_num, phase_group
+                    p1_name, p2_name, p1_avatar, p2_avatar, p1_eid, p2_eid, round_name, match_num, phase_group,
+                    check_in_source=check_in_source,
                 )
+                if cmds:
+                    pending_cmds.extend(cmds)
             else:
                 await _insert_new_match(
                     db, sid, ps, tournament_slug, bot_manage_limit, planned, station_by_stream, discord_by_startgg,
@@ -814,12 +864,33 @@ async def sync_active_matches(tournament_slug: str, provider_sets: list[Provider
                 )
 
         # Remove orphans — since provider.fetch_sets retrieves all paginated sets, orphan list is complete
-        orphans = [(sid,) for sid in local_matches.keys() if sid not in found_sids]
-        if orphans:
-            # Orphan: set no longer in provider bracket — remove from hub
-            await db.executemany("DELETE FROM active_matches WHERE set_id = ?", orphans)
+        orphan_sids = [sid for sid in local_matches.keys() if sid not in found_sids]
+        if orphan_sids:
+            # Orphan-race guard (start.gg mode): the FINAL match of a phase completes,
+            # the phase deactivates, fetch_sets stops returning it, and it lands here as
+            # an orphan — possibly before the completion edge fired. If such an orphan was
+            # still mid-flight and has a thread, archive it (with the thread id passed
+            # explicitly, since we're about to delete the row).
+            if check_in_source == 'startgg':
+                for sid in orphan_sids:
+                    if local_matches.get(sid) in ('called', 'in_progress'):
+                        async with db.execute(
+                            "SELECT discord_thread_id FROM active_matches WHERE set_id = ?", (sid,)
+                        ) as c:
+                            row = await c.fetchone()
+                        thread_id = row[0] if row and row[0] else ""
+                        if thread_id:
+                            pending_cmds.append(f"startgg_finish {sid} {thread_id}")
+            await db.executemany(
+                "DELETE FROM active_matches WHERE set_id = ?", [(sid,) for sid in orphan_sids]
+            )
 
         await db.commit()
+
+    # Enqueue Discord side-effect commands now the transaction is committed and the
+    # write-lock released. add_hub_command nudges the bot to drain immediately.
+    for cmd in pending_cmds:
+        await add_hub_command(cmd)
 
 async def delete_tournament_active_matches(slug: str):
     """Wipes all local active matches for a specific tournament."""
