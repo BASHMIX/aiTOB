@@ -136,7 +136,8 @@ async def api_upload_avatar(id: str, request: Request):
     os.makedirs(static_dir, exist_ok=True)
 
     ext = file.filename.split(".")[-1] if file.filename else "png"
-    filename = f"avatar_{id}.{ext}"
+    safe_id = os.path.basename(id)
+    filename = f"avatar_{safe_id}.{ext}"
     file_path = os.path.join(static_dir, filename)
 
     with open(file_path, "wb") as f:
