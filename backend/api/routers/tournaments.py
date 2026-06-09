@@ -5,6 +5,7 @@ from backend.core.database import (
     upsert_tournament, get_tournaments, get_tournament, delete_tournament,
     update_tournament_settings, delete_tournament_active_matches, sync_active_matches,
     get_all_player_overrides, set_tournament_streams, get_tournament_streams,
+    get_stations,
 )
 from backend.core.providers.registry import get_provider, get_provider_for_tournament
 from backend.core.contracts.tournament_types import ProviderSet, ProviderTournament
@@ -266,6 +267,111 @@ async def api_list_tournament_streams(slug: str):
     if not t:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tournament not found")
     return {"streams": await get_tournament_streams(slug)}
+
+
+@router.get(
+    "/{slug:path}/verify-stream",
+    summary="Preflight: verify local stream stations resolve to a live start.gg stream",
+    responses={404: {"model": ErrorResponse}, 502: {"model": ErrorResponse}},
+    operation_id="verifyTournamentStream",
+)
+async def api_verify_tournament_stream(slug: str):
+    """Live-check that each local stream station maps to a stream that still
+    exists on start.gg, so the TO learns *before* a live wave whether the public
+    📺 icon will actually render.
+
+    Why a dedicated endpoint and not the cached `/streams`: streams can't be
+    created via the API (Twitch/YouTube OAuth is browser-only), so the only
+    failure mode is "TO forgot to link / unlinked it in start.gg admin." That's
+    invisible to the cache, so we do a LIVE fetch here and refresh the cache as a
+    side effect (station-mapping dropdowns get fresher data for free).
+
+    On-demand by design — NOT polled. start.gg's 75/min budget is shared with the
+    reconciliation loop, and this only changes when the TO edits start.gg admin,
+    so the Hub calls it on mount + manual refresh, not on a timer.
+
+    Gate semantics (warn-but-allow): `ok` drives a UI warning badge, it does NOT
+    block streaming. Local stream stations carry OBS overlays, lobby creds, and
+    routing that work WITHOUT a start.gg stream — only the public 📺 is affected.
+    """
+    t = await get_tournament(slug)
+    if not t:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tournament not found")
+
+    # LIVE fetch (not the cache) — this is the whole point of the preflight.
+    provider = await get_provider_for_tournament(slug)
+    try:
+        live = await provider.fetch_streams(slug)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Provider error: {e}")
+
+    live_streams = [{"id": str(s.id), "name": s.name, "source": s.source, "game": s.game} for s in live]
+    # Refresh the cache so the station-mapping dropdown sees the same fresh list.
+    await set_tournament_streams(slug, live_streams)
+
+    live_by_id = {s["id"]: s for s in live_streams}
+    # Advisory name-fallback only (names drift, IDs don't) — never auto-binds.
+    live_by_name = {(s["name"] or "").strip().lower(): s for s in live_streams}
+
+    stream_stations = [
+        s for s in await get_stations()
+        if s.get("is_stream_station") and not s.get("hidden")
+    ]
+
+    stations_out = []
+    linked = 0
+    for st in stream_stations:
+        bound_id = str(st.get("startgg_stream_id") or "") or None
+        matched = live_by_id.get(bound_id) if bound_id else None
+        if bound_id and matched:
+            status_str = "linked"
+            linked += 1
+        elif bound_id and not matched:
+            status_str = "stale"   # bound to a start.gg stream that no longer exists
+        else:
+            status_str = "unmapped"  # TO never picked a start.gg stream for this station
+        suggestion = None
+        if status_str != "linked":
+            hit = live_by_name.get((st.get("name") or "").strip().lower())
+            if hit:
+                suggestion = hit["id"]
+        stations_out.append({
+            "id": st["id"],
+            "name": st.get("name"),
+            "startgg_stream_id": bound_id,
+            "status": status_str,
+            "matched_stream": matched,
+            "suggested_stream_id": suggestion,
+        })
+
+    # ok ⇔ at least one stream station resolves to a LIVE start.gg stream.
+    # Every other branch warns (warn-but-allow): no stations is the *most* broken
+    # case, so it must not silently pass while "exists-but-unlinked" warns.
+    if not stream_stations:
+        ok, reason, warning = False, "no_stream_stations", (
+            "No stream station is configured in the Hub — the public 📺 and "
+            "station routing are unavailable until you add one."
+        )
+    elif linked > 0:
+        ok, reason, warning = True, "ok", None
+    elif not live_streams:
+        ok, reason, warning = False, "no_startgg_streams", (
+            "No stream exists on start.gg — link a Twitch/YouTube channel in "
+            "start.gg admin → Streams first (this can't be done via API)."
+        )
+    else:
+        ok, reason, warning = False, "unlinked", (
+            "Stream not linked on start.gg — map a Hub stream station to a "
+            "start.gg stream in Station Settings first."
+        )
+
+    return {
+        "ok": ok,
+        "reason": reason,
+        "warning": warning,
+        "startgg_streams": live_streams,
+        "stations": stations_out,
+    }
 
 
 @router.patch(

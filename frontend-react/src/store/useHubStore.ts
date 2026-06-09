@@ -64,6 +64,25 @@ interface EventOpt {
   game?: string;
 }
 
+// Result of GET /api/tournaments/{slug}/verify-stream — the live preflight that
+// checks whether local stream stations resolve to a stream that still exists on
+// start.gg. `ok` is informational (warn-but-allow): it drives a warning badge,
+// it does NOT disable streaming, since local overlays/routing work regardless.
+export interface StreamGate {
+  ok: boolean;
+  reason: 'ok' | 'no_stream_stations' | 'no_startgg_streams' | 'unlinked';
+  warning: string | null;
+  startgg_streams: { id: string; name: string; source?: string; game?: string }[];
+  stations: {
+    id: string;
+    name: string;
+    startgg_stream_id: string | null;
+    status: 'linked' | 'stale' | 'unmapped';
+    matched_stream: { id: string; name: string } | null;
+    suggested_stream_id: string | null;
+  }[];
+}
+
 interface HubState {
   tournaments: Tournament[];
   currentSlug: string | null;
@@ -79,6 +98,7 @@ interface HubState {
     auto_dispatcher?: boolean;
   };
   plannedStreamIds: string[];
+  streamGate: StreamGate | null;
   hubPassword: string;
   setTournaments: (tournaments: Tournament[]) => void;
   setCurrentSlug: (slug: string | null) => void;
@@ -95,6 +115,7 @@ interface HubState {
   }) => void;
   togglePlannedStream: (setId: string) => void;
   setPlannedStreamIds: (ids: string[]) => void;
+  setStreamGate: (gate: StreamGate | null) => void;
   setHubPassword: (password: string) => void;
   logout: () => void;
 }
@@ -108,6 +129,7 @@ export const useHubStore = create<HubState>((set) => ({
   stations: [],
   status: { startgg_api: false, websockets: false, discord_bot: false, token_scope: null },
   plannedStreamIds: [],
+  streamGate: null,
   hubPassword: localStorage.getItem('hub_password') || '',
   setTournaments: (tournaments) => set({ tournaments }),
   setCurrentSlug: (currentSlug) => {
@@ -135,6 +157,7 @@ export const useHubStore = create<HubState>((set) => ({
   setStations: (stations) => set({ stations }),
   setStatus: (status) => set({ status }),
   setPlannedStreamIds: (plannedStreamIds: string[]) => set({ plannedStreamIds }),
+  setStreamGate: (streamGate) => set({ streamGate }),
   togglePlannedStream: (setId) => set((state) => ({
     plannedStreamIds: state.plannedStreamIds.includes(setId)
       ? state.plannedStreamIds.filter(id => id !== setId)

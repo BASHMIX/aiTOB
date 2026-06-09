@@ -30,7 +30,7 @@ function deriveStreamUrl(stream: Stream | undefined): string {
 }
 
 export function StationSettingsModal({ station, onClose, onSaved }: StationSettingsModalProps) {
-  const { currentSlug, events } = useHubStore();
+  const { currentSlug, events, streamGate, setStreamGate } = useHubStore();
 
   const [name, setName] = useState<string>(station.name || "");
   const [hidden, setHidden] = useState<boolean>(!!station.hidden);
@@ -48,6 +48,7 @@ export function StationSettingsModal({ station, onClose, onSaved }: StationSetti
   const [overlays, setOverlays] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [binding, setBinding] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -75,6 +76,44 @@ export function StationSettingsModal({ station, onClose, onSaved }: StationSetti
     [streams, streamId]
   );
   const derivedUrl = deriveStreamUrl(selectedStream);
+
+  // Preflight name-fallback hint for THIS station (advisory only — the gate
+  // never auto-binds it server-side). Offer a one-click bind when start.gg has a
+  // by-name match the TO hasn't explicitly selected yet.
+  const gateStation = useMemo(
+    () => streamGate?.stations.find(s => s.id === station.id),
+    [streamGate, station.id]
+  );
+  const suggestedId = gateStation?.suggested_stream_id || null;
+  const suggestedStream = useMemo(
+    () => (suggestedId
+      ? (streams.find(s => s.id === suggestedId)
+         || streamGate?.startgg_streams.find(s => s.id === suggestedId))
+      : undefined),
+    [suggestedId, streams, streamGate]
+  );
+  const showAutoBind = !!suggestedId && streamId !== suggestedId;
+
+  // One-click bind: persist the suggested startgg_stream_id, reflect it in the
+  // dropdown, refresh the parent station list, then immediately re-run the
+  // preflight so the dashboard banner + ⚠📺 badges clear without a manual reload.
+  const handleAutoBind = async () => {
+    if (!suggestedId) return;
+    setBinding(true);
+    try {
+      await axios.patch(`/api/stations/${station.id}`, { startgg_stream_id: suggestedId });
+      setStreamId(suggestedId);
+      onSaved();  // refresh parent's station list (does NOT close the modal)
+      if (currentSlug) {
+        const res = await axios.get(`/api/tournaments/${currentSlug}/verify-stream`);
+        setStreamGate(res.data);  // store update → banner/badges react instantly
+      }
+    } catch (e: any) {
+      alert(e.response?.data?.detail || e.message || "Auto-bind failed");
+    } finally {
+      setBinding(false);
+    }
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -152,6 +191,20 @@ export function StationSettingsModal({ station, onClose, onSaved }: StationSetti
                 </option>
               ))}
             </select>
+            {showAutoBind && (
+              <button
+                type="button"
+                onClick={handleAutoBind}
+                disabled={binding}
+                title={`Bind this station to the start.gg stream "${suggestedStream?.name}" matched by name`}
+                className="flex items-center gap-1.5 self-start rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-bold text-emerald-300 hover:bg-emerald-500/20 transition-colors disabled:opacity-50 disabled:pointer-events-none"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-3.5 h-3.5">
+                  <path d="M20 6L9 17l-5-5" />
+                </svg>
+                {binding ? "Binding…" : `Auto-bind to "${suggestedStream?.name ?? "stream"}"`}
+              </button>
+            )}
             <span className="text-xs text-textDim">
               {currentSlug
                 ? "Matches assigned to this station will be pushed onto the start.gg public stream queue."

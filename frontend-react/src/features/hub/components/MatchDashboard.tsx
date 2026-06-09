@@ -57,7 +57,7 @@ function sortTBDLast(rows: MatchData[]): MatchData[] {
 
 // ── Main Component ─────────────────────────────────────────────────────
 export function MatchDashboard() {
-  const { matches, currentSlug, currentEventId, setCurrentEventId, events, tournaments, stations, setMatches, plannedStreamIds, setPlannedStreamIds } = useHubStore();
+  const { matches, currentSlug, currentEventId, setCurrentEventId, events, tournaments, stations, setMatches, plannedStreamIds, setPlannedStreamIds, streamGate, setStreamGate } = useHubStore();
   const [sets, setSets] = useState<any[]>([]);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
 
@@ -102,6 +102,22 @@ export function MatchDashboard() {
       console.error('load planned streams', e);
     }
   }, [currentSlug, setPlannedStreamIds]);
+
+  // Preflight stream verification — live-checks start.gg for the linked stream.
+  // On-demand only (mount + tournament switch), never polled: it changes only
+  // when the TO edits start.gg admin, and the 75/min budget is shared with sync.
+  const verifyStream = useCallback(async () => {
+    if (!currentSlug) { setStreamGate(null); return; }
+    try {
+      const res = await axios.get(`/api/tournaments/${currentSlug}/verify-stream`);
+      setStreamGate(res.data);
+    } catch (e) {
+      console.error('verify stream', e);
+      setStreamGate(null); // unknown → don't show a (possibly wrong) warning
+    }
+  }, [currentSlug, setStreamGate]);
+
+  useEffect(() => { verifyStream(); }, [verifyStream]);
 
   // ── WebSocket Integration ──
   useHubSocket(useCallback((evt) => {
@@ -366,6 +382,22 @@ export function MatchDashboard() {
         </div>
       )}
 
+      {/* ── Stream preflight banner ── warn-but-allow: streaming still works
+           locally; only the public start.gg 📺 won't render until linked. */}
+      {streamGate && !streamGate.ok && streamGate.warning && (
+        <div className="flex items-center gap-2.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+          <span className="text-base leading-none">📺</span>
+          <span className="font-semibold flex-1">{streamGate.warning}</span>
+          <button
+            onClick={verifyStream}
+            title="Re-check start.gg now"
+            className="rounded border border-amber-400/40 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-200 hover:bg-amber-400/15 transition-colors"
+          >
+            Re-check
+          </button>
+        </div>
+      )}
+
       {/* ── Controls / Filters Row ── */}
       <div className="flex flex-wrap items-center gap-3 text-xs bg-cardDark rounded-lg px-3 py-2 border border-white/10 shadow-sm">
         {/* Hide TBD */}
@@ -437,6 +469,7 @@ export function MatchDashboard() {
           onAction={handleAction}
           onToggleStream={handleToggleStream}
           stations={stations ?? []}
+          streamUnlinked={!!streamGate && !streamGate.ok}
         />
       </div>
 

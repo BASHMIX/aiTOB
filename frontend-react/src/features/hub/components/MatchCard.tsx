@@ -192,6 +192,23 @@ interface MatchCardProps {
   onAction: (action: string, row: any, data?: any) => void;
   onToggleStream: (setId: string, currentVal: boolean) => void;
   stations?: { id: string; name: string; is_stream_station?: boolean }[];
+  // Stream preflight failed — no local stream station maps to a live start.gg
+  // stream. Warn-but-allow: we badge the button, we do NOT disable it (local
+  // overlays/routing/green-room still work; only the public 📺 won't render).
+  streamUnlinked?: boolean;
+}
+
+// Compact amber chip shown beside the "For Stream" button when the start.gg
+// stream isn't linked. Tooltip carries the full explanation.
+function StreamUnlinkedBadge() {
+  return (
+    <span
+      title="No Hub stream station is linked to a live start.gg stream. You can still flag this match — local overlays, station routing and lobby DMs work — but the public 📺 won't appear on the start.gg bracket until a stream is linked in start.gg admin."
+      className="inline-flex items-center gap-0.5 rounded border border-amber-500/40 bg-amber-500/10 px-1 py-0.5 text-[8px] font-bold uppercase tracking-wider text-amber-300/90 leading-none cursor-help select-none shrink-0"
+    >
+      ⚠ 📺
+    </span>
+  );
 }
 
 function DQMenu({ match, onAction, onOpenChange }: { match: MatchData; onAction: MatchCardProps['onAction']; onOpenChange?: (open: boolean) => void }) {
@@ -306,7 +323,7 @@ function StationMenu({ match, stations, onAction, onOpenChange }: { match: Match
   );
 }
 
-export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onToggleStream, stations }: MatchCardProps) {
+export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onToggleStream, stations, streamUnlinked }: MatchCardProps) {
   const meta = STATUS_META[match.status];
   const showTimer = match.status === "live" || match.status === "called";
 
@@ -473,6 +490,7 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
               >
                 Awaiting bracket
               </span>
+              {streamUnlinked && !match.isStreamMatch && <StreamUnlinkedBadge />}
               <button
                 type="button"
                 onClick={() => onToggleStream(rawSetId, !!match.isStreamMatch)}
@@ -500,6 +518,7 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
                   {match.isLocal && (
                     <ActionButton tone="activate" label="Call Match" icon={<IconCall />} onClick={() => onAction("callMatch", match)} />
                   )}
+                  {streamUnlinked && !match.isStreamMatch && <StreamUnlinkedBadge />}
                   <button
                     type="button"
                     onClick={() => onToggleStream(rawSetId, !!match.isStreamMatch)}
