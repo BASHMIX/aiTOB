@@ -29,7 +29,12 @@ async def upload_asset(file: UploadFile = File(...)):
     if not file.filename:
         raise HTTPException(400, "Invalid filename")
 
-    filename = file.filename.replace(" ", "_")
+    # Sanitize the filename to prevent path traversal
+    safe_filename = os.path.basename(file.filename)
+    if not safe_filename:
+        raise HTTPException(400, "Invalid filename")
+
+    filename = safe_filename.replace(" ", "_")
     file_path = os.path.join(ASSETS_DIR, filename)
 
     try:
@@ -48,8 +53,15 @@ async def upload_asset(file: UploadFile = File(...)):
                summary="Delete an asset")
 async def delete_asset(name: str):
     """Remove an uploaded asset file."""
-    file_path = os.path.join(ASSETS_DIR, name)
-    if os.path.exists(file_path):
+    # Sanitize the name to prevent path traversal
+    safe_name = os.path.basename(name)
+    file_path = os.path.join(ASSETS_DIR, safe_name)
+
+    # Optional: confirm it actually resolves inside ASSETS_DIR as an extra check
+    if os.path.commonpath([os.path.abspath(file_path), os.path.abspath(ASSETS_DIR)]) != os.path.abspath(ASSETS_DIR):
+        raise HTTPException(400, "Invalid asset name")
+
+    if os.path.exists(file_path) and os.path.isfile(file_path):
         os.remove(file_path)
         return {"message": "Deleted"}
     raise HTTPException(404, "Asset not found")
