@@ -21,6 +21,8 @@ async def list_assets():
     return {"assets": files}
 
 
+ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "gif"}
+
 @router.post("/upload",
              dependencies=[Depends(verify_hub_password)],
              summary="Upload an asset file")
@@ -29,7 +31,13 @@ async def upload_asset(file: UploadFile = File(...)):
     if not file.filename:
         raise HTTPException(400, "Invalid filename")
 
-    filename = file.filename.replace(" ", "_")
+    base_filename = os.path.basename(file.filename)
+    filename = base_filename.replace(" ", "_")
+
+    ext = filename.split(".")[-1].lower() if "." in filename else ""
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(400, f"Invalid file type. Allowed: {', '.join(ALLOWED_EXTENSIONS)}")
+
     file_path = os.path.join(ASSETS_DIR, filename)
 
     try:
@@ -48,7 +56,8 @@ async def upload_asset(file: UploadFile = File(...)):
                summary="Delete an asset")
 async def delete_asset(name: str):
     """Remove an uploaded asset file."""
-    file_path = os.path.join(ASSETS_DIR, name)
+    safe_name = os.path.basename(name)
+    file_path = os.path.join(ASSETS_DIR, safe_name)
     if os.path.exists(file_path):
         os.remove(file_path)
         return {"message": "Deleted"}
