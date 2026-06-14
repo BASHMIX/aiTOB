@@ -135,8 +135,12 @@ async def api_upload_avatar(id: str, request: Request):
     static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
     os.makedirs(static_dir, exist_ok=True)
 
-    ext = file.filename.split(".")[-1] if file.filename else "png"
+    safe_filename = os.path.basename(file.filename) if file.filename else ""
+    ext = safe_filename.split(".")[-1] if safe_filename else "png"
     filename = f"avatar_{id}.{ext}"
+    # Sanitizing `id` is also safe practice although we construct the filename
+    safe_id = os.path.basename(id)
+    filename = f"avatar_{safe_id}.{ext}"
     file_path = os.path.join(static_dir, filename)
 
     with open(file_path, "wb") as f:
