@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends, status, Request
 from fastapi.responses import FileResponse
 import os
-from typing import Dict, Any, List, Optional
+from typing import Dict, Optional
 from backend.core.database import get_player, create_or_update_player, get_all_player_overrides, delete_all_player_overrides, get_player_override, save_player_override, delete_player_override
 from backend.api.auth import verify_hub_password
 from backend.api.schemas import CreatePlayerRequest, MessageResponse, ErrorResponse
@@ -135,8 +135,13 @@ async def api_upload_avatar(id: str, request: Request):
     static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
     os.makedirs(static_dir, exist_ok=True)
 
-    ext = file.filename.split(".")[-1] if file.filename else "png"
-    filename = f"avatar_{id}.{ext}"
+    base_filename = os.path.basename(file.filename) if file.filename else "avatar.png"
+    ext = base_filename.split(".")[-1].lower() if "." in base_filename else "png"
+    if ext not in ["png", "jpg", "jpeg", "webp", "gif"]:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid file extension")
+
+    safe_id = os.path.basename(id)
+    filename = f"avatar_{safe_id}.{ext}"
     file_path = os.path.join(static_dir, filename)
 
     with open(file_path, "wb") as f:
