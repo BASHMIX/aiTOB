@@ -1,6 +1,7 @@
 import os, json
 import asyncio
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
@@ -113,6 +114,11 @@ BASE_DIR = os.path.dirname(__file__)
 static_dir = os.path.join(BASE_DIR, "static")
 os.makedirs(static_dir, exist_ok=True)
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+# Serve frontend assets in production if dist folder exists
+frontend_assets_dir = os.path.join(static_dir, "dist", "assets")
+if os.path.exists(frontend_assets_dir):
+    app.mount("/assets", StaticFiles(directory=frontend_assets_dir), name="frontend_assets")
 
 # Background Tasks & Helper Loops
 async def reconciliation_loop():
@@ -357,7 +363,23 @@ async def get_obs_overlay_data(station_id: str):
 # Redirect root to docs or frontend
 @app.get("/", tags=["system"], summary="Get root landing details", operation_id="getRoot")
 async def root():
-    """Return backend status greeting and landing description."""
+    """Return backend status greeting or serve production React index.html."""
+    index_file = os.path.join(static_dir, "dist", "index.html")
+    if os.path.exists(index_file):
+        return FileResponse(index_file)
     return {"message": "AI Tournament Organizer API is running. See /docs for API documentation."}
+
+
+@app.get("/{catchall:path}", tags=["system"], summary="Serve frontend client-side routes")
+async def serve_frontend(catchall: str):
+    """Fallback handler to support HTML5 History mode in React Router."""
+    # Exclude API, Static, and WebSocket paths from being caught by SPA router
+    if catchall.startswith("api") or catchall.startswith("static") or catchall.startswith("ws"):
+        raise HTTPException(status_code=404, detail="Not Found")
+    
+    index_file = os.path.join(static_dir, "dist", "index.html")
+    if os.path.exists(index_file):
+        return FileResponse(index_file)
+    raise HTTPException(status_code=404, detail="Not Found")
 
 
