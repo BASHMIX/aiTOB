@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   api:
     build:
@@ -9,14 +7,14 @@ services:
     ports:
       - "8000:8000"
     env_file:
-      - .env
+      - .env.production
     volumes:
-      # Persist the SQLite database
-      - ./backend/core:/app/backend/core
-      # Persist player avatars and static uploads
-      - ./backend/api/static:/app/backend/api/static
-      # Persist overlay configs per slot
-      - ./backend/api/overlay_configs:/app/backend/api/overlay_configs
+      # Persist the SQLite database using a named volume
+      - db_data:/app/backend/core
+      # Persist player avatars and static uploads using a named volume
+      - static_data:/app/backend/api/static
+      # Persist overlay configs per slot using a named volume
+      - overlay_configs:/app/backend/api/overlay_configs
     restart: always
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
@@ -30,11 +28,26 @@ services:
       target: bot
     container_name: tourney_bot
     env_file:
-      - .env
+      - .env.production
     volumes:
       # Share the same database and avatars as the API
-      - ./backend/core:/app/backend/core
-      - ./backend/api/static:/app/backend/api/static
+      - db_data:/app/backend/core
+      - static_data:/app/backend/api/static
     restart: always
     depends_on:
       - api
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: tourney_tunnel
+    restart: always
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    command: tunnel --no-autoupdate run
+    depends_on:
+      - api
+
+volumes:
+  db_data:
+  static_data:
+  overlay_configs:
