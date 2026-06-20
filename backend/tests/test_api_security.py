@@ -1,11 +1,10 @@
+import asyncio
+import pytest
 from fastapi.testclient import TestClient
 from backend.api.main import app
 from backend.core.database import init_db
-import asyncio
 
 client = TestClient(app)
-import pytest
-from backend.api.main import app
 
 
 @pytest.fixture(autouse=True)
@@ -36,6 +35,18 @@ def test_public_endpoints_no_auth():
     
     resp = client.get("/health")
     assert resp.status_code == 200
+
+def test_path_traversal_asset_delete():
+    # Attempt a path traversal deletion attack using url encoded slashes.
+    # With Starlette/FastAPI, literal "../" paths may resolve to the root, bypassing the route.
+    # Using %2F allows it to hit the `{name}` path parameter.
+    resp = client.delete(
+        "/api/assets/..%2F..%2F..%2Fetc%2Fpasswd",
+        headers={"Authorization": "Bearer admin"}
+    )
+    # The application responds with 404 because the file "passwd" is not found in ASSETS_DIR,
+    # or 401/405 depending on router behavior. But our goal is to ensure it's not a successful 200/500 traverse.
+    assert resp.status_code in [404, 401, 405]
 
 def test_schema_validation_active_match():
     # POST active-matches with missing fields/invalid status must fail validation (422)
