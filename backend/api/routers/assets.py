@@ -29,7 +29,14 @@ async def upload_asset(file: UploadFile = File(...)):
     if not file.filename:
         raise HTTPException(400, "Invalid filename")
 
-    filename = file.filename.replace(" ", "_")
+    filename = os.path.basename(file.filename.replace(" ", "_"))
+
+    # Restrict allowed file extensions
+    allowed_extensions = {'png', 'jpg', 'jpeg', 'webp', 'gif', 'txt', 'css', 'json', 'svg', 'ttf', 'otf'}
+    ext = filename.split('.')[-1].lower() if '.' in filename else ''
+    if ext not in allowed_extensions:
+        raise HTTPException(400, f"Disallowed file extension: {ext}")
+
     file_path = os.path.join(ASSETS_DIR, filename)
 
     try:
@@ -48,6 +55,7 @@ async def upload_asset(file: UploadFile = File(...)):
                summary="Delete an asset")
 async def delete_asset(name: str):
     """Remove an uploaded asset file."""
+    name = os.path.basename(name)
     file_path = os.path.join(ASSETS_DIR, name)
     if os.path.exists(file_path):
         os.remove(file_path)
