@@ -135,8 +135,15 @@ async def api_upload_avatar(id: str, request: Request):
     static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
     os.makedirs(static_dir, exist_ok=True)
 
-    ext = file.filename.split(".")[-1] if file.filename else "png"
-    filename = f"avatar_{id}.{ext}"
+    # Sanitize the input to prevent path traversal
+    sanitized_id = os.path.basename(id)
+    sanitized_filename = os.path.basename(file.filename) if file.filename else "avatar.png"
+
+    ext = sanitized_filename.split(".")[-1].lower() if "." in sanitized_filename else "png"
+    if ext not in ["png", "jpg", "jpeg", "webp", "gif"]:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid file extension")
+
+    filename = f"avatar_{sanitized_id}.{ext}"
     file_path = os.path.join(static_dir, filename)
 
     with open(file_path, "wb") as f:
