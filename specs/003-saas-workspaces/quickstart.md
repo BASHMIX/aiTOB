@@ -203,6 +203,8 @@ The same PostgreSQL run now includes Challonge local workflow (8/8), identity
 and per-event dispatch scoping (20/20), SQL-safety and tournament-removal
 checks (7/7); all are passing against disposable databases. SQLite-only
 migration-fixture tests remain intentionally separate from this runtime proof.
+The post-fix local regression was rerun on 2026-09-10: 444 passed / 21
+intentionally skipped, with no hanging subprocesses or unhandled task errors.
 Action proposals, Organizer Console, manual entitlements, and workspace
 session/role acceptance add 43/43 passing PostgreSQL cases in the latest
 isolated run; no external provider or Discord side effect was enabled.
