@@ -59,6 +59,26 @@ export function AccountSettings() {
       setInviteEmail(''); setNotice('Invitation created. Email delivery is used when configured.');
     } catch { setNotice('Invitation could not be created.'); }
   };
+  const changeMemberRole = async (member: Member, role: string) => {
+    if (role === member.role) return;
+    try {
+      await axios.put(`/api/workspace/members/${encodeURIComponent(member.id)}/role`, { role });
+      setMembers((current) => current.map((item) => item.id === member.id ? { ...item, role } : item));
+      setNotice(`Role updated for ${member.email}.`);
+    } catch (error) {
+      setNotice(axios.isAxiosError(error) ? (error.response?.data?.detail || 'Role update failed.') : 'Role update failed.');
+    }
+  };
+  const disableMember = async (member: Member) => {
+    if (!window.confirm(`Disable ${member.email}'s workspace access?`)) return;
+    try {
+      await axios.delete(`/api/workspace/members/${encodeURIComponent(member.id)}`);
+      setMembers((current) => current.map((item) => item.id === member.id ? { ...item, status: 'disabled' } : item));
+      setNotice(`Workspace access disabled for ${member.email}.`);
+    } catch (error) {
+      setNotice(axios.isAxiosError(error) ? (error.response?.data?.detail || 'Member could not be disabled.') : 'Member could not be disabled.');
+    }
+  };
 
   if (!profile) return <p className="text-sm text-textDim">{notice || 'Loading account…'}</p>;
   return (
@@ -89,7 +109,7 @@ export function AccountSettings() {
       {profile.role === 'owner' && <section className="rounded-xl border border-white/10 bg-cardDark p-5">
         <h2 className="text-base font-bold text-white">Workspace members</h2>
         <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_180px_auto]"><input type="email" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} placeholder="Member email" className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white" /><select value={inviteRole} onChange={(e) => setInviteRole(e.target.value)} className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white"><option value="tournament_organizer">TO</option><option value="stream_operator">Stream operator</option><option value="moderator">Moderator</option><option value="viewer">Viewer</option></select><button type="button" onClick={inviteMember} disabled={!inviteEmail.includes('@')} className="rounded-lg bg-accentYellow px-4 py-2 text-xs font-bold text-black disabled:opacity-40">Invite</button></div>
-        <div className="mt-3 space-y-2">{members.map((member) => <div key={member.id} className="flex items-center justify-between rounded-lg border border-white/5 px-3 py-2 text-xs"><span className="text-white">{member.display_name} · {member.email}</span><span className="text-textDim">{member.role} · {member.status}</span></div>)}</div>
+        <div className="mt-3 space-y-2">{members.map((member) => <div key={member.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-white/5 px-3 py-2 text-xs"><span className="text-white">{member.display_name} · {member.email}</span><div className="flex items-center gap-2"><select aria-label={`Role for ${member.email}`} value={member.role} disabled={member.role === 'owner' || member.status !== 'active'} onChange={(e) => changeMemberRole(member, e.target.value)} className="rounded border border-white/10 bg-black/20 px-2 py-1 text-textDim"><option value="owner">Owner</option><option value="tournament_organizer">TO</option><option value="stream_operator">Stream operator</option><option value="moderator">Moderator</option><option value="viewer">Viewer</option></select><span className="text-textDim">{member.status}</span>{member.role !== 'owner' && member.status === 'active' && <button type="button" onClick={() => disableMember(member)} className="rounded border border-statusRed/40 px-2 py-1 text-statusRed">Disable</button>}</div></div>)}</div>
       </section>}
     </div>
   );
