@@ -25,6 +25,43 @@ def _digest(path: Path) -> str:
     return h.hexdigest()
 
 
+def manifest_path_for(backup: Path) -> Path:
+    """Return the sidecar manifest path used by the backup tool."""
+    return backup.with_suffix(backup.suffix + ".manifest.json")
+
+
+def verify_manifest(backup: Path, manifest: Path | None = None) -> dict[str, object]:
+    """Verify a backup against its redacted sidecar manifest.
+
+    Restores must verify the exact artifact that was reviewed.  This check is
+    deliberately local and does not open a database or contact a provider.
+    """
+    backup = backup.resolve()
+    manifest = (manifest or manifest_path_for(backup)).resolve()
+    if not backup.is_file():
+        raise ValueError("backup does not exist")
+    if not manifest.is_file():
+        raise ValueError("backup manifest does not exist")
+    try:
+        record = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("backup manifest is unreadable") from exc
+    if not isinstance(record, dict):
+        raise ValueError("backup manifest is invalid")
+    if record.get("file") != backup.name:
+        raise ValueError("backup manifest does not identify this file")
+    expected = record.get("sha256")
+    if not isinstance(expected, str) or len(expected) != 64:
+        raise ValueError("backup manifest has no valid digest")
+    actual = _digest(backup)
+    if actual != expected:
+        raise ValueError("backup digest does not match its manifest")
+    expected_size = record.get("size_bytes")
+    if expected_size is not None and expected_size != backup.stat().st_size:
+        raise ValueError("backup size does not match its manifest")
+    return record
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", default=".backups")
@@ -56,13 +93,15 @@ def main() -> int:
         engine = "postgresql"
 
     manifest = {
+        "manifest_version": 1,
         "created_at": datetime.now(UTC).isoformat(),
         "engine": engine,
         "file": target.name,
+        "size_bytes": target.stat().st_size,
         "sha256": _digest(target),
         "secrets_included": False,
     }
-    manifest_path = target.with_suffix(target.suffix + ".manifest.json")
+    manifest_path = manifest_path_for(target)
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"backup": str(target), "manifest": str(manifest_path), "engine": engine}))
     return 0
