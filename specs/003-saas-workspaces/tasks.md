@@ -124,13 +124,12 @@ operational check; a rehearsal is never a cutover.
   Additional PG runtime checks now pass 29/29 for Challonge local workflow,
   SQL-safety, and scoped tournament removal; their fixtures use the shared
   PostgreSQL adapter rather than opening SQLite directly.
-- [~] **T005 / FR-009–011** PostgreSQL acceptance now proves concurrent
+- [x] **T005 / FR-009–011** PostgreSQL acceptance now proves concurrent
   provider-ledger idempotency/lease ownership as well as approval, Outbox and
   station and hub-command claims (`test_postgres_storage.py`: 19 passing PG
   cases). A concurrent PostgreSQL rate-window test also proves one accepted
-  request and seven rejected requests at limit one. Full runtime worker
-  acceptance and restart/retry coverage remain
-  required before this task can close. Latest isolated runs: 19/19 PG storage
+  request and seven rejected requests at limit one. Runtime worker acceptance
+  and restart/retry coverage are now complete. Latest isolated runs: 19/19 PG storage
   cases and 17/17 PG workspace/session cases passed (2026-09-09), including
   competing approval, reservation, Outbox, ledger and bootstrap paths.
   The post-recovery workspace-scope and provider-recovery run passes 28/28 on
@@ -138,8 +137,8 @@ operational check; a rehearsal is never a cutover.
   was corrected to an explicit scoped clause without changing SQLite behavior.
   The follow-up worker/dispatcher run is 21/21 passing with one intentional
   skip on 2026-09-10, including restart-safe claims and kill-switch/tournament
-  rechecks. Full cutover and broader two-organization operational acceptance
-  are still required before closing T005.
+  rechecks. Two-organization runtime cutover evidence remains tracked by
+  T022/T052/T053 and is not a prerequisite to this repository-level closure.
   Proposal/console/entitlement/session role acceptance contributes a further
   43/43 passing PostgreSQL cases (2026-09-10); live external receipt
   reconciliation and cutover remain outside this isolated proof.
