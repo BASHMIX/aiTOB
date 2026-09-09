@@ -31,14 +31,15 @@ operational check; a rehearsal is never a cutover.
   used. Repository-specific Workspace/row locks remain responsible for
   bootstrap, approvals, reservations, claims and ledger operations, avoiding
   serialization of unrelated organizations. Full local regression after the
-  identity-link, overlay-isolation, retention and worker-scope fixes: 384 passed,
-  20 skipped (2026-09-09). The two bot SQLite reads were replaced with
+  identity-link, overlay-isolation, retention and worker-scope fixes: 388 passed,
+  20 skipped (2026-09-09; four worker/role assertions were added after the
+  earlier 384-pass baseline). The two bot SQLite reads were replaced with
   repository calls and are guarded by `test_runtime_bot_paths_do_not_open_sqlite_directly`.
   Player listing and platform-admin checks now use repository functions and are
   guarded by `test_workspace_api_paths_use_repository_boundary`.
   Latest disposable PostgreSQL acceptance (storage plus migration) is 19/19
-  passing on 2026-09-09; the official local backend baseline is 384 passed
-  / 20 intentionally skipped.
+  passing on 2026-09-09; the current official local backend result is 388
+  passed / 20 intentionally skipped.
   ProviderSyncManager now carries the trusted tournament workspace through
   startup, periodic, stale-open and post-score worker paths; unowned fixtures
   retain the legacy one-argument test hook only. Its in-process refresh lock is
