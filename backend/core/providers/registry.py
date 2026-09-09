@@ -62,6 +62,11 @@ async def get_provider_for_tournament(tournament_slug: str, workspace_id: str | 
         if provider_type == "startgg" and account_id:
             from backend.core.providers.startgg import StartGGProvider
             return StartGGProvider(provider_account_id=account_id)
+        if provider_type == "startgg" and workspace_id is not None:
+            # A tenant-owned tournament must never silently fall back to the
+            # historical platform Start.gg credential bucket.  Unscoped
+            # callers remain available for migration/test fixtures only.
+            raise ValueError("Start.gg tournament is not bound to an integration account.")
         return get_provider(provider_type)
     account_id = str((tournament or {}).get("provider_account_id") or "")
     if not account_id:

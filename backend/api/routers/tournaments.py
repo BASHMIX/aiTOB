@@ -185,6 +185,14 @@ async def api_add_tournament(body: AddTournamentRequest, principal: SessionPrinc
     # Capacity is checked before any provider request.  Re-importing the same
     # local projection does not consume another free-plan slot.
     workspace_id = _workspace(principal)
+    if workspace_id is not None and body.provider_account_id:
+        # An integration id is a tenant-owned capability, not a caller-chosen
+        # adapter hint. Prove ownership before resolving or contacting a
+        # provider so a workspace cannot use another workspace's credential.
+        from backend.core.integrations import get_integration_account
+        account = await get_integration_account(body.provider_account_id, workspace_id=workspace_id)
+        if not account or account.get("provider_type") != provider_type:
+            raise HTTPException(status_code=404, detail="Provider integration account not found")
     if workspace_id is not None and not await get_tournament(slug, workspace_id):
         try:
             await require_workspace_capacity(workspace_id, "tournaments")
@@ -233,7 +241,14 @@ async def api_add_tournament(body: AddTournamentRequest, principal: SessionPrinc
                 slug = f"{parts[0]}/{parts[1]}"
         provider_id, provider_subdomain = slug, None
 
-    provider = get_provider(provider_type)
+    # Resolve an account-bound Start.gg adapter before the tournament row is
+    # persisted.  Calling the legacy singleton here would fetch the shared
+    # platform credential even when the request selected a workspace account.
+    if provider_type == "startgg" and body.provider_account_id:
+        from backend.core.providers.startgg import StartGGProvider
+        provider = StartGGProvider(provider_account_id=body.provider_account_id)
+    else:
+        provider = get_provider(provider_type)
     info = await provider.fetch_tournament(f"{provider_id}@{provider_subdomain}" if provider_type == "challonge" and provider_subdomain else provider_id)
     if not info:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Could not find tournament on {provider.provider_name}: {slug}")

@@ -79,6 +79,44 @@ async def test_get_provider_for_tournament():
 
 
 @pytest.mark.asyncio
+async def test_owned_startgg_tournament_requires_integration_account(monkeypatch):
+    """Workspace-owned provider resolution cannot use the global credential."""
+    from backend.core import database
+
+    monkeypatch.setattr(
+        database,
+        "get_tournament",
+        AsyncMock(return_value={
+            "slug": "owned/event",
+            "provider_type": "startgg",
+            "workspace_id": "workspace-a",
+            "provider_account_id": None,
+        }),
+    )
+    with pytest.raises(ValueError, match="not bound to an integration account"):
+        await get_provider_for_tournament("owned/event", "workspace-a")
+
+
+@pytest.mark.asyncio
+async def test_owned_startgg_tournament_uses_selected_integration_account(monkeypatch):
+    from backend.core import database
+
+    monkeypatch.setattr(
+        database,
+        "get_tournament",
+        AsyncMock(return_value={
+            "slug": "owned/event",
+            "provider_type": "startgg",
+            "workspace_id": "workspace-a",
+            "provider_account_id": "sgg-account-a",
+        }),
+    )
+    provider = await get_provider_for_tournament("owned/event", "workspace-a")
+    assert isinstance(provider, StartGGProvider)
+    assert provider._client.provider_account_id == "sgg-account-a"
+
+
+@pytest.mark.asyncio
 async def test_shutdown_providers():
     mock_provider = MockProvider()
     mock_provider.close = AsyncMock()

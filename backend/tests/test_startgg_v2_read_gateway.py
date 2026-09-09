@@ -180,3 +180,28 @@ async def test_v2_tenant_import_requires_explicit_startgg_account(monkeypatch):
             AddTournamentRequest(identifier="tournament/example"),
             SimpleNamespace(workspace_id="workspace-a"),
         )
+
+
+@pytest.mark.asyncio
+async def test_tenant_import_rejects_provider_account_from_another_workspace(monkeypatch):
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+    from backend.api.routers import tournaments as router
+    from backend.api.schemas import AddTournamentRequest
+
+    monkeypatch.setattr(router, "get_tournament", AsyncMock(return_value=None))
+    monkeypatch.setattr(router, "require_workspace_capacity", AsyncMock())
+    monkeypatch.setattr(
+        "backend.core.integrations.get_integration_account",
+        AsyncMock(return_value=None),
+    )
+    provider = AsyncMock()
+    monkeypatch.setattr(router, "get_provider", lambda _provider_type: provider)
+
+    with pytest.raises(HTTPException) as caught:
+        await router.api_add_tournament(
+            AddTournamentRequest(identifier="tournament/example", provider_account_id="foreign-account"),
+            SimpleNamespace(workspace_id="workspace-a"),
+        )
+    assert caught.value.status_code == 404
+    provider.fetch_tournament.assert_not_awaited()
