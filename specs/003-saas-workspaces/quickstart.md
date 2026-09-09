@@ -170,6 +170,13 @@ configured local PostgreSQL DSN with provider probes disabled, initialized the
 schema, started the reconciliation task, and shut down cleanly. No production
 SQLite or external provider data was written by this check.
 
+The populated PostgreSQL rehearsal was backed up and restored to a second
+disposable PostgreSQL database. Re-opening it with the existing service-level
+integration key from the ignored development environment authenticated all five
+encrypted credential rows. The key was not emitted or copied into this
+document; hosted deployments must inject `AITOB_INTEGRATION_MASTER_KEY` and
+`AITOB_AI_SERVICE_MASTER_KEY` separately.
+
 On 2026-09-09 a consistent read-only backup of the current SQLite fixture was
 restored byte-for-byte, then migrated to a disposable PostgreSQL database and
 validated through `app_migrations`. The rehearsal copied 50 tables and the

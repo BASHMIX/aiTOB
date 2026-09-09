@@ -331,8 +331,11 @@ operational check; a rehearsal is never a cutover.
   integration credentials, so it is not the populated runtime cutover source.
   A separate populated SQLite-to-PostgreSQL rehearsal decrypted all five
   encrypted credential rows using their recorded `owner_kind` (including the
-  OAuth application secret), with zero failures. Both disposable targets were
-  dropped after verification; no production rows changed.
+  OAuth application secret), with zero failures. The populated PostgreSQL
+  rehearsal was then backed up and restored to a second disposable target;
+  reopening it with the existing service-level integration key authenticated
+  all five ciphertext rows without emitting the key. Both disposable targets
+  were dropped after verification; no production rows changed.
 
 ## F. Migration, cutover and acceptance
 
