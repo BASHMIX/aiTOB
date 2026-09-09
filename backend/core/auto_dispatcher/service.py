@@ -71,8 +71,12 @@ class AutoDispatcherService:
         # mutable workspace field. Resolve the trusted owner from the match
         # before rechecking; never let a client-supplied slug select another
         # tenant's tournament.
-        selected_match = await database.get_active_match(selected.set_id)
-        workspace_id = (selected_match or {}).get("workspace_id")
+        workspace_id = selected.workspace_id
+        selected_match = await database.get_active_match(selected.set_id, workspace_id)
+        # The workspace carried by the durable decision is authoritative.  Do
+        # not infer tenant ownership from an unscoped set-id lookup.
+        if workspace_id is None:
+            workspace_id = (selected_match or {}).get("workspace_id")
         tournament = await database.get_tournament(selected.tournament_slug, workspace_id)
         if not tournament:
             return
@@ -121,7 +125,9 @@ class AutoDispatcherService:
                     workspace_id=workspace_id,
                 )])
                 return
-            result = await call_match_core(selected.set_id, source="dispatcher")
+            result = await call_match_core(
+                selected.set_id, source="dispatcher", workspace_id=workspace_id,
+            )
             if result.get("error"):
                 await self._record([DispatchDecision(
                     selected.tournament_slug, selected.event_id, selected.set_id, "blocked", "call_rejected",

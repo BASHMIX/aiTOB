@@ -102,6 +102,7 @@ async def create_match_thread(bot, tournament, set_data):
     challonge_dq_disarmed = (tournament or {}).get("provider_type") == "challonge"
     await update_active_match(
         set_id,
+        workspace_id=set_data.get("workspace_id"),
         discord_thread_id=str(thread.id),
         status="called",
         p1_discord=p1_discord,
@@ -162,6 +163,7 @@ async def create_match_thread(bot, tournament, set_data):
     # relying on an inferred "called" state.
     await update_active_match(
         set_id,
+        workspace_id=set_data.get("workspace_id"),
         call_message_id=str(call_message.id),
         thread_id=str(thread.id),
     )
@@ -201,6 +203,7 @@ async def _create_startgg_checkin_thread(
     # auto_dq_disarmed=1: the bot issues no DQ in this mode (start.gg owns the timer).
     await update_active_match(
         set_id,
+        workspace_id=set_data.get("workspace_id"),
         discord_thread_id=str(thread.id),
         status="called",
         p1_discord=p1_discord,
@@ -317,7 +320,11 @@ class ReadyCheckView(discord.ui.View):
                 await interaction.followup.send(str(exc), ephemeral=True)
                 return
         else:
-            await update_active_match(self.set_id, **{f"{player_key}_ready": True})
+            await update_active_match(
+                self.set_id,
+                workspace_id=self.workspace_id,
+                **{f"{player_key}_ready": True},
+            )
         await interaction.followup.send(f"✅ {interaction.user.display_name} is ready!", ephemeral=True)
 
         match = await (get_active_match(self.set_id, self.workspace_id)
@@ -351,7 +358,7 @@ class ReadyCheckView(discord.ui.View):
                 await service.start(self.set_id)
             else:
                 from backend.core.match_state import transition_match
-                await transition_match(self.set_id, "in_progress")
+                await transition_match(self.set_id, "in_progress", workspace_id=self.workspace_id)
 
             # Arm the AI referee: flip the thread's graph state to 'playing' so
             # chat results are now accepted (they were gated during check-in).
@@ -387,7 +394,9 @@ class ReadyCheckView(discord.ui.View):
 
     async def _handle_offstream_match(self):
         password = generate_lobby_password()
-        await update_active_match(self.set_id, lobby_password=password)
+        await update_active_match(
+            self.set_id, workspace_id=self.workspace_id, lobby_password=password,
+        )
         host_discord = self.p1_discord
         opp_discord = self.p2_discord
         try:
@@ -551,4 +560,4 @@ async def run_ready_check_timeout(bot, thread, set_id, timeout_seconds: int = 60
         return
     await thread.send("🛑 **Timeout**: 10 minutes elapsed. Auto-DQ triggered.")
     from backend.core.match_state import auto_dq_match
-    await auto_dq_match(set_id)
+    await auto_dq_match(set_id, workspace_id=workspace_id)

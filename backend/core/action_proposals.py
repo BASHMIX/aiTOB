@@ -105,7 +105,7 @@ async def create_action_proposal(*, tournament_slug: str, action_type: str, reas
 
     match = None
     if match_id:
-        match = await database.get_active_match(match_id)
+        match = await database.get_active_match(match_id, workspace_id)
         if not match or match.get("tournament_slug") != tournament_slug:
             raise ProposalError("Match does not belong to this tournament")
     snapshot = _canonical_snapshot(tournament_slug, match)
@@ -153,16 +153,21 @@ async def reject_action_proposal(proposal_id: str, *, actor: str = DEFAULT_ORGAN
         )
         if cursor.rowcount != 1:
             await db.rollback()
-            return await _proposal_row(proposal_id) or proposal
+            return await _proposal_row(proposal_id, workspace_id) or proposal
         await db.commit()
-    return await _proposal_row(proposal_id) or proposal
+    return await _proposal_row(proposal_id, workspace_id) or proposal
 
 
 async def _fresh_snapshot_for_proposal(db: aiosqlite.Connection, proposal: dict) -> tuple[dict, str]:
     match = None
     if proposal.get("match_id"):
         db.row_factory = aiosqlite.Row
-        row = await (await db.execute("SELECT * FROM active_matches WHERE set_id=?", (proposal["match_id"],))).fetchone()
+        query = "SELECT * FROM active_matches WHERE set_id=?"
+        params = (proposal["match_id"],)
+        if proposal.get("workspace_id") is not None:
+            query += " AND workspace_id=?"
+            params += (proposal["workspace_id"],)
+        row = await (await db.execute(query, params)).fetchone()
         match = dict(row) if row else None
         if not match or match.get("tournament_slug") != proposal["tournament_slug"]:
             raise ProposalError("Match is no longer available in this tournament")
@@ -214,14 +219,19 @@ async def approve_action_proposal(proposal_id: str, *, actor: str = DEFAULT_ORGA
             snapshot, version = await _fresh_snapshot_for_proposal(db, current)
         except ProposalError:
             snapshot, version = {}, "missing"
-        match = snapshot and (await (await db.execute("SELECT * FROM active_matches WHERE set_id=?", (current["match_id"],))).fetchone())
+        match_query = "SELECT * FROM active_matches WHERE set_id=?"
+        match_params = (current["match_id"],)
+        if current.get("workspace_id") is not None:
+            match_query += " AND workspace_id=?"
+            match_params += (current["workspace_id"],)
+        match = snapshot and (await (await db.execute(match_query, match_params)).fetchone())
         if version != current["state_version"] or (current["action_type"] == "call" and not _call_is_eligible(dict(match) if match else None)):
             await db.execute(
                 "UPDATE action_proposals SET approval_status='needs_review', execution_status='blocked', updated_at=CURRENT_TIMESTAMP WHERE id=?",
                 (proposal_id,),
             )
             await db.commit()
-            return await _proposal_row(proposal_id) or current
+            return await _proposal_row(proposal_id, workspace_id) or current
         command = await db.execute(
             "INSERT INTO hub_commands (command_text, source, status, workspace_id) VALUES (?, 'proposal', 'pending', ?) RETURNING id",
             (f"execute_action_proposal {proposal_id}", workspace_id),
@@ -235,17 +245,22 @@ async def approve_action_proposal(proposal_id: str, *, actor: str = DEFAULT_ORGA
         should_notify = True
     if should_notify:
         database._fire_hub_command_listener()
-    return await _proposal_row(proposal_id) or proposal
+    return await _proposal_row(proposal_id, workspace_id) or proposal
 
 
-async def _mark_execution(proposal_id: str, status: str, error: str | None = None) -> dict:
+async def _mark_execution(
+    proposal_id: str, status: str, error: str | None = None,
+    *, workspace_id: str | None = None,
+) -> dict:
     async with aiosqlite.connect(database.DB_PATH) as db:
-        await db.execute(
-            "UPDATE action_proposals SET execution_status=?, execution_error=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-            (status, error, proposal_id),
-        )
+        query = "UPDATE action_proposals SET execution_status=?, execution_error=?, updated_at=CURRENT_TIMESTAMP WHERE id=?"
+        params = (status, error, proposal_id)
+        if workspace_id is not None:
+            query += " AND workspace_id=?"
+            params += (workspace_id,)
+        await db.execute(query, params)
         await db.commit()
-    return await _proposal_row(proposal_id) or {}
+    return await _proposal_row(proposal_id, workspace_id) or {}
 
 
 async def execute_approved_proposal(proposal_id: str, *, workspace_id: str | None = None) -> dict:
@@ -259,25 +274,31 @@ async def execute_approved_proposal(proposal_id: str, *, workspace_id: str | Non
         return proposal
     if proposal["execution_status"] != "queued":
         return proposal
-    await _mark_execution(proposal_id, "executing")
+    await _mark_execution(proposal_id, "executing", workspace_id=workspace_id)
     # Revalidate immediately before the effect path as well as at approval.
-    current = await _proposal_row(proposal_id)
+    current = await _proposal_row(proposal_id, workspace_id)
     if not current:
         raise ProposalError("Proposal not found")
-    match = await database.get_active_match(current["match_id"]) if current.get("match_id") else None
+    match = await database.get_active_match(current["match_id"], workspace_id) if current.get("match_id") else None
     if _version(_canonical_snapshot(current["tournament_slug"], match)) != current["state_version"]:
         async with aiosqlite.connect(database.DB_PATH) as db:
             await db.execute("UPDATE action_proposals SET approval_status='needs_review', execution_status='blocked', updated_at=CURRENT_TIMESTAMP WHERE id=?", (proposal_id,))
             await db.commit()
-        return await _proposal_row(proposal_id) or current
+        return await _proposal_row(proposal_id, workspace_id) or current
     if current["action_type"] == "call":
         if not _call_is_eligible(match):
-            return await _mark_execution(proposal_id, "blocked", "Match is no longer eligible to call")
+            return await _mark_execution(
+                proposal_id, "blocked", "Match is no longer eligible to call", workspace_id=workspace_id,
+            )
         from backend.core.match_state import call_match_core
-        result = await call_match_core(str(current["match_id"]), source="proposal")
+        result = await call_match_core(
+            str(current["match_id"]), source="proposal", workspace_id=workspace_id,
+        )
         if result.get("error"):
-            return await _mark_execution(proposal_id, "failed", str(result["error"]))
-        return await _mark_execution(proposal_id, "workflow_started")
+            return await _mark_execution(
+                proposal_id, "failed", str(result["error"]), workspace_id=workspace_id,
+            )
+        return await _mark_execution(proposal_id, "workflow_started", workspace_id=workspace_id)
 
     payload = json.loads(current["payload_json"] or "{}")
     event_id = str(uuid4())
@@ -286,10 +307,10 @@ async def execute_approved_proposal(proposal_id: str, *, workspace_id: str | Non
         db.row_factory = aiosqlite.Row
         await db.execute("BEGIN IMMEDIATE")
         await db.execute(
-            """INSERT INTO workflow_outbox (event_id, match_id, event_type, payload_json, deduplication_key, status, attempts)
-               VALUES (?, ?, 'discord_announcement', ?, ?, 'pending', 0)
+            """INSERT INTO workflow_outbox (event_id, workspace_id, match_id, event_type, payload_json, deduplication_key, status, attempts)
+               VALUES (?, ?, ?, 'discord_announcement', ?, ?, 'pending', 0)
                ON CONFLICT(deduplication_key) DO NOTHING""",
-            (event_id, current.get("match_id") or f"proposal:{proposal_id}", json.dumps({"tournament_slug": current["tournament_slug"], "text": payload.get("text", "")}), deduplication_key),
+            (event_id, workspace_id, current.get("match_id") or f"proposal:{proposal_id}", json.dumps({"tournament_slug": current["tournament_slug"], "text": payload.get("text", "")}), deduplication_key),
         )
         row = await (await db.execute("SELECT event_id FROM workflow_outbox WHERE deduplication_key=?", (deduplication_key,))).fetchone()
         await db.execute(
@@ -297,4 +318,4 @@ async def execute_approved_proposal(proposal_id: str, *, workspace_id: str | Non
             (row[0], proposal_id),
         )
         await db.commit()
-    return await _proposal_row(proposal_id) or current
+    return await _proposal_row(proposal_id, workspace_id) or current

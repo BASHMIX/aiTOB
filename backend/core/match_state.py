@@ -121,7 +121,9 @@ async def _realize_in_progress_overlays(match: dict, update_kwargs: dict) -> Non
 def generate_lobby_password() -> str:
     return str(random.randint(1000, 9999))
 
-async def call_match_core(set_id: str, *, source: str = "manual") -> dict:
+async def call_match_core(
+    set_id: str, *, source: str = "manual", workspace_id: str | None = None,
+) -> dict:
     """The single 'Call Match' path shared by the Hub button AND the AI agent.
 
     Moves the set not_started → called THROUGH the state machine (validated by
@@ -132,7 +134,7 @@ async def call_match_core(set_id: str, *, source: str = "manual") -> dict:
     Returns {"ok": True, set_id, p1_name, p2_name} or {"error": "..."}.
     """
     from backend.core.database import get_active_match, add_hub_command, add_bot_feed as _feed
-    match = await get_active_match(set_id)
+    match = await get_active_match(set_id, workspace_id)
     if not match:
         return {"error": "Match not found"}
     from backend.core.database import get_tournament
@@ -140,12 +142,14 @@ async def call_match_core(set_id: str, *, source: str = "manual") -> dict:
     if tournament and tournament.get("provider_type") == "challonge" and get_provider_feature_flags().challonge_local_workflow_enabled:
         from backend.core.match_commands import MatchCommandError, MatchCommandService
         try:
-            result = await MatchCommandService().call(set_id)
+            service = (MatchCommandService(workspace_id=workspace_id)
+                       if workspace_id is not None else MatchCommandService())
+            result = await service.call(set_id)
         except MatchCommandError as exc:
             return {"error": str(exc)}
         local = result["match"]
         return {"ok": True, "set_id": set_id, "p1_name": local.get("p1_name"), "p2_name": local.get("p2_name"), "outcome": "local_only"}
-    result = await transition_match(set_id, "called")
+    result = await transition_match(set_id, "called", workspace_id=workspace_id)
     if result.get("error"):
         return result
     await add_hub_command(f"call_match {set_id}", source=source, workspace_id=match.get("workspace_id"))
@@ -157,8 +161,10 @@ async def call_match_core(set_id: str, *, source: str = "manual") -> dict:
         "p2_name": match.get("p2_name"),
     }
 
-async def transition_match(set_id: str, to_status: str, **kwargs) -> dict:
-    match = await get_active_match(set_id)
+async def transition_match(
+    set_id: str, to_status: str, *, workspace_id: str | None = None, **kwargs,
+) -> dict:
+    match = await get_active_match(set_id, workspace_id)
     if not match:
         return {"error": "Match not found"}
 
@@ -170,7 +176,8 @@ async def transition_match(set_id: str, to_status: str, **kwargs) -> dict:
     tournament = await get_tournament(match.get("tournament_slug") or "", match.get("workspace_id"))
     if tournament and tournament.get("provider_type") == "challonge" and get_provider_feature_flags().challonge_local_workflow_enabled:
         from backend.core.match_commands import MatchCommandError, MatchCommandService
-        service = MatchCommandService()
+        service = (MatchCommandService(workspace_id=workspace_id)
+                   if workspace_id is not None else MatchCommandService())
         try:
             if to_status == "called":
                 return {"ok": True, "status": "called", **await service.call(set_id)}
@@ -229,12 +236,14 @@ async def transition_match(set_id: str, to_status: str, **kwargs) -> dict:
         update_kwargs["dq_player"] = None
         update_kwargs["lobby_password"] = None
 
-    await upsert_active_match(set_id, workspace_id=match.get("workspace_id"), **update_kwargs)
+    await upsert_active_match(
+        set_id, workspace_id=match.get("workspace_id") or workspace_id, **update_kwargs,
+    )
     await hub_mgr.broadcast({"type": "match_update", "_workspace_id": match.get("workspace_id")})
     return {"ok": True, "status": to_status}
 
-async def auto_dq_match(set_id: str) -> dict:
-    match = await get_active_match(set_id)
+async def auto_dq_match(set_id: str, workspace_id: str | None = None) -> dict:
+    match = await get_active_match(set_id, workspace_id)
     if not match:
         return {"error": "Match not found"}
 
@@ -268,7 +277,10 @@ async def auto_dq_match(set_id: str) -> dict:
             f"auto_dq_match skipped for {set_id}: start.gg already shows COMPLETED. Syncing local state instead.",
             "info"
         )
-        await update_active_match(set_id, status="complete", dq_player=None, station_id=None)
+        await update_active_match(
+            set_id, workspace_id=match.get("workspace_id") or workspace_id,
+            status="complete", dq_player=None, station_id=None,
+        )
         await hub_mgr.broadcast({"type": "match_update", "_workspace_id": match.get("workspace_id")})
         return {"ok": True, "synced_from_provider": True}
 
@@ -318,7 +330,10 @@ async def auto_dq_match(set_id: str) -> dict:
             # Do not flip local status if provider rejected — keeps states aligned.
             return {"error": True, "dq_player": dq_eid, "message": str(e)}
 
-    await update_active_match(set_id, status="complete", dq_player=dq_eid, station_id=None)
+    await update_active_match(
+        set_id, workspace_id=match.get("workspace_id") or workspace_id,
+        status="complete", dq_player=dq_eid, station_id=None,
+    )
     await hub_mgr.broadcast({"type": "match_update", "_workspace_id": match.get("workspace_id")})
     return {"ok": True, "dq_player": dq_eid}
 

@@ -2,6 +2,7 @@ from backend.core.storage import dbapi as aiosqlite, is_postgres, postgres_ddl
 import datetime
 import os
 import json
+import re
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -36,16 +37,62 @@ _AUDIT_SECRET_KEYS = frozenset({
 })
 
 
+def _is_audit_secret_key(key: object) -> bool:
+    """Recognize common credential aliases without treating ordinary IDs as secrets.
+
+    Integrations use inconsistent casing and separators (``clientSecret``,
+    ``X-Api-Key``, ``webhook_signing_key``).  Audit redaction is deliberately
+    more conservative than API response projection: a value with a
+    credential-shaped key is not useful operational evidence and must never
+    be retained.  We avoid a blanket ``*key`` rule so safe identifiers such as
+    ``match_key`` and ``provider_account_id`` remain traceable.
+    """
+    raw = str(key).strip().lower()
+    normalized = "".join(char for char in raw if char.isalnum())
+    if raw in _AUDIT_SECRET_KEYS or normalized in {
+        "accesstoken", "refreshtoken", "password", "secret", "apikey",
+        "bottoken", "authorization", "cookie", "content", "headers",
+        "header", "clientsecret", "webhooksigningkey", "privatekey",
+        "encryptionkey", "secretkey", "credentials", "credential",
+    }:
+        return True
+    return normalized.endswith((
+        "token", "password", "secret", "apikey", "authorization",
+        "cookie", "credential", "credentials", "signingkey", "privatekey",
+    ))
+
+
+def _redact_audit_string(value: str) -> str:
+    """Remove common credential fragments embedded in exception text.
+
+    Keys are the primary audit boundary, but HTTP clients and database drivers
+    sometimes include an Authorization header or a query-style credential in
+    a single error string.  Keep the diagnostic text while removing the
+    credential portion before it becomes durable audit data.
+    """
+    value = re.sub(
+        r"(?i)\bbearer\s+[^\s,;]+",
+        "Bearer [REDACTED]",
+        value,
+    )
+    value = re.sub(
+        r"(?i)\b(token|password|secret|api[_-]?key)\s*=\s*[^&\s,;]+",
+        lambda match: f"{match.group(1)}=[REDACTED]",
+        value,
+    )
+    return value[:1000]
+
+
 def _redact_audit(value):
     if isinstance(value, dict):
         return {
-            str(key): ("[REDACTED]" if str(key).lower() in _AUDIT_SECRET_KEYS else _redact_audit(item))
+            str(key): ("[REDACTED]" if _is_audit_secret_key(key) else _redact_audit(item))
             for key, item in value.items()
         }
     if isinstance(value, (list, tuple)):
         return [_redact_audit(item) for item in value]
     if isinstance(value, str):
-        return value[:1000]
+        return _redact_audit_string(value)
     return value
 
 
@@ -1472,17 +1519,27 @@ async def remove_station_overlay(station_id: str, overlay_name: str, workspace_i
         await db.commit()
 
 # ── Active Matches ─────────────────────────────────────────────────────────
-async def assign_station_to_active_match(set_id: str, station_id: str) -> bool:
-    """Fast targeted UPDATE of station_id for an existing active match."""
+async def assign_station_to_active_match(
+    set_id: str, station_id: str, workspace_id: str | None = None,
+) -> bool:
+    """Fast targeted station update, scoped when a trusted workspace is known.
+
+    ``set_id`` is still a legacy physical key on upgraded installations.  New
+    runtime callers must pass their trusted workspace so this helper remains
+    safe when the schema is upgraded to allow the same provider set in more
+    than one tenant.  Omitting the scope is retained only for historical local
+    maintenance callers.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
+        scope = " AND workspace_id = ?" if workspace_id is not None else ""
         async with db.execute(
-            "UPDATE active_matches SET station_id = ? WHERE set_id = ?",
-            (station_id, set_id)
+            "UPDATE active_matches SET station_id = ? WHERE set_id = ?" + scope,
+            (station_id, set_id) + ((workspace_id,) if workspace_id is not None else ())
         ) as cursor:
             await db.commit()
             return cursor.rowcount > 0
 
-async def get_used_station_ids(exclude_set_id: str) -> set:
+async def get_used_station_ids(exclude_set_id: str, workspace_id: str | None = None) -> set:
     """Station IDs currently occupied by other active (not-completed) matches."""
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
@@ -1492,8 +1549,8 @@ async def get_used_station_ids(exclude_set_id: str) -> set:
             WHERE station_id IS NOT NULL
               AND status IN ('not_started', 'called', 'in_progress')
               AND set_id != ?
-            """,
-            (exclude_set_id,)
+            """ + (" AND workspace_id = ?" if workspace_id is not None else ""),
+            (exclude_set_id,) + ((workspace_id,) if workspace_id is not None else ())
         ) as cursor:
             rows = await cursor.fetchall()
             return {row[0] for row in rows}
@@ -1991,9 +2048,16 @@ async def delete_active_match(set_id: str, workspace_id: str | None = None):
         await db.commit()
 
 
-async def update_active_match(match_id: str, **kwargs):
+async def update_active_match(match_id: str, *, workspace_id: str | None = None, **kwargs) -> bool:
+    """Update one active match, scoped to a trusted workspace when supplied.
+
+    The legacy no-workspace call is intentionally preserved for migration tools
+    and existing unowned rows.  Authenticated API, bot, and worker paths must
+    pass their resolved workspace, so knowing another tenant's provider set id
+    cannot mutate its local projection.
+    """
     if not kwargs:
-        return
+        return False
 
     # Check if status is being updated and validate it
     if "status" in kwargs:
@@ -2001,7 +2065,9 @@ async def update_active_match(match_id: str, **kwargs):
         try:
             async with aiosqlite.connect(DB_PATH) as db:
                 db.row_factory = aiosqlite.Row
-                async with db.execute("SELECT status FROM active_matches WHERE set_id = ?", (match_id,)) as c:
+                scope = " AND workspace_id = ?" if workspace_id is not None else ""
+                params = (match_id,) + ((workspace_id,) if workspace_id is not None else ())
+                async with db.execute("SELECT status FROM active_matches WHERE set_id = ?" + scope, params) as c:
                     row = await c.fetchone()
                     if row:
                         old_status = row["status"]
@@ -2010,7 +2076,7 @@ async def update_active_match(match_id: str, **kwargs):
                             if not validate_transition(old_status, new_status):
                                 await add_bot_feed(
                                     f"⚠️ Non-standard transition detected: {old_status} ➔ {new_status} for match {match_id}",
-                                    "warn"
+                                    "warn", workspace_id=workspace_id,
                                 )
         except Exception as e:
             print(f"Error validating status transition: {e}")
@@ -2023,14 +2089,19 @@ async def update_active_match(match_id: str, **kwargs):
 
         filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_cols}
         if not filtered_kwargs:
-            return
+            return False
 
         keys = ", ".join([f"{k} = ?" for k in filtered_kwargs.keys()])
         values = list(filtered_kwargs.values())
         values.append(match_id)
+        scope = ""
+        if workspace_id is not None:
+            scope = " AND workspace_id = ?"
+            values.append(workspace_id)
 
-        await db.execute(f"UPDATE active_matches SET {keys} WHERE set_id = ?", values)
+        cursor = await db.execute(f"UPDATE active_matches SET {keys} WHERE set_id = ?{scope}", values)
         await db.commit()
+        return cursor.rowcount == 1
 
 async def get_player_override(entrant_id: str, workspace_id: str | None = None):
     async with aiosqlite.connect(DB_PATH) as db:

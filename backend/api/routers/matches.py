@@ -202,10 +202,10 @@ async def api_activate_match(set_id: str, principal: SessionPrincipal = Depends(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Provider activation failed: {provider_result.error_message}"
             )
-        await transition_match(set_id, "in_progress")
+        await transition_match(set_id, "in_progress", workspace_id=_ws(principal))
         return MessageResponse(message="Match activated (in progress)", ok=True)
     else:
-        await transition_match(set_id, "not_started")
+        await transition_match(set_id, "not_started", workspace_id=_ws(principal))
         return MessageResponse(message="Match activated", ok=True)
 
 
@@ -233,7 +233,7 @@ async def api_force_in_progress(set_id: str, principal: SessionPrincipal = Depen
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only a called match can be forced to in-progress."
         )
-    result = await transition_match(set_id, "in_progress")
+    result = await transition_match(set_id, "in_progress", workspace_id=_ws(principal))
     if result.get("error"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result["error"])
     await add_bot_feed(f"⏩ Match forced to in-progress: {m.get('p1_name')} vs {m.get('p2_name')}", "info")
@@ -266,7 +266,7 @@ async def api_call_match(set_id: str, principal: SessionPrincipal = Depends(requ
         await hub_mgr.broadcast({"type": "match_update", "_workspace_id": _ws(principal)})
         return MessageResponse(message="Players called locally; Discord delivery is queued.", ok=True)
     from backend.core.match_state import call_match_core
-    result = await call_match_core(set_id)
+    result = await call_match_core(set_id, workspace_id=_ws(principal))
     if result.get("error"):
         code = status.HTTP_404_NOT_FOUND if result["error"] == "Match not found" else status.HTTP_400_BAD_REQUEST
         raise HTTPException(status_code=code, detail=result["error"])
@@ -294,10 +294,10 @@ async def api_player_ready(set_id: str, body: PlayerReadyRequest, principal: Ses
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         await hub_mgr.broadcast({"type": "match_update", "_workspace_id": _ws(principal)})
         return MessageResponse(message="Ready recorded locally.", ok=True)
-    await upsert_active_match(set_id, **{f"{player}_ready": True})
+    await upsert_active_match(set_id, workspace_id=_ws(principal), **{f"{player}_ready": True})
     match = await get_active_match(set_id, _ws(principal))
     if match.get("p1_ready") and match.get("p2_ready"):
-        await transition_match(set_id, "in_progress")
+        await transition_match(set_id, "in_progress", workspace_id=_ws(principal))
     return MessageResponse(message="Ready updated", ok=True)
 
 
@@ -315,7 +315,7 @@ async def api_toggle_stream(set_id: str, body: ToggleStreamRequest, principal: S
     if not m:
          raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found")
     tournament_slug = m.get("tournament_slug") or ""
-    await upsert_active_match(set_id, is_stream_match=body.is_stream_match)
+    await upsert_active_match(set_id, workspace_id=_ws(principal), is_stream_match=body.is_stream_match)
     if body.is_stream_match:
         # Station binding is the `on_stream` overlay, realized at the
         # called → in_progress transition (match_state.transition_match). So:
@@ -329,7 +329,7 @@ async def api_toggle_stream(set_id: str, body: ToggleStreamRequest, principal: S
         elif m.get("status") == "in_progress":
             station = await get_available_stream_station(m.get("event_id") or "", _ws(principal))
             if station:
-                await upsert_active_match(set_id, station_id=station["id"])
+                await upsert_active_match(set_id, workspace_id=_ws(principal), station_id=station["id"])
                 await _sync_provider_stream(set_id, station["id"], tournament_slug, _ws(principal))
             else:
                 await add_bot_feed(
@@ -343,7 +343,7 @@ async def api_toggle_stream(set_id: str, body: ToggleStreamRequest, principal: S
         await _remove_provider_stream(set_id, tournament_slug, _ws(principal))
         await remove_planned_stream(set_id)
         if m.get("station_id"):
-            await upsert_active_match(set_id, station_id=None)
+            await upsert_active_match(set_id, workspace_id=_ws(principal), station_id=None)
     await hub_mgr.broadcast({"type": "match_update", "_workspace_id": _ws(principal)})
     return MessageResponse(message="Stream toggle updated", ok=body.is_stream_match)
 
@@ -401,7 +401,7 @@ async def api_send_match(set_id: str, principal: SessionPrincipal = Depends(requ
         provider=provider
     )
     if result.success:
-        await transition_match(set_id, "complete")
+        await transition_match(set_id, "complete", workspace_id=_ws(principal))
         await hub_mgr.broadcast({"type": "match_update", "_workspace_id": _ws(principal)})
         return MessageResponse(message="Score sent successfully.", ok=True)
     else:
@@ -432,7 +432,7 @@ async def api_reset_match(set_id: str, principal: SessionPrincipal = Depends(req
         print(f"Provider reset failed: {e}")
     # Also drop from the stream queue — a reset set shouldn't sit in "On Stream".
     await _remove_provider_stream(set_id, tournament_slug, _ws(principal))
-    await transition_match(set_id, "not_started")
+    await transition_match(set_id, "not_started", workspace_id=_ws(principal))
     return MessageResponse(message="Match reset locally and on provider", ok=True)
 
 
@@ -489,7 +489,7 @@ async def api_dq_match(set_id: str, body: DQRequest, principal: SessionPrincipal
     except Exception as e:
         print(f"Provider mark DQ failed: {e}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Provider update failed.")
-    await transition_match(set_id, "complete", dq_player=dq_eid)
+    await transition_match(set_id, "complete", workspace_id=_ws(principal), dq_player=dq_eid)
     return MessageResponse(message="DQ marked", ok=True)
 
 
@@ -503,7 +503,7 @@ async def api_dq_match(set_id: str, body: DQRequest, principal: SessionPrincipal
 )
 async def api_delete_active_match(set_id: str, principal: SessionPrincipal = Depends(require_permission("match.operate"))):
     """Delete a match from local active tracking without affecting its state on Start.gg. Requires admin password auth."""
-    await delete_active_match(set_id)
+    await delete_active_match(set_id, workspace_id=_ws(principal))
     await hub_mgr.broadcast({"type": "match_update", "_workspace_id": _ws(principal)})
     return MessageResponse(message="Deleted", ok=True)
 
@@ -546,7 +546,7 @@ async def api_patch_active_match(set_id: str, body: PatchActiveMatchRequest, pri
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Station is already occupied by match: {occupying.get('p1_name')} vs {occupying.get('p2_name')}"
             )
-    await upsert_active_match(set_id, **d)
+    await upsert_active_match(set_id, workspace_id=_ws(principal), **d)
 
     # ── Strict stream-flag ↔ station coupling (only when station was touched) ──
     if station_provided:
@@ -560,7 +560,7 @@ async def api_patch_active_match(set_id: str, body: PatchActiveMatchRequest, pri
             # Routed through the state machine rather than a raw status write so
             # local matches with no start.gg set still work.
             if m and m.get("status") == "called":
-                await transition_match(set_id, "in_progress")
+                await transition_match(set_id, "in_progress", workspace_id=_ws(principal))
                 m = await get_active_match(set_id, _ws(principal))
 
             station = await get_station(station_id, _ws(principal))
@@ -569,7 +569,7 @@ async def api_patch_active_match(set_id: str, body: PatchActiveMatchRequest, pri
                 # mirror it onto the planned-stream wishlist (keeps the Hub's Play
                 # button coupled + toggle-off-able), and push to the provider queue.
                 if not (m or {}).get("is_stream_match"):
-                    await upsert_active_match(set_id, is_stream_match=True)
+                    await upsert_active_match(set_id, workspace_id=_ws(principal), is_stream_match=True)
                     await add_planned_stream(set_id, slug)
                 await _sync_provider_stream(set_id, station_id, slug, _ws(principal))
             else:
@@ -577,7 +577,7 @@ async def api_patch_active_match(set_id: str, body: PatchActiveMatchRequest, pri
                 # the TO is pushing it off-stream to save time — strictly un-flag it
                 # and pull it from the provider queue / wishlist.
                 if (m or {}).get("is_stream_match"):
-                    await upsert_active_match(set_id, is_stream_match=False)
+                    await upsert_active_match(set_id, workspace_id=_ws(principal), is_stream_match=False)
                     await remove_planned_stream(set_id)
                     await _remove_provider_stream(set_id, slug, _ws(principal))
         # else: station explicitly cleared (Unassign). Decision 2: keep the stream
@@ -675,7 +675,7 @@ async def api_resolve_conflict(id: int, body: ResolveConflictRequest, principal:
             )
 
     # Persist the decided score locally first so the overlay/records reflect it.
-    await upsert_active_match(set_id, p1_score=p1_score, p2_score=p2_score)
+    await upsert_active_match(set_id, workspace_id=_ws(principal), p1_score=p1_score, p2_score=p2_score)
 
     # Push to the provider. A missing winner entrant means a local-only match —
     # skip the provider call but still complete locally.
@@ -689,7 +689,7 @@ async def api_resolve_conflict(id: int, body: ResolveConflictRequest, principal:
             error_msg = result.error_message or "Unknown provider error."
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Provider update error: {error_msg}")
 
-    await transition_match(set_id, "complete")
+    await transition_match(set_id, "complete", workspace_id=_ws(principal))
     await save_match_result(
         set_id=set_id, tournament_slug=m.get("tournament_slug") or "",
         stream_slot=m.get("station_id") or "",

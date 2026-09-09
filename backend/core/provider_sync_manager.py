@@ -142,6 +142,22 @@ class ProviderSyncManager:
                 raise ValueError("Tournament not found")
             try:
                 trusted_workspace_id = tournament.get("workspace_id") or workspace_id
+                flags = get_provider_feature_flags()
+                startgg_v2_requested = (
+                    tournament.get("provider_type", "startgg") == "startgg"
+                    and flags.provider_v2_contracts_enabled
+                    and flags.provider_coordinator_enabled
+                )
+                startgg_account_id = str(tournament.get("provider_account_id") or "")
+                # Account-bound V2 reads may never use the historical shared
+                # ``default`` bucket.  The unowned fixture compatibility path
+                # remains intentionally available until ownership backfill;
+                # once a trusted workspace context exists, fail before a
+                # provider/client can be constructed or contacted.
+                if startgg_v2_requested and trusted_workspace_id is not None and not startgg_account_id:
+                    raise ValueError(
+                        "Start.gg V2 synchronization requires a tournament-bound integration account."
+                    )
                 # Preserve the legacy one-argument adapter hook for unscoped
                 # fixtures while every owned tournament carries its trusted
                 # workspace into provider resolution.
@@ -152,7 +168,6 @@ class ProviderSyncManager:
                         tournament_slug,
                         trusted_workspace_id,
                     )
-                flags = get_provider_feature_flags()
                 if tournament.get("provider_type") == "challonge":
                     if not flags.challonge_read_enabled:
                         raise ValueError("Challonge read support is not enabled for this Hub.")
@@ -182,14 +197,17 @@ class ProviderSyncManager:
                     return {**applied, "reason": reason}
                 use_v2_reads = (
                     tournament.get("provider_type", "startgg") == "startgg"
-                    and flags.provider_v2_contracts_enabled
-                    and flags.provider_coordinator_enabled
+                    and startgg_v2_requested
                     and isinstance(provider, ITournamentProviderV2)
                 )
                 if use_v2_reads:
                     request = ProviderSnapshotRequestV2(
                         provider_type="startgg",
-                        provider_account_id="default",
+                        # Legacy unowned fixtures preserve the old V2 contract
+                        # value only while their migration is incomplete.  An
+                        # owned tournament is rejected above instead of falling
+                        # through to this value.
+                        provider_account_id=startgg_account_id or "default",
                         tournament_id=provider_reference(tournament),
                         scope=SnapshotScope.ACTIVE_MATCHES,
                         options={
