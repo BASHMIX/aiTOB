@@ -140,6 +140,9 @@ operational check; a rehearsal is never a cutover.
   skip on 2026-09-10, including restart-safe claims and kill-switch/tournament
   rechecks. Full cutover and broader two-organization operational acceptance
   are still required before closing T005.
+  Proposal/console/entitlement/session role acceptance contributes a further
+  43/43 passing PostgreSQL cases (2026-09-10); live external receipt
+  reconciliation and cutover remain outside this isolated proof.
 - [~] **T006 / FR-011** `WorkflowOutboxWorker` now marks an explicitly
   ambiguous external outcome `needs_review` and does not retry it; PG acceptance
   also proves cancellation after delivery and before completion persistence
