@@ -148,10 +148,32 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 async def general_exception_handler(request: Request, exc: Exception):
     # Do not reflect provider responses, credentials, or local paths to a
     # browser.  Operators correlate the redacted server event by request path.
-    logger.error("Unhandled API exception on %s (%s)", request.url.path, type(exc).__name__)
+    # Error telemetry is best effort and itself cannot change the response.
+    # Accept a correlation id only when it is a UUID.  Never echo arbitrary
+    # header material back to a client or into logs as a trace identifier.
+    candidate_trace_id = request.headers.get("x-request-id", "").strip().lower()
+    trace_id = (
+        candidate_trace_id
+        if re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", candidate_trace_id)
+        else str(__import__("uuid").uuid4())
+    )
+    logger.error("Unhandled API exception on %s (%s) trace=%s", request.url.path, type(exc).__name__, trace_id)
+    try:
+        from backend.core.database import record_error_event
+        await record_error_event(
+            method=request.method,
+            path=request.url.path,
+            exception_type=type(exc).__name__,
+            trace_id=trace_id,
+        )
+    except Exception:
+        # The original exception must remain the only externally visible
+        # failure when telemetry storage is unavailable.
+        pass
     return JSONResponse(
         status_code=500,
-        content={"error": True, "message": "Internal Server Error"}
+        headers={"x-request-id": trace_id},
+        content={"error": True, "message": "Internal Server Error", "trace_id": trace_id}
     )
 
 # Routers — prefixes must match what the frontend calls

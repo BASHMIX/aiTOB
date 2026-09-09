@@ -144,6 +144,23 @@ TABLE_SCHEMAS = [
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
     ''',
+    # Redacted server-side error telemetry.  This is deliberately separate
+    # from the audit trail: it contains no request body, provider response, or
+    # credential material, and may be retained/queried by operators without
+    # exposing user activity details to the browser.
+    '''
+    CREATE TABLE IF NOT EXISTS error_events (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT,
+        trace_id TEXT,
+        method TEXT NOT NULL,
+        path TEXT NOT NULL,
+        exception_type TEXT NOT NULL,
+        detail_json TEXT NOT NULL DEFAULT '{}',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(workspace_id) REFERENCES workspaces(id)
+    )
+    ''',
     # Organizer Assistant configuration is service-scoped, not tied to the
     # Discord bot or a tournament provider.  The secret lives in its own
     # authenticated-encryption store; this table is always safe to project to
@@ -752,6 +769,7 @@ INDEXES = [
     ,"CREATE INDEX IF NOT EXISTS idx_user_sessions_lookup ON user_sessions(token_hash, expires_at)"
     ,"CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id, revoked_at)"
     ,"CREATE INDEX IF NOT EXISTS idx_auth_rate_limits_window ON auth_rate_limits(window_started_at)"
+    ,"CREATE INDEX IF NOT EXISTS idx_error_events_created ON error_events(created_at)"
     ,"CREATE UNIQUE INDEX IF NOT EXISTS uq_stations_workspace_public_id ON stations(workspace_id, public_id)"
     ,"CREATE INDEX IF NOT EXISTS idx_overlay_access_station ON overlay_access_tokens(workspace_id, station_id, revoked_at)"
 ]

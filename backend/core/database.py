@@ -118,6 +118,47 @@ async def record_audit_event(
     return event_id
 
 
+async def record_error_event(
+    *,
+    method: str,
+    path: str,
+    exception_type: str,
+    workspace_id: str | None = None,
+    trace_id: str | None = None,
+    detail: dict | None = None,
+) -> str | None:
+    """Persist minimal, redacted server error telemetry.
+
+    Error reporting must never turn an exception path into a second failure or
+    a secret sink.  Only a bounded exception class, request method/path, trace
+    id and recursively redacted operator metadata are retained.  Callers may
+    safely use this from an exception handler; a database outage is swallowed
+    and leaves the original HTTP failure unchanged.
+    """
+    event_id = str(uuid.uuid4())
+    safe_detail = json.dumps(_redact_audit(detail or {}), separators=(",", ":"))
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                """INSERT INTO error_events
+                   (id, workspace_id, trace_id, method, path, exception_type, detail_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    event_id,
+                    workspace_id,
+                    trace_id,
+                    str(method or "UNKNOWN")[:16],
+                    str(path or "")[:512],
+                    str(exception_type or "Exception")[:160],
+                    safe_detail[:4000],
+                ),
+            )
+            await db.commit()
+        return event_id
+    except Exception:
+        return None
+
+
 async def init_db():
     if os.getenv("AITOB_TESTING") == "1":
         project_root = Path(__file__).resolve().parents[2]
