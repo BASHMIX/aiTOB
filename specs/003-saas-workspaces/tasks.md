@@ -359,6 +359,17 @@ operational check; a rehearsal is never a cutover.
   `snapshot_verified` (score), so no provider mutation is eligible for replay.
   These rows are a cutover reconciliation gate; they were not executed,
   rewritten, or deleted.
+  The combined regression was then rerun with `AITOB_PG_TEST_URL` pointing at
+  the local PostgreSQL admin DSN (tests create/drop isolated databases) while
+  ordinary tests retained their explicit temporary SQLite paths: 453 passed,
+  1 skipped (2026-09-09). The earlier hang was reproduced as an inherited
+  `AITOB_DISABLE_BACKGROUND_WORKERS` pause and fixed by making the lifecycle
+  test remove that process setting; three PostgreSQL bootstrap failures were
+  likewise traced to test fixtures mutating `os.environ` directly and fixed with
+  pytest-managed environment restoration. No runtime data was changed.
+  The one skip is the disabled legacy AI Referee accuracy benchmark
+  (`test_referee_accuracy_benchmark`), intentionally closed until Result Claims;
+  it is not evidence of provider or workspace readiness.
 
 ## F. Migration, cutover and acceptance
 

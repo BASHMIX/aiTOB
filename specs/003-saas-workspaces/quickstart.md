@@ -90,6 +90,18 @@ awaits stopped tasks, and the explicit test-only SQLite connector drains opening
 and closing work on cancellation. The focused group then passed all 17 tests.
 The full post-fix rerun completed at 433 passed / 21 skipped (2026-09-09).
 
+The PostgreSQL-enabled full regression uses the same `.venv` interpreter with
+`AITOB_PG_TEST_URL` set to the local PostgreSQL admin DSN; each PostgreSQL test
+creates and drops its own disposable database, while ordinary tests keep their
+temporary SQLite fixture. It completed at 453 passed / 1 skipped (2026-09-09).
+The single skip is `test_referee_accuracy_benchmark`, the intentionally disabled
+legacy AI Referee inference benchmark pending Result Claims (it is not an
+external-provider acceptance result). A previous
+10-minute hang was caused by inheriting `AITOB_DISABLE_BACKGROUND_WORKERS` into
+the lifecycle test; the test now clears that setting. Three PostgreSQL auth
+failures were caused by fixtures writing bootstrap variables directly into the
+process environment; those fixtures now use pytest-managed restoration.
+
 The official local backend command is:
 
 ```powershell
@@ -192,6 +204,10 @@ already at `snapshot_verified`; it is not replayable. No queue row was executed,
 rewritten, or deleted, and the old database's `pg-unknown-effect` fixture remains
 isolated there. These candidate rows block blind worker resumption and require the
 T052 reconciliation procedure; they do not justify changing the external provider.
+After the queue inspection and test runs, the source SQLite file was reopened
+read-only and its 50-table logical fingerprint still matched the candidate's
+`app_migrations` record. No SQLite writer or API/BOT worker was running during
+this check, so the candidate was not silently based on a stale pre-pause copy.
 
 Docker Compose now requires both service-level encryption keys explicitly for
 the API and bot containers. A local configuration check passed after loading
