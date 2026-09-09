@@ -204,6 +204,17 @@ already at `snapshot_verified`; it is not replayable. No queue row was executed,
 rewritten, or deleted, and the old database's `pg-unknown-effect` fixture remains
 isolated there. These candidate rows block blind worker resumption and require the
 T052 reconciliation procedure; they do not justify changing the external provider.
+The queue rows were classified rather than treated as independent work. Four
+Outbox events target the already-complete match 471045156 and four target the
+already-in-progress match 471045157. All have zero attempts, no lease, no
+`effect_started_at`, no completion timestamp and no receipt. The current rows
+also have no Discord identity/thread to validate a call. They remain held for
+reconciliation because an old path's missing marker is not proof of non-delivery.
+Nine pending manual Hub commands were similarly linked: duplicate/terminal Calls
+(126, 129), an in-progress Call (127), a Call without identity mapping (128), a
+Call and Score for absent set 103903193 (130, 131), a Call for absent set
+103903199 (132), and untargeted legacy commands (133, 134). None has a lease or
+receipt, and none was executed, rewritten or deleted.
 After the queue inspection and test runs, the source SQLite file was reopened
 read-only and its 50-table logical fingerprint still matched the candidate's
 `app_migrations` record. No SQLite writer or API/BOT worker was running during

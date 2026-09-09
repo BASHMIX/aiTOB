@@ -359,6 +359,23 @@ operational check; a rehearsal is never a cutover.
   `snapshot_verified` (score), so no provider mutation is eligible for replay.
   These rows are a cutover reconciliation gate; they were not executed,
   rewritten, or deleted.
+  Detailed candidate queue classification (2026-09-09): the eight pending
+  Outbox rows are two workflow groups, not eight independent provider actions.
+  Four target `challonge:fnc-jo:18449397:471045156` (station-assigned,
+  match-complete, Discord-complete and next-match discovery) while four target
+  `challonge:fnc-jo:18449397:471045157` (Discord call, OBS-started and two
+  station-assigned events). Every row has attempts=0, no lease, no
+  `effect_started_at`, no `completed_at` and no receipt. The first match is
+  already terminal and the second is already `in_progress`; neither has saved
+  Discord identities/thread or a valid current call target. They are therefore
+  stale local effects requiring reconciliation, not safe automatic retries.
+  Nine pending manual Hub commands were linked by target: 126/129 duplicate
+  Calls for 471045156 (terminal), 127 Call for 471045157 (already in progress),
+  128 Call for 471045159 (no Discord identity mapping), 130 Call and 131 Score
+  for missing set 103903193, 132 Call for missing set 103903199, and untargeted
+  legacy commands 133/134. None has a lease, receipt or prior attempt. They are
+  all held for review because current state/ownership cannot prove a safe
+  replay; no row was converted or deleted.
   The combined regression was then rerun with `AITOB_PG_TEST_URL` pointing at
   the local PostgreSQL admin DSN (tests create/drop isolated databases) while
   ordinary tests retained their explicit temporary SQLite paths: 453 passed,
