@@ -35,8 +35,6 @@ services:
       AITOB_INTEGRATION_MASTER_KEY: ${AITOB_INTEGRATION_MASTER_KEY:?Set AITOB_INTEGRATION_MASTER_KEY}
       AITOB_AI_SERVICE_MASTER_KEY: ${AITOB_AI_SERVICE_MASTER_KEY:?Set AITOB_AI_SERVICE_MASTER_KEY}
     volumes:
-      # Persist the SQLite database using a named volume
-      - db_data:/app/backend/core
       # Persist player avatars and static uploads using a named volume
       - static_data:/app/backend/api/static
       # Persist overlay configs per slot using a named volume
@@ -46,7 +44,9 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
+      # /docs only proves the HTTP server exists; readiness proves the
+      # PostgreSQL transport and schema are available before dependants start.
+      test: ["CMD", "curl", "-f", "http://localhost:8000/readiness"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -63,8 +63,8 @@ services:
       AITOB_INTEGRATION_MASTER_KEY: ${AITOB_INTEGRATION_MASTER_KEY:?Set AITOB_INTEGRATION_MASTER_KEY}
       AITOB_AI_SERVICE_MASTER_KEY: ${AITOB_AI_SERVICE_MASTER_KEY:?Set AITOB_AI_SERVICE_MASTER_KEY}
     volumes:
-      # Share the same database and avatars as the API
-      - db_data:/app/backend/core
+      # Share only filesystem assets with the API. Runtime state is PostgreSQL;
+      # no SQLite volume is mounted into a service container.
       - static_data:/app/backend/api/static
     restart: always
     depends_on:
@@ -83,6 +83,5 @@ services:
 
 volumes:
   postgres_data:
-  db_data:
   static_data:
   overlay_configs:
