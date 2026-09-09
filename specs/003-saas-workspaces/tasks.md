@@ -92,6 +92,11 @@ operational check; a rehearsal is never a cutover.
   Ready/timeout transitions, action-proposal execution, and Dispatcher
   rechecks with the trusted workspace. Audit redaction covers credential
   aliases and embedded bearer/query secrets without hiding safe identifiers.
+  The Discord bot command drain, workflow status/validation, conflict scan,
+  agent match listing, Ready-view recovery, and post-score verification now
+  use the durable integration workspace; a worker cannot lease another
+  workspace's Hub commands. Legacy unowned migration/test callers remain
+  explicitly documented rather than being treated as tenant runtime paths.
 - [~] **T005 / FR-009–011** PostgreSQL acceptance now proves concurrent
   provider-ledger idempotency/lease ownership as well as approval, Outbox and
   station and hub-command claims (`test_postgres_storage.py`: 19 passing PG

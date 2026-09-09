@@ -131,6 +131,12 @@ without changing URLs, while fresh PostgreSQL schema migration creates
 Existing installations must apply the migration receipt before relying on
 cross-workspace duplicate keys; no operating database was rewritten here.
 
+The bot command drain is now bound to the workspace selected by its encrypted
+Discord integration account. Workflow status/validation, conflict scans,
+agent match listings, Ready-view recovery, and deferred score verification use
+the same durable scope; unscoped calls remain only for migration and legacy
+fixtures.
+
 The remaining T004 inventory is recorded in `tasks.md`: settings/hub
 compatibility endpoints, global hub status, tournament/station enumeration, and
 broad bot worker contexts still need conversion from the owner-only bridge. Hub
