@@ -339,6 +339,52 @@ def test_workspace_disable_refuses_inflight_work_and_revokes_after_drain(isolate
     run(verify())
 
 
+def test_workspace_disable_sees_owned_outbox_and_hub_commands_without_match_join(isolated_workspace_db):
+    """Disablement must drain durable effects even if their match row is gone."""
+    from backend.core.workspace_auth import disable_workspace
+
+    async def verify():
+        _, owner = await authenticate_password(OWNER_EMAIL, OWNER_PASSWORD)
+        async with aiosqlite.connect(isolated_workspace_db) as db:
+            await db.execute(
+                "INSERT INTO workflow_outbox (event_id, match_id, event_type, deduplication_key, workspace_id) VALUES (?, ?, ?, ?, ?)",
+                ("orphan-outbox", "already-removed", "discord.call", "orphan-outbox", owner.workspace_id),
+            )
+            await db.commit()
+        with pytest.raises(ValueError, match="active operations"):
+            await disable_workspace(owner)
+        async with aiosqlite.connect(isolated_workspace_db) as db:
+            await db.execute("DELETE FROM workflow_outbox WHERE event_id=?", ("orphan-outbox",))
+            await db.execute(
+                "INSERT INTO hub_commands (command_text, status, workspace_id) VALUES (?, 'pending', ?)",
+                ("local-only-test", owner.workspace_id),
+            )
+            await db.commit()
+        with pytest.raises(ValueError, match="active operations"):
+            await disable_workspace(owner)
+
+    run(verify())
+
+
+def test_workspace_lifecycle_reports_assets_and_hard_delete_policy(isolated_workspace_db):
+    from backend.core.workspace_auth import get_workspace_lifecycle
+
+    async def verify():
+        _, owner = await authenticate_password(OWNER_EMAIL, OWNER_PASSWORD)
+        await database.record_media_asset(
+            workspace_id=owner.workspace_id, asset_type="overlay_asset",
+            owner_type="workspace", owner_id=owner.workspace_id,
+            storage_url="/static/assets/retained.png", storage_key="retained.png",
+        )
+        lifecycle = await get_workspace_lifecycle(owner)
+        assert lifecycle["disable_eligible"] is True
+        assert lifecycle["disable_blockers"] == []
+        assert lifecycle["active_asset_count"] == 1
+        assert lifecycle["hard_delete"] == {"available": False, "reason": "retention_workflow_required"}
+
+    run(verify())
+
+
 def test_unscoped_legacy_routes_fail_closed_for_non_owner(isolated_workspace_db: Path):
     async def add_organizer():
         async with aiosqlite.connect(isolated_workspace_db) as db:
