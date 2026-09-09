@@ -184,6 +184,8 @@ In the isolated cutover candidate, the designated legacy owner was explicitly
 marked as the platform administrator through an audited bootstrap update; the
 old runtime database was not changed. A candidate API login and subscription
 projection request returned 200 while execution workers remained paused.
+A fresh PostgreSQL custom-format backup was taken after that candidate-only
+update; the prior verified restore drill remains the recovery evidence.
 
 The latest PostgreSQL acceptance rerun completed 32/32 tests on disposable
 databases after the workspace feed/station changes. The local backend suite is
