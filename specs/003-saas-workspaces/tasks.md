@@ -32,14 +32,14 @@ operational check; a rehearsal is never a cutover.
   bootstrap, approvals, reservations, claims and ledger operations, avoiding
   serialization of unrelated organizations. Full local regression after the
   identity-link, overlay-isolation, retention, worker-scope and WebSocket
-  authorization fixes: 422 passed, 21 skipped (2026-09-09; thirty-four acceptance
+  authorization fixes: 430 passed, 21 skipped (2026-09-09; forty-two acceptance
   assertions were added after the earlier 388-pass run). The two bot SQLite
   reads were replaced with
   repository calls and are guarded by `test_runtime_bot_paths_do_not_open_sqlite_directly`.
   Player listing and platform-admin checks now use repository functions and are
   guarded by `test_workspace_api_paths_use_repository_boundary`.
   Latest disposable PostgreSQL acceptance (storage, migration and station-overlay
-  isolation) is 26/26 passing on 2026-09-09; the current official local backend result is 414
+  isolation) is 26/26 passing on 2026-09-09; the current official local backend result is 430
   passed / 21 intentionally skipped. Current focused sync/authorization runs
   also pass (40 tests), including tenant-qualified scheduler keys and revocable
   Hub/Overlay WebSocket access.
@@ -97,6 +97,10 @@ operational check; a rehearsal is never a cutover.
   use the durable integration workspace; a worker cannot lease another
   workspace's Hub commands. Legacy unowned migration/test callers remain
   explicitly documented rather than being treated as tenant runtime paths.
+  The retained read-only `get_players_tool` compatibility entrypoint now also
+  passes `ACTIVE_DISCORD_WORKSPACE_ID` into the repository, so it cannot
+  enumerate every workspace's players; `test_legacy_player_read_tool_is_bound_to_active_workspace`
+  proves the scoped call contract.
   Start.gg permission probing is opt-in (`STARTGG_TOKEN_PROBE_ON_STARTUP=true`);
   API startup no longer issues a provider request merely because a credential
   exists. The default startup path is covered by
@@ -215,6 +219,9 @@ operational check; a rehearsal is never a cutover.
   station and command lookups. Remaining work is to remove the compatibility
   bridge after repository parity and finish unowned bot service-heartbeat /
   initial-registration contexts.
+  The legacy assistant player projection is no longer an unscoped tenant read:
+  `get_players_tool` is bound to the active Discord integration workspace and
+  its regression passes in `backend/tests/test_ai_assistant_safety.py`.
 - [~] **T023 / FR-006** Integration account/destination lookup and credential
   rotation now require an explicit workspace in API paths; the legacy `admin`
   integration ownership marker was normalized during Owner backfill. Unit tests
@@ -281,6 +288,13 @@ operational check; a rehearsal is never a cutover.
   origin validation for cookie mutations, (b) multi-process limits for auth,
   uploads, API and AI, (c) secret/content redaction assertions, and (d)
   readiness/error-tracking checks that expose no credentials or local paths.
+  `error_events` now provides bounded, redacted server telemetry: the global
+  exception handler records only method/path/exception class/trace id and
+  returns the same trace id with the generic response; telemetry failure cannot
+  replace the original error (`test_error_tracking.py`, 2 passing). The table
+  and index are additive/idempotent and no request body, provider response,
+  token, or local filesystem path is persisted. Distributed API/AI limits,
+  full readiness deployment probes, and end-to-end audit acceptance remain.
 - [~] **T041 / FR-014–015** Workspace free/non-billed entitlements and limits
   are persisted and projected safely from the session profile; free-plan
   limits are enforced per workspace for tournaments, stations, integrations,
@@ -306,7 +320,10 @@ operational check; a rehearsal is never a cutover.
   external Discord/provider effects. A PostgreSQL `pg_dump` backup was created
   on 2026-09-09 and restored into a newly created disposable database;
   `pg_restore` returned success and the application initialized against that
-  target with external probes disabled. The source PostgreSQL database itself
+    target with external probes disabled. Backup restore now verifies the
+    reviewed sidecar manifest (filename, byte size and SHA-256) before opening
+    either a SQLite or PostgreSQL target; a missing or changed artifact is
+    rejected before any restore write. The source PostgreSQL database itself
   currently contains only two stations and no workspaces, tournaments or
   integration credentials, so it is not the populated runtime cutover source.
   A separate populated SQLite-to-PostgreSQL rehearsal decrypted all five
@@ -340,7 +357,11 @@ operational check; a rehearsal is never a cutover.
   backfill/production pause procedure.
 - [~] **T051a / FR-016** Backup/restore procedure was exercised on the rehearsal
   copy and external effects remain explicitly separate from database restore.
-  No-loss rollback against newer writes and the final cutover pause window are
+  Restore now requires an exact, locally verified backup manifest, with
+  regression coverage for tampered bytes, renamed artifacts, and size
+  mismatches; this protects the reviewed backup without claiming external
+  effect rollback. No-loss rollback against newer writes and the final
+  cutover pause window are
   still required before T052; an older database is never restored over newer
   writes.
 - [ ] **T052 / FR-016** Perform final controlled cutover only after required
