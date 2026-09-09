@@ -36,6 +36,9 @@ async def test_api_shutdown_drains_started_tasks_and_does_not_import_secrets(mon
     monkeypatch.setenv("GOOGLE_API_KEY", "fake-test-only")
     monkeypatch.setenv("HUB_PASSWORD", "fake-test-only")
     monkeypatch.delenv("STARTGG_TOKEN_PROBE_ON_STARTUP", raising=False)
+    # Keep this worker-drain test independent from a cutover process-wide
+    # pause switch that may be present in the invoking environment.
+    monkeypatch.delenv("AITOB_DISABLE_BACKGROUND_WORKERS", raising=False)
     await main.startup_event()
     await started.wait()
     await main.shutdown_event()
