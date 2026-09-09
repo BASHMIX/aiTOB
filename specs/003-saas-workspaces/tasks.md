@@ -32,14 +32,14 @@ operational check; a rehearsal is never a cutover.
   bootstrap, approvals, reservations, claims and ledger operations, avoiding
   serialization of unrelated organizations. Full local regression after the
   identity-link, overlay-isolation, retention, worker-scope and WebSocket
-  authorization fixes: 430 passed, 21 skipped (2026-09-09; forty-two acceptance
+  authorization fixes: 432 passed, 21 skipped (2026-09-09; forty-four acceptance
   assertions were added after the earlier 388-pass run). The two bot SQLite
   reads were replaced with
   repository calls and are guarded by `test_runtime_bot_paths_do_not_open_sqlite_directly`.
   Player listing and platform-admin checks now use repository functions and are
   guarded by `test_workspace_api_paths_use_repository_boundary`.
   Latest disposable PostgreSQL acceptance (storage, migration and station-overlay
-  isolation) is 26/26 passing on 2026-09-09; the current official local backend result is 430
+  isolation) is 26/26 passing on 2026-09-09; the current official local backend result is 432
   passed / 21 intentionally skipped. Current focused sync/authorization runs
   also pass (40 tests), including tenant-qualified scheduler keys and revocable
   Hub/Overlay WebSocket access.
@@ -320,10 +320,12 @@ operational check; a rehearsal is never a cutover.
   external Discord/provider effects. A PostgreSQL `pg_dump` backup was created
   on 2026-09-09 and restored into a newly created disposable database;
   `pg_restore` returned success and the application initialized against that
-    target with external probes disabled. Backup restore now verifies the
-    reviewed sidecar manifest (filename, byte size and SHA-256) before opening
-    either a SQLite or PostgreSQL target; a missing or changed artifact is
-    rejected before any restore write. The source PostgreSQL database itself
+  target with external probes disabled. Backup restore now verifies the
+  reviewed sidecar manifest (filename, byte size and SHA-256) before opening
+  either a SQLite or PostgreSQL target; a missing or changed artifact is
+  rejected before any restore write. PostgreSQL restore is non-destructive by
+  default; `--clean --if-exists` is only emitted with explicit `--force`, and
+  focused tests prove both command shapes. The source PostgreSQL database itself
   currently contains only two stations and no workspaces, tournaments or
   integration credentials, so it is not the populated runtime cutover source.
   A separate populated SQLite-to-PostgreSQL rehearsal decrypted all five

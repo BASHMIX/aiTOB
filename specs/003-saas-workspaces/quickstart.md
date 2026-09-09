@@ -83,12 +83,12 @@ claims, and unique command keys. No global compatibility lock serializes
 unrelated Workspaces; bootstrap and other critical paths use scoped locks.
 Two independent membership transactions cannot remove both last Owners.
 
-The local complete suite completed without hanging (430 passed / 21 skipped),
+The local complete suite completed without hanging (432 passed / 21 skipped),
 but exposed a thread-cleanup warning. The focused recovery/budget/coordinator
 group reproduced it with warnings treated as errors. Scheduler `close()` now
 awaits stopped tasks, and the explicit test-only SQLite connector drains opening
 and closing work on cancellation. The focused group then passed all 17 tests.
-The full post-fix rerun completed at 430 passed / 21 skipped (2026-09-09).
+The full post-fix rerun completed at 432 passed / 21 skipped (2026-09-09).
 
 The official local backend command is:
 
@@ -158,11 +158,11 @@ path.
 
 The latest PostgreSQL acceptance rerun completed 26/26 tests on disposable
 databases after the workspace feed/station changes. The local backend suite is
-430 passed / 21 skipped; skipped cases remain the explicitly PostgreSQL-only
+432 passed / 21 skipped; skipped cases remain the explicitly PostgreSQL-only
 cases when no `AITOB_PG_TEST_URL` is supplied to the local command.
 
 The post-acceptance additions include two redacted error-telemetry tests and
-five backup-manifest restore-safety tests; they are included in the 430-pass
+seven backup-manifest restore-safety tests; they are included in the 432-pass
 count above.
 
 On 2026-09-09 a consistent read-only backup of the current SQLite fixture was
