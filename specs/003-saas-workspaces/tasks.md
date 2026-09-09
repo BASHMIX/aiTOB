@@ -32,7 +32,7 @@ operational check; a rehearsal is never a cutover.
   bootstrap, approvals, reservations, claims and ledger operations, avoiding
   serialization of unrelated organizations. Full local regression after the
   identity-link, overlay-isolation, retention, worker-scope and WebSocket
-  authorization fixes: 435 passed, 21 skipped (2026-09-09; additional
+  authorization fixes: 438 passed, 21 skipped (2026-09-09; additional
   acceptance and recovery-safety assertions were added after the earlier
   388-pass run). The two bot SQLite
   reads were replaced with
@@ -385,8 +385,10 @@ operational check; a rehearsal is never a cutover.
   replay; no row was converted or deleted.
   The combined regression was then rerun with `AITOB_PG_TEST_URL` pointing at
   the local PostgreSQL admin DSN (tests create/drop isolated databases) while
-  ordinary tests retained their explicit temporary SQLite paths: 455 passed,
-  1 skipped (2026-09-09). The earlier hang was reproduced as an inherited
+  ordinary tests retained their explicit temporary SQLite paths in the
+  historical mixed run: 455 passed, 1 skipped (2026-09-09). The current
+  focused PostgreSQL storage/migration/queue-hold acceptance is 22 passed
+  after the uvicorn entrypoint fix. The earlier hang was reproduced as an inherited
   `AITOB_DISABLE_BACKGROUND_WORKERS` pause and fixed by making the lifecycle
   test remove that process setting; three PostgreSQL bootstrap failures were
   likewise traced to test fixtures mutating `os.environ` directly and fixed with

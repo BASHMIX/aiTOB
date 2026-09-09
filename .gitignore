@@ -167,6 +167,7 @@ backend/api/tournament.db
 .env.acceptance
 .acceptance/
 .migration-backups/
+.backups/
 
 # Logs
 *.log
