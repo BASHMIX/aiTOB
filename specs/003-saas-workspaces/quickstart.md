@@ -180,6 +180,10 @@ and expiry atomically with a redacted audit event; they do not perform checkout,
 charge a card, or call an external billing gateway. A missing payment gateway
 therefore blocks only paid checkout/webhooks, not the free/non-billed runtime.
 The API returns status metadata only and never payment or integration secrets.
+In the isolated cutover candidate, the designated legacy owner was explicitly
+marked as the platform administrator through an audited bootstrap update; the
+old runtime database was not changed. A candidate API login and subscription
+projection request returned 200 while execution workers remained paused.
 
 The latest PostgreSQL acceptance rerun completed 32/32 tests on disposable
 databases after the workspace feed/station changes. The local backend suite is
