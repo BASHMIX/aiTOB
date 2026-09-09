@@ -147,6 +147,12 @@ SQLite reads were removed and guarded by
 and platform-admin API modules are additionally guarded by
 `test_workspace_api_paths_use_repository_boundary`.
 
+Start.gg permission probing is opt-in: API startup does not contact the
+provider merely because a credential exists. An acceptance operator may set
+`STARTGG_TOKEN_PROBE_ON_STARTUP=true` for a disposable run; leaving it unset
+keeps startup free of provider probes and preserves the explicit manual probe
+path.
+
 The latest PostgreSQL acceptance rerun completed 26/26 tests on disposable
 databases after the workspace feed/station changes. The local backend suite is
 414 passed / 21 skipped; skipped cases remain the explicitly PostgreSQL-only
