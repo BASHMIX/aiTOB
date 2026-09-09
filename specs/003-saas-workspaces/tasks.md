@@ -121,6 +121,9 @@ operational check; a rehearsal is never a cutover.
   per-event Dispatcher scoping: 20/20 identity/event cases pass after casting
   nullable workspace predicates, preserving text match numbers in numeric-safe
   ordering, and using Boolean literals in the PG fixtures (2026-09-10).
+  Additional PG runtime checks now pass 29/29 for Challonge local workflow,
+  SQL-safety, and scoped tournament removal; their fixtures use the shared
+  PostgreSQL adapter rather than opening SQLite directly.
 - [~] **T005 / FR-009–011** PostgreSQL acceptance now proves concurrent
   provider-ledger idempotency/lease ownership as well as approval, Outbox and
   station and hub-command claims (`test_postgres_storage.py`: 19 passing PG
