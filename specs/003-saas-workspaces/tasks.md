@@ -36,6 +36,24 @@ operational check; a rehearsal is never a cutover.
   `backend/core/schema_migrations.py` plus the two marked SQLite-source tests
   are migration-only. No runtime module imports `aiosqlite`/`sqlite3` directly
   outside the adapter, and no runtime path falls back to a shared SQLite file.
+  Function-level acceptance inventory:
+  `settings.api_get_settings/api_patch_settings/api_get_env/api_patch_env/
+  api_trigger_token_check` are platform-admin-only global controls;
+  `hub.api_get_feed/api_clear_feed/api_bot_command/api_hub_command` use the
+  session workspace, while `hub.api_get_status/api_reload_workflows/
+  api_set_dispatcher_master` are platform-global; `tournaments.api_list_
+  tournaments/api_add_tournament/api_get_sets/api_sync_bracket/
+  api_tournament_sync_status/api_reset_tournament_hub/api_delete_tournament`
+  and `planned_streams.api_*` pass the authenticated workspace into every
+  repository; `matches.api_active_matches/api_call_match/api_player_ready/
+  api_toggle_stream/api_send_match/api_reset_match/api_dq_match` and conflict
+  paths enforce the same scope; provider capability/resolve/list routes require
+  an account owned by that workspace. Bot `run_drain`, workflow dispatch,
+  `get_players_tool`, CFN propagation and status/validation lookups carry the
+  active integration workspace. The only unscoped signatures left are direct
+  migration/test hooks, the opt-in owner-only compatibility identity, and
+  service startup identity discovery; each is covered by a fail-closed or
+  explicit-owner test and cannot be selected by a tenant request.
   Acceptance evidence:
   `test_postgres_storage.py` passes 18 isolated PG cases (2026-09-08), including
   casts, percent literals/modulo, escaped strings, nested comments, concurrent
