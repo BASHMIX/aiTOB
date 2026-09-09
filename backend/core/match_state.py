@@ -134,7 +134,8 @@ async def call_match_core(
     Returns {"ok": True, set_id, p1_name, p2_name} or {"error": "..."}.
     """
     from backend.core.database import get_active_match, add_hub_command, add_bot_feed as _feed
-    match = await get_active_match(set_id, workspace_id)
+    match = (await get_active_match(set_id, workspace_id)
+             if workspace_id is not None else await get_active_match(set_id))
     if not match:
         return {"error": "Match not found"}
     from backend.core.database import get_tournament
@@ -243,7 +244,8 @@ async def transition_match(
     return {"ok": True, "status": to_status}
 
 async def auto_dq_match(set_id: str, workspace_id: str | None = None) -> dict:
-    match = await get_active_match(set_id, workspace_id)
+    match = (await get_active_match(set_id, workspace_id)
+             if workspace_id is not None else await get_active_match(set_id))
     if not match:
         return {"error": "Match not found"}
 
@@ -337,9 +339,12 @@ async def auto_dq_match(set_id: str, workspace_id: str | None = None) -> dict:
     await hub_mgr.broadcast({"type": "match_update", "_workspace_id": match.get("workspace_id")})
     return {"ok": True, "dq_player": dq_eid}
 
-async def start_call_timer(set_id: str, timeout_seconds: int = 600):
+async def start_call_timer(
+    set_id: str, timeout_seconds: int = 600, workspace_id: str | None = None,
+):
     await asyncio.sleep(timeout_seconds)
-    match = await get_active_match(set_id)
+    match = (await get_active_match(set_id, workspace_id)
+             if workspace_id is not None else await get_active_match(set_id))
     if not match or match.get("status") != "called":
         return
     # Auto-DQ is deliberately disabled platform-wide.  The timer is retained
@@ -347,14 +352,20 @@ async def start_call_timer(set_id: str, timeout_seconds: int = 600):
     # manual DQ through the authorized workflow.  This keeps a timeout from
     # inventing a winner or issuing a provider mutation.
     if match.get("auto_dq_disarmed"):
-        await add_bot_feed(
+        message = (
             f"⏰ Call timer expired for {set_id} — automatic DQ is disabled; "
-            "an organizer must resolve attendance manually.",
-            "info"
+            "an organizer must resolve attendance manually."
         )
+        if workspace_id is None and not match.get("workspace_id"):
+            await add_bot_feed(message, "info")
+        else:
+            await add_bot_feed(message, "info", workspace_id=match.get("workspace_id") or workspace_id)
         return
-    await add_bot_feed(
+    message = (
         f"⏰ Call timer expired for match {set_id} — automatic DQ is disabled; "
-        "review attendance and use manual DQ if appropriate.",
-        "warn"
+        "review attendance and use manual DQ if appropriate."
     )
+    if workspace_id is None and not match.get("workspace_id"):
+        await add_bot_feed(message, "warn")
+    else:
+        await add_bot_feed(message, "warn", workspace_id=match.get("workspace_id") or workspace_id)
