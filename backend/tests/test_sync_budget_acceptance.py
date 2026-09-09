@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import asyncio
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -65,6 +66,35 @@ async def test_completed_tournament_never_enters_live_polling(budget_db, monkeyp
     assert manager._live_scheduler.stop(budget_db) is True
     await manager.close_live_schedules()
     assert calls == 0
+
+
+@pytest.mark.asyncio
+async def test_live_schedule_restore_skips_unowned_legacy_rows(monkeypatch):
+    """Scheduler recovery must require durable tenant context before polling."""
+    from backend.core.provider_sync_manager import ProviderSyncManager
+
+    rows = [
+        {"slug": "legacy/unowned", "provider_type": "challonge", "challonge_sync_mode": "live", "workspace_id": None},
+        {"slug": "owned/live", "provider_type": "challonge", "challonge_sync_mode": "live", "workspace_id": "workspace-a"},
+    ]
+    monkeypatch.setattr("backend.core.provider_sync_manager.get_tournaments", AsyncMock(return_value=rows))
+    monkeypatch.setattr(
+        "backend.core.provider_sync_manager.get_provider_feature_flags",
+        lambda: type("Flags", (), {"challonge_read_enabled": True})(),
+    )
+    manager = ProviderSyncManager()
+    starts: list[tuple[str, str | None]] = []
+
+    def start(slug, *, workspace_id=None):
+        starts.append((slug, workspace_id))
+        return True
+
+    monkeypatch.setattr(manager._live_scheduler, "start", start)
+    try:
+        assert await manager.restore_live_schedules() == 1
+        assert starts == [("owned/live", "workspace-a")]
+    finally:
+        await manager.close_live_schedules()
 
 
 @pytest.mark.asyncio

@@ -102,10 +102,16 @@ class ProviderSyncManager:
             return 0
         started = 0
         for tournament in await get_tournaments():
+            workspace_id = tournament.get("workspace_id")
+            # A live worker has no user session to supply tenant context.  Do
+            # not let an unowned legacy row fall through to the old unscoped
+            # scheduler/provider path; ownership backfill must be explicit.
+            if not workspace_id:
+                continue
             if tournament.get("provider_type") == "challonge" and tournament.get("challonge_sync_mode") == "live":
                 started += int(self._live_scheduler.start(
                     str(tournament["slug"]),
-                    workspace_id=tournament.get("workspace_id"),
+                    workspace_id=workspace_id,
                 ))
         return started
 
