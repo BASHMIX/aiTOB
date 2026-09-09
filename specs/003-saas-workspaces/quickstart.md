@@ -147,7 +147,7 @@ SQLite reads were removed and guarded by
 and platform-admin API modules are additionally guarded by
 `test_workspace_api_paths_use_repository_boundary`.
 
-The latest PostgreSQL acceptance rerun completed 25/25 tests on disposable
+The latest PostgreSQL acceptance rerun completed 26/26 tests on disposable
 databases after the workspace feed/station changes. The local backend suite is
 414 passed / 21 skipped; skipped cases remain the explicitly PostgreSQL-only
 cases when no `AITOB_PG_TEST_URL` is supplied to the local command.
