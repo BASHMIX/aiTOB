@@ -152,6 +152,8 @@ operational check; a rehearsal is never a cutover.
   work before a final PostgreSQL gate.
   Error telemetry redaction and Challonge repair acceptance add 4/4 passing PG
   cases; no external effects are used by these tests.
+  Discord thread delivery/restart-view acceptance adds 3/3 passing PG cases
+  after seeding its disposable tournament through the repository boundary.
 - [~] **T006 / FR-011** `WorkflowOutboxWorker` now marks an explicitly
   ambiguous external outcome `needs_review` and does not retry it; PG acceptance
   also proves cancellation after delivery and before completion persistence

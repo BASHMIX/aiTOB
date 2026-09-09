@@ -40,6 +40,17 @@ async def test_challonge_call_persists_thread_and_call_message_ids(monkeypatch):
     """A successful Call must leave a durable message ID for restart/audit."""
     from backend.bot import match_threads
     from backend.core import integrations
+    from backend.core import database
+
+    # The PG acceptance fixture provides an empty disposable database; seed the
+    # tournament through the repository boundary so the thread path is tested
+    # against both SQLite test storage and PostgreSQL runtime storage.
+    await database.init_db()
+    await database.upsert_tournament(
+        "challonge:test", "Test Challonge", None, None, None, "{}",
+        provider_type="challonge", provider_tournament_id="test",
+        provider_account_id="account",
+    )
 
     updates = []
 
