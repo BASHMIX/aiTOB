@@ -165,6 +165,11 @@ The post-acceptance additions include two redacted error-telemetry tests and
 seven backup-manifest restore-safety tests; they are included in the 432-pass
 count above.
 
+PostgreSQL runtime smoke (2026-09-09) loaded the FastAPI lifespan against the
+configured local PostgreSQL DSN with provider probes disabled, initialized the
+schema, started the reconciliation task, and shut down cleanly. No production
+SQLite or external provider data was written by this check.
+
 On 2026-09-09 a consistent read-only backup of the current SQLite fixture was
 restored byte-for-byte, then migrated to a disposable PostgreSQL database and
 validated through `app_migrations`. The rehearsal copied 50 tables and the
