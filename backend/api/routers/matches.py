@@ -391,15 +391,18 @@ async def api_send_match(set_id: str, principal: SessionPrincipal = Depends(requ
     p2_id = str(m.get('p2_entrant_id', ''))
 
     provider = await get_provider_for_tournament(m.get('tournament_slug') or '', _ws(principal))
-    result = await report_score_to_provider(
-        set_id=set_id,
-        winner_id=winner_id,
-        p1_id=p1_id,
-        p2_id=p2_id,
-        p1_score=p1_score,
-        p2_score=p2_score,
-        provider=provider
-    )
+    report_kwargs = {
+        "set_id": set_id,
+        "winner_id": winner_id,
+        "p1_id": p1_id,
+        "p2_id": p2_id,
+        "p1_score": p1_score,
+        "p2_score": p2_score,
+        "provider": provider,
+    }
+    if _ws(principal) is not None:
+        report_kwargs["workspace_id"] = _ws(principal)
+    result = await report_score_to_provider(**report_kwargs)
     if result.success:
         if _ws(principal) is None:
             # Preserve direct unit/legacy callers that have no session
@@ -689,6 +692,7 @@ async def api_resolve_conflict(id: int, body: ResolveConflictRequest, principal:
         result = await report_score_to_provider(
             set_id=set_id, winner_id=winner_id, p1_id=p1_eid, p2_id=p2_eid,
             p1_score=p1_score, p2_score=p2_score, provider=provider,
+            workspace_id=_ws(principal),
         )
         if not result.success:
             error_msg = result.error_message or "Unknown provider error."

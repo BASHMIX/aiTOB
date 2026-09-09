@@ -8,7 +8,9 @@ from backend.core.providers.registry import get_provider
 from backend.core.provider_feature_flags import get_provider_feature_flags
 
 
-async def _schedule_post_result_verification(set_id: str, provider: ITournamentProvider) -> None:
+async def _schedule_post_result_verification(
+    set_id: str, provider: ITournamentProvider, workspace_id: str | None = None,
+) -> None:
     """Ask the Coordinator for later verification only in its explicit rollout mode.
 
     This is intentionally provider-neutral. The adapter/sync policy determines
@@ -20,9 +22,11 @@ async def _schedule_post_result_verification(set_id: str, provider: ITournamentP
     try:
         from backend.core.database import get_active_match
         from backend.core.provider_sync_manager import sync_manager
-        match = await get_active_match(set_id)
+        match = await get_active_match(set_id, workspace_id)
         if match and match.get("tournament_slug"):
-            sync_manager.schedule_bracket_sync(match["tournament_slug"])
+            sync_manager.schedule_bracket_sync(
+                match["tournament_slug"], workspace_id=match.get("workspace_id") or workspace_id,
+            )
     except Exception:
         # Score submission succeeded; deferred UI synchronization is best-effort.
         pass
@@ -36,6 +40,7 @@ async def report_score_to_provider(
     p1_score: int,
     p2_score: int,
     provider: ITournamentProvider = None,
+    workspace_id: str | None = None,
 ) -> ProviderSetResult:
     """Report scores with automatic fallback to winner-only.
     
@@ -54,7 +59,7 @@ async def report_score_to_provider(
         entrant2_score=p2_score,
     )
     if result.success:
-        await _schedule_post_result_verification(set_id, provider)
+        await _schedule_post_result_verification(set_id, provider, workspace_id)
         return result
 
     # Fallback: winner-only
@@ -66,5 +71,5 @@ async def report_score_to_provider(
             error_message=f"Full report failed: {result.error_message}; "
                           f"Winner-only fallback also failed: {fallback.error_message}"
         )
-    await _schedule_post_result_verification(set_id, provider)
+    await _schedule_post_result_verification(set_id, provider, workspace_id)
     return fallback
