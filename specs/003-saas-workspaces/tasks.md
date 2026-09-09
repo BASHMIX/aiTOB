@@ -32,7 +32,7 @@ operational check; a rehearsal is never a cutover.
   bootstrap, approvals, reservations, claims and ledger operations, avoiding
   serialization of unrelated organizations. Full local regression after the
   identity-link, overlay-isolation, retention, worker-scope and WebSocket
-  authorization fixes: 433 passed, 21 skipped (2026-09-09; additional
+  authorization fixes: 435 passed, 21 skipped (2026-09-09; additional
   acceptance and recovery-safety assertions were added after the earlier
   388-pass run). The two bot SQLite
   reads were replaced with
@@ -40,7 +40,7 @@ operational check; a rehearsal is never a cutover.
   Player listing and platform-admin checks now use repository functions and are
   guarded by `test_workspace_api_paths_use_repository_boundary`.
   Latest disposable PostgreSQL acceptance (storage, migration and station-overlay
-  isolation) is 26/26 passing on 2026-09-09; the current official local backend result is 433
+  isolation) is 26/26 passing on 2026-09-09; the current official local backend result is 435
   passed / 21 intentionally skipped. Current focused sync/authorization runs
   also pass (40 tests), including tenant-qualified scheduler keys and revocable
   Hub/Overlay WebSocket access.
@@ -359,6 +359,13 @@ operational check; a rehearsal is never a cutover.
   `snapshot_verified` (score), so no provider mutation is eligible for replay.
   These rows are a cutover reconciliation gate; they were not executed,
   rewritten, or deleted.
+  An explicit cutover hold was then applied to exactly the reviewed eight Outbox
+  event IDs and Hub command IDs 126–134. The single transaction moved only rows
+  that were still `pending`, retained their previous status/attempt/lease/effect
+  markers in 17 `queue.hold` audit events, and left all matches and the verified
+  provider ledger unchanged. A fresh claim after restart returned zero Hub and
+  zero Outbox rows; no external effect ran. Local and PostgreSQL hold regressions
+  both pass.
   Detailed candidate queue classification (2026-09-09): the eight pending
   Outbox rows are two workflow groups, not eight independent provider actions.
   Four target `challonge:fnc-jo:18449397:471045156` (station-assigned,
@@ -378,7 +385,7 @@ operational check; a rehearsal is never a cutover.
   replay; no row was converted or deleted.
   The combined regression was then rerun with `AITOB_PG_TEST_URL` pointing at
   the local PostgreSQL admin DSN (tests create/drop isolated databases) while
-  ordinary tests retained their explicit temporary SQLite paths: 453 passed,
+  ordinary tests retained their explicit temporary SQLite paths: 455 passed,
   1 skipped (2026-09-09). The earlier hang was reproduced as an inherited
   `AITOB_DISABLE_BACKGROUND_WORKERS` pause and fixed by making the lifecycle
   test remove that process setting; three PostgreSQL bootstrap failures were

@@ -83,17 +83,17 @@ claims, and unique command keys. No global compatibility lock serializes
 unrelated Workspaces; bootstrap and other critical paths use scoped locks.
 Two independent membership transactions cannot remove both last Owners.
 
-The local complete suite completed without hanging (433 passed / 21 skipped),
+The local complete suite completed without hanging (435 passed / 21 skipped),
 but exposed a thread-cleanup warning. The focused recovery/budget/coordinator
 group reproduced it with warnings treated as errors. Scheduler `close()` now
 awaits stopped tasks, and the explicit test-only SQLite connector drains opening
 and closing work on cancellation. The focused group then passed all 17 tests.
-The full post-fix rerun completed at 433 passed / 21 skipped (2026-09-09).
+The full post-fix rerun completed at 435 passed / 21 skipped (2026-09-09).
 
 The PostgreSQL-enabled full regression uses the same `.venv` interpreter with
 `AITOB_PG_TEST_URL` set to the local PostgreSQL admin DSN; each PostgreSQL test
 creates and drops its own disposable database, while ordinary tests keep their
-temporary SQLite fixture. It completed at 453 passed / 1 skipped (2026-09-09).
+temporary SQLite fixture. It completed at 455 passed / 1 skipped (2026-09-09).
 The single skip is `test_referee_accuracy_benchmark`, the intentionally disabled
 legacy AI Referee inference benchmark pending Result Claims (it is not an
 external-provider acceptance result). A previous
@@ -170,11 +170,11 @@ path.
 
 The latest PostgreSQL acceptance rerun completed 26/26 tests on disposable
 databases after the workspace feed/station changes. The local backend suite is
-433 passed / 21 skipped; skipped cases remain the explicitly PostgreSQL-only
+435 passed / 21 skipped; skipped cases remain the explicitly PostgreSQL-only
 cases when no `AITOB_PG_TEST_URL` is supplied to the local command.
 
 The post-acceptance additions include two redacted error-telemetry tests and
-seven backup-manifest restore-safety tests; they are included in the 433-pass
+seven backup-manifest restore-safety tests; they are included in the 435-pass
 count above.
 
 PostgreSQL runtime smoke (2026-09-09) loaded the FastAPI lifespan against the
@@ -215,6 +215,13 @@ Nine pending manual Hub commands were similarly linked: duplicate/terminal Calls
 Call and Score for absent set 103903193 (130, 131), a Call for absent set
 103903199 (132), and untargeted legacy commands (133, 134). None has a lease or
 receipt, and none was executed, rewritten or deleted.
+
+The reviewed cutover slice was explicitly held in the candidate database using
+the new allow-list transaction: exactly the eight event IDs above and command
+IDs 126–134 moved from `pending` to `needs_review`. Seventeen `queue.hold` audit
+events retain the previous status, attempts, lease/effect markers and hold reason.
+A fresh service-context claim returned zero Hub commands and zero Outbox events,
+confirming the hold survives restart and does not block unrelated future work.
 After the queue inspection and test runs, the source SQLite file was reopened
 read-only and its 50-table logical fingerprint still matched the candidate's
 `app_migrations` record. No SQLite writer or API/BOT worker was running during

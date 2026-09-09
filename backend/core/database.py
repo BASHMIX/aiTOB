@@ -3417,6 +3417,99 @@ async def mark_workflow_outbox_needs_review_v2(
     return cursor.rowcount == 1
 
 
+async def hold_legacy_operations_v2(
+    *,
+    outbox_event_ids: list[str],
+    hub_command_ids: list[int],
+    reason: str,
+    actor_id: str = "system:cutover-hold",
+) -> dict[str, int]:
+    """Atomically quarantine an explicitly reviewed legacy queue slice.
+
+    This is deliberately an allow-list operation: every requested row must
+    still be pending and present, otherwise the transaction rolls back.  The
+    previous state and lease/effect markers are retained in the audit event so
+    a restart cannot silently re-enqueue the work.  ``needs_review`` is not
+    eligible for either Hub-command or Outbox worker claims.
+    """
+    if not outbox_event_ids and not hub_command_ids:
+        return {"outbox_held": 0, "hub_commands_held": 0}
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            outbox_rows: list[dict] = []
+            for event_id in outbox_event_ids:
+                lock = " FOR UPDATE" if is_postgres() else ""
+                row = await (await db.execute(
+                    "SELECT event_id, status, attempts, lease_owner, lease_until, effect_started_at, completed_at "
+                    "FROM workflow_outbox WHERE event_id=?" + lock,
+                    (event_id,),
+                )).fetchone()
+                if not row or str(row[1]) != "pending":
+                    raise ValueError(f"Outbox hold precondition failed for {event_id}")
+                outbox_rows.append({
+                    "event_id": row[0], "status": row[1], "attempts": row[2],
+                    "lease_owner": row[3], "lease_until": row[4],
+                    "effect_started_at": row[5], "completed_at": row[6],
+                })
+            command_rows: list[dict] = []
+            for command_id in hub_command_ids:
+                lock = " FOR UPDATE" if is_postgres() else ""
+                row = await (await db.execute(
+                    "SELECT id, status, attempts, lease_owner, lease_expires_at FROM hub_commands WHERE id=?" + lock,
+                    (command_id,),
+                )).fetchone()
+                if not row or str(row[1]) != "pending":
+                    raise ValueError(f"Hub command hold precondition failed for {command_id}")
+                command_rows.append({
+                    "id": row[0], "status": row[1], "attempts": row[2],
+                    "lease_owner": row[3], "lease_expires_at": row[4],
+                })
+            for row in outbox_rows:
+                await db.execute(
+                    "UPDATE workflow_outbox SET status='needs_review', lease_owner=NULL, lease_until=NULL, updated_at=CURRENT_TIMESTAMP WHERE event_id=? AND status='pending'",
+                    (row["event_id"],),
+                )
+                detail = json.dumps({
+                    "source": "explicit_cutover_hold",
+                    "previous_status": row["status"],
+                    "previous_attempts": row["attempts"],
+                    "had_lease": bool(row["lease_owner"] or row["lease_until"]),
+                    "effect_started": bool(row["effect_started_at"]),
+                    "completed": bool(row["completed_at"]),
+                    "reason": str(reason)[:500],
+                }, separators=(",", ":"))
+                await db.execute(
+                    "INSERT INTO audit_events (id, workspace_id, actor_id, action, target_type, target_id, outcome, detail_json) "
+                    "SELECT ?, workspace_id, ?, 'queue.hold', 'workflow_outbox', event_id, 'accepted', ? "
+                    "FROM workflow_outbox WHERE event_id=?",
+                    (str(uuid.uuid4()), actor_id, detail, row["event_id"]),
+                )
+            for row in command_rows:
+                await db.execute(
+                    "UPDATE hub_commands SET status='needs_review', lease_owner=NULL, lease_expires_at=NULL, last_error=? WHERE id=? AND status='pending'",
+                    (str(reason)[:500], row["id"]),
+                )
+                detail = json.dumps({
+                    "source": "explicit_cutover_hold",
+                    "previous_status": row["status"],
+                    "previous_attempts": row["attempts"],
+                    "had_lease": bool(row["lease_owner"] or row["lease_expires_at"]),
+                    "reason": str(reason)[:500],
+                }, separators=(",", ":"))
+                await db.execute(
+                    "INSERT INTO audit_events (id, workspace_id, actor_id, action, target_type, target_id, outcome, detail_json) "
+                    "SELECT ?, workspace_id, ?, 'queue.hold', 'hub_command', CAST(id AS TEXT), 'accepted', ? "
+                    "FROM hub_commands WHERE id=?",
+                    (str(uuid.uuid4()), actor_id, detail, row["id"]),
+                )
+            await db.commit()
+            return {"outbox_held": len(outbox_rows), "hub_commands_held": len(command_rows)}
+        except Exception:
+            await db.rollback()
+            raise
+
+
 async def renew_workflow_outbox_lease_v2(event_id: str, lease_owner: str, lease_until: str) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
