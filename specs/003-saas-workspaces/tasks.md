@@ -97,6 +97,10 @@ operational check; a rehearsal is never a cutover.
   use the durable integration workspace; a worker cannot lease another
   workspace's Hub commands. Legacy unowned migration/test callers remain
   explicitly documented rather than being treated as tenant runtime paths.
+  Start.gg permission probing is opt-in (`STARTGG_TOKEN_PROBE_ON_STARTUP=true`);
+  API startup no longer issues a provider request merely because a credential
+  exists. The default startup path is covered by
+  `test_api_shutdown_drains_started_tasks_and_does_not_import_secrets`.
 - [~] **T005 / FR-009–011** PostgreSQL acceptance now proves concurrent
   provider-ledger idempotency/lease ownership as well as approval, Outbox and
   station and hub-command claims (`test_postgres_storage.py`: 19 passing PG
