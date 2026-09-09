@@ -9,6 +9,7 @@ import argparse
 import os
 import sqlite3
 import subprocess
+import sys
 from pathlib import Path
 
 from backup_database import manifest_path_for, verify_manifest
@@ -47,7 +48,14 @@ def main() -> int:
     dsn = args.postgres_target or os.getenv("DATABASE_URL", "").strip()
     if not dsn.startswith(("postgresql://", "postgres://")):
         raise SystemExit("an explicit PostgreSQL target DSN is required")
-    result = subprocess.run(["pg_restore", "--clean", "--if-exists", "--dbname", dsn, str(backup)], check=False)
+    # Never drop objects implicitly.  A normal restore is additive/fail-closed
+    # on an occupied target; destructive cleanup is opt-in and must be visible
+    # at the command line via --force.
+    restore_args = ["pg_restore", "--exit-on-error"]
+    if args.force:
+        restore_args.extend(["--clean", "--if-exists"])
+    restore_args.extend(["--dbname", dsn, str(backup)])
+    result = subprocess.run(restore_args, check=False)
     if result.returncode:
         raise SystemExit("pg_restore failed")
     print("restored PostgreSQL backup to the explicitly supplied target (manifest verified)")

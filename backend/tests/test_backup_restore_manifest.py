@@ -3,16 +3,20 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
 
 
 def _load_script(name: str):
+    if name == "restore_database" and "backup_database" not in sys.modules:
+        _load_script("backup_database")
     root = Path(__file__).resolve().parents[2] / "scripts" / f"{name}.py"
     spec = importlib.util.spec_from_file_location(f"aitob_{name}", root)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -77,3 +81,32 @@ def test_restore_requires_sidecar_manifest(tmp_path: Path, backup_tools):
 
     with pytest.raises(ValueError, match="manifest"):
         backup_tools.verify_manifest(backup)
+
+
+def test_postgres_restore_is_non_destructive_without_force(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    restore = _load_script("restore_database")
+    backup = tmp_path / "reviewed.dump"
+    backup.write_bytes(b"reviewed dump")
+    manifest = _write_manifest(backup, digest=restore.verify_manifest.__globals__["_digest"](backup), size=backup.stat().st_size)
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(restore.subprocess, "run", lambda command, check=False: calls.append(command) or type("Result", (), {"returncode": 0})())
+    monkeypatch.setattr(restore.os, "getenv", lambda key, default="": "postgresql://disposable" if key == "DATABASE_URL" else default)
+    monkeypatch.setattr(restore.sys, "argv", ["restore_database.py", str(backup), "--postgres-target", "postgresql://disposable"])
+
+    assert restore.main() == 0
+    assert calls and "--clean" not in calls[0] and "--if-exists" not in calls[0]
+
+
+def test_postgres_restore_cleanup_requires_force(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    restore = _load_script("restore_database")
+    backup = tmp_path / "reviewed.dump"
+    backup.write_bytes(b"reviewed dump")
+    manifest = _write_manifest(backup, digest=restore.verify_manifest.__globals__["_digest"](backup), size=backup.stat().st_size)
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(restore.subprocess, "run", lambda command, check=False: calls.append(command) or type("Result", (), {"returncode": 0})())
+    monkeypatch.setattr(restore.sys, "argv", ["restore_database.py", str(backup), "--postgres-target", "postgresql://disposable", "--force"])
+
+    assert restore.main() == 0
+    assert calls and "--clean" in calls[0] and "--if-exists" in calls[0]
