@@ -3,7 +3,10 @@ services:
     image: postgres:17-alpine
     container_name: aitob_postgres
     environment:
-      POSTGRES_DB: aitob
+      # Select the runtime database explicitly for cutover/recovery.  The
+      # default keeps the development database name; a reviewed deployment can
+      # point API/BOT at a separately migrated database without changing code.
+      POSTGRES_DB: ${AITOB_POSTGRES_DB:-aitob}
       POSTGRES_USER: aitob
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.production}
     ports:
@@ -12,7 +15,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U aitob -d aitob"]
+      test: ["CMD-SHELL", "pg_isready -U aitob -d ${AITOB_POSTGRES_DB:-aitob}"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -28,7 +31,7 @@ services:
     env_file:
       - .env.production
     environment:
-      DATABASE_URL: postgresql://aitob:${POSTGRES_PASSWORD}@postgres:5432/aitob
+      DATABASE_URL: postgresql://aitob:${POSTGRES_PASSWORD}@postgres:5432/${AITOB_POSTGRES_DB:-aitob}
       # Service-level encryption keys are injected from the local ignored
       # environment (or the deployment secret store); they are never stored
       # in PostgreSQL or returned by the API.
@@ -59,7 +62,7 @@ services:
     env_file:
       - .env.production
     environment:
-      DATABASE_URL: postgresql://aitob:${POSTGRES_PASSWORD}@postgres:5432/aitob
+      DATABASE_URL: postgresql://aitob:${POSTGRES_PASSWORD}@postgres:5432/${AITOB_POSTGRES_DB:-aitob}
       AITOB_INTEGRATION_MASTER_KEY: ${AITOB_INTEGRATION_MASTER_KEY:?Set AITOB_INTEGRATION_MASTER_KEY}
       AITOB_AI_SERVICE_MASTER_KEY: ${AITOB_AI_SERVICE_MASTER_KEY:?Set AITOB_AI_SERVICE_MASTER_KEY}
     volumes:
