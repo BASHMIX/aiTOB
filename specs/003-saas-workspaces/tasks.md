@@ -95,6 +95,9 @@ operational check; a rehearsal is never a cutover.
   required before this task can close. Latest isolated runs: 18/18 PG storage
   cases and 17/17 PG workspace/session cases passed (2026-09-09), including
   competing approval, reservation, Outbox, ledger and bootstrap paths.
+  The post-recovery workspace-scope and provider-recovery run passes 28/28 on
+  disposable PostgreSQL; an untyped nullable workspace predicate found there
+  was corrected to an explicit scoped clause without changing SQLite behavior.
 - [~] **T006 / FR-011** `WorkflowOutboxWorker` now marks an explicitly
   ambiguous external outcome `needs_review` and does not retry it; PG acceptance
   also proves cancellation after delivery and before completion persistence

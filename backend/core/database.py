@@ -2885,13 +2885,14 @@ async def get_open_provider_command_for_match_v2(match_id: str, action: str, wor
     """
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        scope = " AND workspace_id = ?" if workspace_id is not None else ""
+        params = (match_id, action) + ((workspace_id,) if workspace_id is not None else ())
         async with db.execute(
             """SELECT * FROM provider_command_ledger
-               WHERE set_id=? AND action=?
-                 AND (? IS NULL OR workspace_id = ?)
+               WHERE set_id=? AND action=?""" + scope + """
                  AND state IN ('pending', 'sending', 'acknowledged', 'retryable')
                ORDER BY created_at DESC LIMIT 1""",
-            (match_id, action, workspace_id, workspace_id),
+            params,
         ) as cursor:
             row = await cursor.fetchone()
     return dict(row) if row else None
