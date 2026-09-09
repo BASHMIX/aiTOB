@@ -261,8 +261,10 @@ and next-match local effects) and nine pending manual `hub_commands`, all owned 
 the migrated workspace. The only `provider_command_ledger` row is a score command
 already at `snapshot_verified`; it is not replayable. No queue row was executed,
 rewritten, or deleted, and the old database's `pg-unknown-effect` fixture remains
-isolated there. These candidate rows block blind worker resumption and require the
-T052 reconciliation procedure; they do not justify changing the external provider.
+isolated there. The reviewed rows are explicitly held by allow-list (not a global
+worker pause), so they cannot be claimed after restart while unrelated new work
+remains eligible. They remain visible for T052 reconciliation and do not justify
+changing the external provider.
 The queue rows were classified rather than treated as independent work. Four
 Outbox events target the already-complete match 471045156 and four target the
 already-in-progress match 471045157. All have zero attempts, no lease, no

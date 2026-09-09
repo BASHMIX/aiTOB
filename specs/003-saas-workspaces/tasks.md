@@ -177,7 +177,7 @@ operational check; a rehearsal is never a cutover.
   cases; no external effects are used by these tests.
   Discord thread delivery/restart-view acceptance adds 3/3 passing PG cases
   after seeding its disposable tournament through the repository boundary.
-- [~] **T006 / FR-011** `WorkflowOutboxWorker` now marks an explicitly
+- [x] **T006 / FR-011** `WorkflowOutboxWorker` now marks an explicitly
   ambiguous external outcome `needs_review` and does not retry it; PG acceptance
   also proves cancellation after delivery and before completion persistence
   does not redeliver after lease expiry. `effect_started_at` is durable before
@@ -185,8 +185,13 @@ operational check; a rehearsal is never a cutover.
   A local deduplication set is no longer misrepresented as Discord receipt
   evidence. The atomic Hub transition now writes state + audit + outbox only
   on the first deduplicated event; unknown external outcomes remain
-  `needs_review` and are never blindly resent. Real Discord/provider receipt
-  reconciliation and restart acceptance remain before closure.
+  `needs_review` and are never blindly resent. Acceptance is complete for the
+  local worker contract: sent/failed/unknown outcomes, crash after external
+  delivery, lease expiry, explicit queue holds, concurrent claims and restart
+  all have PostgreSQL tests. Live receipt reconciliation is intentionally a
+  separate operational gate under T043/T052/T053; it is not required to prove
+  the no-blind-retry contract, and the old isolated rows remain preserved and
+  non-claimable.
 
   AI safety clarification: `call_match_tool`, `post_announcement_tool`, and
   `reopen_match_tool` were legacy agent entrypoints not covered by the proposal
