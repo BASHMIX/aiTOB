@@ -29,6 +29,11 @@ services:
       - .env.production
     environment:
       DATABASE_URL: postgresql://aitob:${POSTGRES_PASSWORD}@postgres:5432/aitob
+      # Service-level encryption keys are injected from the local ignored
+      # environment (or the deployment secret store); they are never stored
+      # in PostgreSQL or returned by the API.
+      AITOB_INTEGRATION_MASTER_KEY: ${AITOB_INTEGRATION_MASTER_KEY:?Set AITOB_INTEGRATION_MASTER_KEY}
+      AITOB_AI_SERVICE_MASTER_KEY: ${AITOB_AI_SERVICE_MASTER_KEY:?Set AITOB_AI_SERVICE_MASTER_KEY}
     volumes:
       # Persist the SQLite database using a named volume
       - db_data:/app/backend/core
@@ -55,6 +60,8 @@ services:
       - .env.production
     environment:
       DATABASE_URL: postgresql://aitob:${POSTGRES_PASSWORD}@postgres:5432/aitob
+      AITOB_INTEGRATION_MASTER_KEY: ${AITOB_INTEGRATION_MASTER_KEY:?Set AITOB_INTEGRATION_MASTER_KEY}
+      AITOB_AI_SERVICE_MASTER_KEY: ${AITOB_AI_SERVICE_MASTER_KEY:?Set AITOB_AI_SERVICE_MASTER_KEY}
     volumes:
       # Share the same database and avatars as the API
       - db_data:/app/backend/core

@@ -184,6 +184,12 @@ and a fresh custom-format backup with a verified manifest was created. The
 candidate is intentionally not referenced by `.env.production`; no worker or
 external integration is pointed at it yet.
 
+Docker Compose now requires both service-level encryption keys explicitly for
+the API and bot containers. A local configuration check passed after loading
+the existing ignored development values; API and bot import smoke checks each
+reported both keys present without printing them. Containers were not started
+against the candidate because startup workers may contact providers.
+
 The configured runtime PostgreSQL database was not overwritten: a cutover
 preflight found existing schema history, two seeded stations, and one
 `workflow_outbox` row in `needs_review`, so the migration tool correctly refused

@@ -346,6 +346,10 @@ operational check; a rehearsal is never a cutover.
   ownership validation passed, all five encrypted credentials authenticated,
   and a verified candidate backup was created. Services still point to the
   original database until the pending effect and cutover pause are resolved.
+  Docker Compose now requires the two existing service-level encryption keys
+  for API and bot containers; isolated API/bot import checks confirmed both
+  values load without exposing them. The containers remain stopped for the
+  candidate until provider-contact and pending-effect gates are cleared.
 
 ## F. Migration, cutover and acceptance
 
