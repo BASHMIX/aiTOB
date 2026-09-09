@@ -212,6 +212,41 @@ def test_permission_matrix_is_explicit_and_denies_unknown_actions():
     assert permission_allowed("owner", "overlay.manage")
     assert permission_allowed("owner", "conflict.manage")
     assert {"owner", "tournament_organizer", "stream_operator", "moderator", "viewer"}.issubset(ROLE_PERMISSIONS)
+    # Match operations are intentionally split so a moderator can coordinate
+    # attendance without gaining result, DQ, station, or configuration power.
+    assert permission_allowed("moderator", "match.call")
+    assert permission_allowed("moderator", "match.ready")
+    assert permission_allowed("moderator", "conflict.manage")
+    assert not permission_allowed("moderator", "match.start")
+    assert not permission_allowed("moderator", "match.operate")
+    assert permission_allowed("stream_operator", "match.stream")
+    assert not permission_allowed("stream_operator", "match.call")
+    assert not permission_allowed("stream_operator", "result.report")
+
+
+def test_workspace_disable_refuses_inflight_work_and_revokes_after_drain(isolated_workspace_db):
+    from backend.core.workspace_auth import disable_workspace
+
+    async def verify():
+        _, owner = await authenticate_password(OWNER_EMAIL, OWNER_PASSWORD)
+        await database.upsert_active_match(
+            "disable-match", workspace_id=owner.workspace_id,
+            tournament_slug="disable-tournament", status="in_progress",
+        )
+        with pytest.raises(ValueError, match="active operations"):
+            await disable_workspace(owner)
+        await database.delete_active_match("disable-match", owner.workspace_id)
+        await disable_workspace(owner)
+        async with aiosqlite.connect(isolated_workspace_db) as db:
+            workspace = await (await db.execute("SELECT status FROM workspaces WHERE id=?", (owner.workspace_id,))).fetchone()
+            membership = await (await db.execute("SELECT status FROM workspace_memberships WHERE workspace_id=? AND user_id=?", (owner.workspace_id, owner.user_id))).fetchone()
+            audit = await (await db.execute("SELECT action, outcome FROM audit_events WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1", (owner.workspace_id,))).fetchone()
+        assert workspace[0] == "disabled"
+        assert membership[0] == "disabled"
+        assert tuple(audit) == ("workspace.disabled", "accepted")
+        assert await get_session_principal(owner.session_id) is None
+
+    run(verify())
 
 
 def test_unscoped_legacy_routes_fail_closed_for_non_owner(isolated_workspace_db: Path):
@@ -243,6 +278,38 @@ def test_password_change_revokes_other_sessions_and_reset_is_one_use(isolated_wo
             await consume_password_reset(reset, "another-password")
         assert (await authenticate_password(OWNER_EMAIL, "final-owner-password"))[0]
     run(verify())
+
+
+def test_granular_match_routes_enforce_role_boundaries(isolated_workspace_db):
+    async def add_members():
+        async with aiosqlite.connect(isolated_workspace_db) as db:
+            workspace_id = (await (await db.execute("SELECT id FROM workspaces")).fetchone())[0]
+            for role, email in (("moderator", "route-moderator@example.test"), ("stream_operator", "route-stream@example.test")):
+                user_id = str(uuid.uuid4())
+                await db.execute(
+                    "INSERT INTO users (id,email,display_name,password_hash) VALUES (?,?,?,?)",
+                    (user_id, email, role, hash_password("route-password")),
+                )
+                await db.execute(
+                    "INSERT INTO workspace_memberships (workspace_id,user_id,role) VALUES (?,?,?)",
+                    (workspace_id, user_id, role),
+                )
+            await db.commit()
+    run(add_members())
+
+    moderator = TestClient(app)
+    assert moderator.post("/api/session/login", json={"email": "route-moderator@example.test", "password": "route-password"}).status_code == 200
+    # A moderator may call/ready, but cannot submit results or change config.
+    assert moderator.post("/api/active-matches/no-such-match/call").status_code == 404
+    assert moderator.post("/api/active-matches/no-such-match/send").status_code == 403
+    assert moderator.patch("/api/active-matches/no-such-match", json={"bot_enabled": False}).status_code == 403
+
+    stream = TestClient(app)
+    assert stream.post("/api/session/login", json={"email": "route-stream@example.test", "password": "route-password"}).status_code == 200
+    # Stream operators can use stream controls, but never call or report scores.
+    assert stream.post("/api/active-matches/no-such-match/toggle-stream", json={"is_stream_match": True}).status_code == 404
+    assert stream.post("/api/active-matches/no-such-match/call").status_code == 403
+    assert stream.post("/api/active-matches/no-such-match/send").status_code == 403
 
 
 def test_email_verification_token_is_hashed_expiring_and_one_use(isolated_workspace_db):

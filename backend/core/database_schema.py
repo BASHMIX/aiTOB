@@ -666,6 +666,7 @@ TABLE_SCHEMAS = [
     '''
     CREATE TABLE IF NOT EXISTS dispatcher_dispatch_claims (
         set_id TEXT PRIMARY KEY,
+        workspace_id TEXT,
         tournament_slug TEXT NOT NULL,
         state TEXT NOT NULL CHECK(state IN ('claimed', 'queued', 'cancelled')),
         claimed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

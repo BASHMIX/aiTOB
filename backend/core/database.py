@@ -366,14 +366,18 @@ async def unlink_tournament_entrant(tournament_slug: str, entrant_id: str, works
         await db.commit()
     return True
 
-async def get_all_tournament_slugs() -> list[str]:
-    """Return the slugs of all tournaments currently tracked in the DB."""
+async def get_all_tournament_slugs(workspace_id: str | None = None) -> list[str]:
+    """Return tracked tournament slugs, optionally limited to one workspace."""
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT slug FROM tournaments") as cursor:
+        query, params = "SELECT slug FROM tournaments", []
+        if workspace_id is not None:
+            query += " WHERE workspace_id = ?"
+            params.append(workspace_id)
+        async with db.execute(query, params) as cursor:
             return [row[0] for row in await cursor.fetchall()]
 
 
-async def sync_player_cfns_to_matches(discord_id: str):
+async def sync_player_cfns_to_matches(discord_id: str, workspace_id: str | None = None):
     """Copy a player's cfn_id from the players table into any active matches they appear in.
 
     Called after cfn_id is written (either at verify-confirm from start.gg or via the
@@ -381,20 +385,22 @@ async def sync_player_cfns_to_matches(discord_id: str):
     requiring a full bracket re-sync.
     """
     async with aiosqlite.connect(DB_PATH) as db:
+        scope = " AND workspace_id = ?" if workspace_id is not None else ""
+        scope_params = (workspace_id,) if workspace_id is not None else ()
         await db.execute(
             "UPDATE active_matches SET p1_cfn = (SELECT cfn_id FROM players WHERE discord_id = ?) "
-            "WHERE p1_discord = ?",
-            (discord_id, discord_id),
+            "WHERE p1_discord = ?" + scope,
+            (discord_id, discord_id) + scope_params,
         )
         await db.execute(
             "UPDATE active_matches SET p2_cfn = (SELECT cfn_id FROM players WHERE discord_id = ?) "
-            "WHERE p2_discord = ?",
-            (discord_id, discord_id),
+            "WHERE p2_discord = ?" + scope,
+            (discord_id, discord_id) + scope_params,
         )
         await db.commit()
 
 
-async def get_verified_players_missing_avatar() -> list[dict]:
+async def get_verified_players_missing_avatar(workspace_id: str | None = None) -> list[dict]:
     """Verified players who still have no broadcast avatar on file.
 
     Backs the Hub AI 'remind players to upload avatars' tool. Returns the
@@ -402,11 +408,14 @@ async def get_verified_players_missing_avatar() -> list[dict]:
     """
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT discord_id, startgg_id, gamer_tag, preferred_language "
-            "FROM players "
-            "WHERE is_verified = TRUE AND (avatar_path IS NULL OR avatar_path = '')"
-        ) as cursor:
+        query = ("SELECT discord_id, startgg_id, gamer_tag, preferred_language "
+                 "FROM players WHERE is_verified = TRUE "
+                 "AND (avatar_path IS NULL OR avatar_path = '')")
+        params: list = []
+        if workspace_id is not None:
+            query += " AND workspace_id = ?"
+            params.append(workspace_id)
+        async with db.execute(query, params) as cursor:
             return [dict(r) for r in await cursor.fetchall()]
 
 
@@ -624,7 +633,7 @@ async def list_media_assets(workspace_id: str) -> list[dict]:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             """SELECT id, workspace_id, asset_type, owner_type, owner_id,
-                      storage_url, mime_type, byte_size, width, height,
+                      storage_url, storage_key, mime_type, byte_size, width, height,
                       created_at
                  FROM media_assets
                 WHERE workspace_id = ? AND deleted_at IS NULL
@@ -1491,7 +1500,7 @@ async def get_active_match(set_id: str, workspace_id: str | None = None):
             row = await cursor.fetchone()
             return dict(row) if row else None
 
-async def get_active_match_by_thread(discord_thread_id: str):
+async def get_active_match_by_thread(discord_thread_id: str, workspace_id: str | None = None):
     """Resolve the active match owning a Discord match thread.
 
     The AI referee receives a thread/channel id, not a start.gg set id. Looking
@@ -1502,10 +1511,11 @@ async def get_active_match_by_thread(discord_thread_id: str):
         return None
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT * FROM active_matches WHERE discord_thread_id = ?",
-            (str(discord_thread_id),),
-        ) as cursor:
+        query, params = "SELECT * FROM active_matches WHERE discord_thread_id = ?", [str(discord_thread_id)]
+        if workspace_id is not None:
+            query += " AND workspace_id = ?"
+            params.append(workspace_id)
+        async with db.execute(query, params) as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else None
 
@@ -1583,9 +1593,13 @@ async def upsert_active_match(set_id: str, workspace_id: str | None = None, **kw
             await db.execute(f"INSERT INTO active_matches ({cols}) VALUES ({placeholders})", list(filtered_kwargs.values()))
         await db.commit()
 
-async def delete_active_match(set_id: str):
+async def delete_active_match(set_id: str, workspace_id: str | None = None):
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("DELETE FROM active_matches WHERE set_id = ?", (set_id,))
+        query, params = "DELETE FROM active_matches WHERE set_id = ?", [set_id]
+        if workspace_id is not None:
+            query += " AND workspace_id = ?"
+            params.append(workspace_id)
+        await db.execute(query, params)
         await db.commit()
 
 
@@ -1608,32 +1622,36 @@ _AUTO_ADD_STATES = {
 }
 
 
-async def _preload_sync_data(db, tournament_slug: str):
+async def _preload_sync_data(db, tournament_slug: str, workspace_id: str | None = None):
+    scope = " AND workspace_id = ?" if workspace_id is not None else ""
+    scope_params = (workspace_id,) if workspace_id is not None else ()
     async with db.execute(
-        "SELECT bot_manage_limit, check_in_source FROM tournaments WHERE slug = ?",
-        (tournament_slug,),
+        "SELECT bot_manage_limit, check_in_source FROM tournaments WHERE slug = ?" + scope,
+        (tournament_slug,) + scope_params,
     ) as t_cursor:
         t_row = await t_cursor.fetchone()
         bot_manage_limit = t_row[0] if t_row else "off"
         check_in_source = (t_row[1] if t_row and t_row[1] else "discord")
 
-    async with db.execute("SELECT set_id, status FROM active_matches WHERE tournament_slug = ?", (tournament_slug,)) as cursor:
+    async with db.execute("SELECT set_id, status FROM active_matches WHERE tournament_slug = ?" + scope, (tournament_slug,) + scope_params) as cursor:
         rows = await cursor.fetchall()
         local_matches = {row[0]: row[1] for row in rows}
 
     async with db.execute(
-        "SELECT set_id, stream_id FROM planned_streams WHERE tournament_slug = ?",
-        (tournament_slug,)
+        "SELECT set_id, stream_id FROM planned_streams WHERE tournament_slug = ?" + scope,
+        (tournament_slug,) + scope_params
     ) as cursor:
         planned = {row[0]: row[1] for row in await cursor.fetchall()}
 
     async with db.execute(
         "SELECT id, startgg_stream_id FROM stations WHERE startgg_stream_id IS NOT NULL AND startgg_stream_id != ''"
+        + (" AND workspace_id = ?" if workspace_id is not None else ""), scope_params
     ) as cursor:
         station_by_stream = {row[1]: row[0] for row in await cursor.fetchall()}
 
     async with db.execute(
         "SELECT startgg_id, discord_id FROM players WHERE startgg_id IS NOT NULL AND startgg_id != ''"
+        + (" AND workspace_id = ?" if workspace_id is not None else ""), scope_params
     ) as cursor:
         discord_by_startgg = {str(row[0]): str(row[1]) for row in await cursor.fetchall()}
 
@@ -1643,6 +1661,7 @@ async def _preload_sync_data(db, tournament_slug: str):
         "SELECT startgg_id, avatar_path FROM players "
         "WHERE startgg_id IS NOT NULL AND startgg_id != '' "
         "AND avatar_path IS NOT NULL AND avatar_path != ''"
+        + (" AND workspace_id = ?" if workspace_id is not None else ""), scope_params
     ) as cursor:
         avatar_by_startgg = {str(row[0]): str(row[1]) for row in await cursor.fetchall()}
 
@@ -1650,8 +1669,8 @@ async def _preload_sync_data(db, tournament_slug: str):
         """SELECT l.entrant_id, l.player_discord_id, p.avatar_path
            FROM tournament_player_links l
            LEFT JOIN players p ON p.discord_id = l.player_discord_id
-           WHERE l.tournament_slug = ?""",
-        (tournament_slug,),
+           WHERE l.tournament_slug = ?""" + (" AND l.workspace_id = ?" if workspace_id is not None else ""),
+        (tournament_slug,) + scope_params,
     ) as cursor:
         explicit_links = {
             str(row[0]): {"discord_id": str(row[1]), "avatar_path": row[2]}
@@ -1663,7 +1682,7 @@ async def _preload_sync_data(db, tournament_slug: str):
 async def _update_existing_match(
     db, sid, ps, local_status, provider_status, planned, station_by_stream, discord_by_startgg,
     p1_name, p2_name, p1_avatar, p2_avatar, p1_eid, p2_eid, round_name, match_num, phase_group,
-    check_in_source='discord', explicit_links=None,
+    check_in_source='discord', explicit_links=None, workspace_id: str | None = None,
 ):
     """Reconcile one existing match against the provider state. Returns a list of hub
     commands the CALLER must enqueue AFTER commit (enqueuing mid-transaction would risk a
@@ -1695,6 +1714,8 @@ async def _update_existing_match(
     p2_link = explicit_links.get(str(p2_eid))
     p2_discord = p2_link["discord_id"] if p2_link else (discord_by_startgg.get(str(uid2)) if uid2 else None)
 
+    match_scope = " AND workspace_id = ?" if workspace_id is not None else ""
+    match_scope_params = (workspace_id,) if workspace_id is not None else ()
     await db.execute(f"""
         UPDATE active_matches SET
             p1_name=?, p2_name=?, p1_avatar=?, p2_avatar=?,
@@ -1704,25 +1725,25 @@ async def _update_existing_match(
             p2_discord=COALESCE(NULLIF(p2_discord,''), ?),
             round_name=?, match_number=?, phase_group=?,
             event_id=?, event_name=?, status=?{', p1_score = 0, p2_score = 0' if reset_scores else ''}
-        WHERE set_id=?
+        WHERE set_id=?{match_scope}
     """, (p1_name, p2_name, p1_avatar, p2_avatar,
            p1_eid, p2_eid,
            p1_discord, p2_discord,
            round_name, match_num, str(phase_group),
-           ps.event_id or "", ps.event_name or "", new_status, sid))
+           ps.event_id or "", ps.event_name or "", new_status, sid) + match_scope_params)
 
     if sid in planned:
         preferred_stream = planned.get(sid)
         if preferred_stream and preferred_stream in station_by_stream:
             await db.execute(
                 "UPDATE active_matches SET is_stream_match = TRUE, "
-                "station_id = COALESCE(station_id, ?) WHERE set_id = ?",
-                (station_by_stream[preferred_stream], sid)
+                "station_id = COALESCE(station_id, ?) WHERE set_id = ?" + match_scope,
+                (station_by_stream[preferred_stream], sid) + match_scope_params
             )
         else:
             await db.execute(
-                "UPDATE active_matches SET is_stream_match = TRUE WHERE set_id = ?",
-                (sid,)
+                "UPDATE active_matches SET is_stream_match = TRUE WHERE set_id = ?" + match_scope,
+                (sid,) + match_scope_params
             )
 
     # ── start.gg-mode edge-triggered side-effects ─────────────────────────
@@ -1732,20 +1753,20 @@ async def _update_existing_match(
     if check_in_source == 'startgg' and new_status != local_status:
         if local_status == 'called' and new_status == 'in_progress':
             await db.execute(
-                "UPDATE active_matches SET started_at = ? WHERE set_id = ?",
-                (datetime.datetime.utcnow().isoformat(), sid),
+                "UPDATE active_matches SET started_at = ? WHERE set_id = ?" + match_scope,
+                (datetime.datetime.utcnow().isoformat(), sid) + match_scope_params,
             )
             # The bot handler binds a stream station (if applicable) and DMs lobby creds.
             pending_cmds.append(f"startgg_go_live {sid}")
         elif new_status == 'complete' and local_status not in ('complete', 'dq'):
             # Free any bound stream station the instant the match resolves on start.gg.
             await db.execute(
-                "UPDATE active_matches SET station_id = NULL WHERE set_id = ?", (sid,)
+                "UPDATE active_matches SET station_id = NULL WHERE set_id = ?" + match_scope, (sid,) + match_scope_params
             )
             # Pass the thread id explicitly so the archive still works even if a later
             # orphan-sweep deletes the row before the bot drains the command.
             async with db.execute(
-                "SELECT discord_thread_id FROM active_matches WHERE set_id = ?", (sid,)
+                "SELECT discord_thread_id FROM active_matches WHERE set_id = ?" + match_scope, (sid,) + match_scope_params
             ) as c:
                 row = await c.fetchone()
             thread_id = row[0] if row and row[0] else ""
@@ -1756,7 +1777,8 @@ async def _update_existing_match(
 
 async def _insert_new_match(
     db, sid, ps, tournament_slug, bot_manage_limit, planned, station_by_stream, discord_by_startgg,
-    p1_name, p2_name, p1_avatar, p2_avatar, p1_eid, p2_eid, round_name, match_num, phase_group, explicit_links=None
+    p1_name, p2_name, p1_avatar, p2_avatar, p1_eid, p2_eid, round_name, match_num, phase_group, explicit_links=None,
+    workspace_id: str | None = None,
 ):
     should_add = ps.state in _AUTO_ADD_STATES or sid in planned
     if should_add:
@@ -1777,19 +1799,22 @@ async def _insert_new_match(
         p2_link = explicit_links.get(str(p2_eid))
         p2_discord = p2_link["discord_id"] if p2_link else (discord_by_startgg.get(str(uid2)) if uid2 else None)
 
-        await db.execute("""
+        workspace_column = ", workspace_id" if workspace_id is not None else ""
+        workspace_value = ", ?" if workspace_id is not None else ""
+        await db.execute(f"""
             INSERT INTO active_matches (
                 set_id, tournament_slug, event_id, event_name, p1_name, p2_name, p1_avatar, p2_avatar,
                 p1_entrant_id, p2_entrant_id, p1_discord, p2_discord,
                 round_name, match_number, phase_group,
-                status, bot_enabled, is_stream_match, station_id, provider_set_id, provider_state
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                status, bot_enabled, is_stream_match, station_id, provider_set_id, provider_state{workspace_column}
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?{workspace_value})
         """, (sid, tournament_slug, ps.event_id or "", ps.event_name or "", p1_name, p2_name, p1_avatar, p2_avatar,
                p1_eid, p2_eid, p1_discord, p2_discord,
                round_name, match_num, str(phase_group),
-               new_status, bot_enabled, is_stream, station_id, str(ps.id).split(":")[-1], str(ps.state)))
+               new_status, bot_enabled, is_stream, station_id, str(ps.id).split(":")[-1], str(ps.state)
+               ) + ((workspace_id,) if workspace_id is not None else ()))
 
-async def sync_active_matches(tournament_slug: str, provider_sets: list[ProviderSet]):
+async def sync_active_matches(tournament_slug: str, provider_sets: list[ProviderSet], workspace_id: str | None = None):
     """
     Synchronizes local active_matches with provider-agnostic ProviderSet objects.
     Source of Truth: provider — provider complete state always wins for terminal states.
@@ -1798,7 +1823,7 @@ async def sync_active_matches(tournament_slug: str, provider_sets: list[Provider
     is_stream_match=TRUE and (if a stream_id is set) a matching station assigned.
     """
     async with aiosqlite.connect(DB_PATH) as db:
-        bot_manage_limit, check_in_source, local_matches, planned, station_by_stream, discord_by_startgg, avatar_by_startgg, explicit_links = await _preload_sync_data(db, tournament_slug)
+        bot_manage_limit, check_in_source, local_matches, planned, station_by_stream, discord_by_startgg, avatar_by_startgg, explicit_links = await _preload_sync_data(db, tournament_slug, workspace_id)
 
         found_sids = set()
         # Hub commands to enqueue AFTER commit (enqueuing mid-transaction risks a
@@ -1844,7 +1869,7 @@ async def sync_active_matches(tournament_slug: str, provider_sets: list[Provider
                 cmds = await _update_existing_match(
                     db, sid, ps, local_status, provider_status, planned, station_by_stream, discord_by_startgg,
                     p1_name, p2_name, p1_avatar, p2_avatar, p1_eid, p2_eid, round_name, match_num, phase_group,
-                    check_in_source=check_in_source, explicit_links=explicit_links,
+                    check_in_source=check_in_source, explicit_links=explicit_links, workspace_id=workspace_id,
                 )
                 if cmds:
                     pending_cmds.extend(cmds)
@@ -1852,7 +1877,7 @@ async def sync_active_matches(tournament_slug: str, provider_sets: list[Provider
                 await _insert_new_match(
                     db, sid, ps, tournament_slug, bot_manage_limit, planned, station_by_stream, discord_by_startgg,
                     p1_name, p2_name, p1_avatar, p2_avatar, p1_eid, p2_eid, round_name, match_num, phase_group,
-                    explicit_links=explicit_links,
+                    explicit_links=explicit_links, workspace_id=workspace_id,
                 )
 
         # Remove orphans — since provider.fetch_sets retrieves all paginated sets, orphan list is complete
@@ -1867,14 +1892,15 @@ async def sync_active_matches(tournament_slug: str, provider_sets: list[Provider
                 for sid in orphan_sids:
                     if local_matches.get(sid) in ('called', 'in_progress'):
                         async with db.execute(
-                            "SELECT discord_thread_id FROM active_matches WHERE set_id = ?", (sid,)
+                            "SELECT discord_thread_id FROM active_matches WHERE set_id = ?" + (" AND workspace_id=?" if workspace_id is not None else ""), (sid,) + ((workspace_id,) if workspace_id is not None else ())
                         ) as c:
                             row = await c.fetchone()
                         thread_id = row[0] if row and row[0] else ""
                         if thread_id:
                             pending_cmds.append(f"startgg_finish {sid} {thread_id}")
             await db.executemany(
-                "DELETE FROM active_matches WHERE set_id = ?", [(sid,) for sid in orphan_sids]
+                "DELETE FROM active_matches WHERE set_id = ?" + (" AND workspace_id=?" if workspace_id is not None else ""),
+                [(sid,) + ((workspace_id,) if workspace_id is not None else ()) for sid in orphan_sids]
             )
 
         await db.commit()
@@ -1882,7 +1908,14 @@ async def sync_active_matches(tournament_slug: str, provider_sets: list[Provider
     # Enqueue Discord side-effect commands now the transaction is committed and the
     # write-lock released. add_hub_command nudges the bot to drain immediately.
     for cmd in pending_cmds:
-        await add_hub_command(cmd)
+        # Provider workers carry the durable tournament owner into the command
+        # queue.  A command without this context could be consumed by another
+        # tenant when set IDs overlap; legacy unowned fixtures retain the old
+        # hook for compatibility.
+        if workspace_id is not None:
+            await add_hub_command(cmd, workspace_id=workspace_id)
+        else:
+            await add_hub_command(cmd)
 
 async def delete_tournament_active_matches(slug: str):
     """Wipes all local active matches for a specific tournament."""
@@ -1890,10 +1923,14 @@ async def delete_tournament_active_matches(slug: str):
         await db.execute("DELETE FROM active_matches WHERE tournament_slug = ?", (slug,))
         await db.commit()
 
-async def delete_active_match(set_id: str):
-    """Deletes a single active match from the local database."""
+async def delete_active_match(set_id: str, workspace_id: str | None = None):
+    """Deletes a single active match, never crossing a supplied workspace."""
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("DELETE FROM active_matches WHERE set_id = ?", (set_id,))
+        query, params = "DELETE FROM active_matches WHERE set_id = ?", [set_id]
+        if workspace_id is not None:
+            query += " AND workspace_id = ?"
+            params.append(workspace_id)
+        await db.execute(query, params)
         await db.commit()
 
 
@@ -2573,13 +2610,15 @@ def should_bot_manage_match(round_name: str, phase_group: str, limit_setting: st
         
     return True
 
-async def get_player_in_progress_match(discord_id: str):
+async def get_player_in_progress_match(discord_id: str, workspace_id: str | None = None):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT * FROM active_matches WHERE status = 'in_progress' AND (p1_discord = ? OR p2_discord = ?)",
-            (discord_id, discord_id)
-        ) as cursor:
+        query = "SELECT * FROM active_matches WHERE status = 'in_progress' AND (p1_discord = ? OR p2_discord = ?)"
+        params: list = [discord_id, discord_id]
+        if workspace_id is not None:
+            query += " AND workspace_id = ?"
+            params.append(workspace_id)
+        async with db.execute(query, params) as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else None
 
@@ -2650,7 +2689,7 @@ async def record_dispatcher_decision(
         await db.commit()
 
 
-async def claim_dispatcher_match(set_id: str, tournament_slug: str) -> bool:
+async def claim_dispatcher_match(set_id: str, tournament_slug: str, workspace_id: str | None = None) -> bool:
     """Atomically claim a selected match while the dispatcher master is on.
 
     A stale claim can be reclaimed after two minutes. A queued/cancelled claim
@@ -2667,16 +2706,20 @@ async def claim_dispatcher_match(set_id: str, tournament_slug: str) -> bool:
             return False
         stale_claim_clause = "CURRENT_TIMESTAMP - INTERVAL '2 minutes'" if is_postgres() else "datetime('now', '-2 minutes')"
         cursor = await db.execute(
-            f"""INSERT INTO dispatcher_dispatch_claims (set_id, tournament_slug, state)
-               VALUES (?, ?, 'claimed')
+            f"""INSERT INTO dispatcher_dispatch_claims (set_id, workspace_id, tournament_slug, state)
+               VALUES (?, ?, ?, 'claimed')
                ON CONFLICT(set_id) DO UPDATE SET
+                   workspace_id=excluded.workspace_id,
                    tournament_slug=excluded.tournament_slug,
                    state='claimed',
                    claimed_at=CURRENT_TIMESTAMP,
                    updated_at=CURRENT_TIMESTAMP
-               WHERE dispatcher_dispatch_claims.state='claimed'
+               WHERE (dispatcher_dispatch_claims.workspace_id IS NULL
+                      OR excluded.workspace_id IS NULL
+                      OR dispatcher_dispatch_claims.workspace_id=excluded.workspace_id)
+                 AND dispatcher_dispatch_claims.state='claimed'
                  AND dispatcher_dispatch_claims.claimed_at < {stale_claim_clause}""",
-            (set_id, tournament_slug),
+            (set_id, workspace_id, tournament_slug),
         )
         claimed = cursor.rowcount == 1
         if claimed:
@@ -2686,7 +2729,7 @@ async def claim_dispatcher_match(set_id: str, tournament_slug: str) -> bool:
     return claimed
 
 
-async def dispatcher_claim_is_active(set_id: str) -> bool:
+async def dispatcher_claim_is_active(set_id: str, workspace_id: str | None = None) -> bool:
     """Check the global and tournament switches immediately before local Call.
 
     This second check closes the gap between policy selection and Hub workflow
@@ -2700,26 +2743,33 @@ async def dispatcher_claim_is_active(set_id: str) -> bool:
                JOIN tournaments t ON t.slug=c.tournament_slug
                JOIN global_settings s ON s.key='auto_dispatch_master_switch'
                WHERE c.set_id=? AND c.state='claimed'
+                 AND (? IS NULL OR c.workspace_id=? )
+                 AND (? IS NULL OR t.workspace_id=? )
                  AND lower(s.value)='on'
                  AND COALESCE(t.auto_dispatch_enabled, 0)=1""",
-            (set_id,),
+            (set_id, workspace_id, workspace_id, workspace_id, workspace_id),
         ) as cursor:
             return await cursor.fetchone() is not None
 
 
-async def mark_dispatcher_claim_queued(set_id: str) -> None:
+async def mark_dispatcher_claim_queued(set_id: str, workspace_id: str | None = None) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "UPDATE dispatcher_dispatch_claims SET state='queued', updated_at=CURRENT_TIMESTAMP "
-            "WHERE set_id=? AND state='claimed'",
-            (set_id,),
+            "WHERE set_id=? AND state='claimed'" + (" AND workspace_id=?" if workspace_id is not None else ""),
+            (set_id,) + ((workspace_id,) if workspace_id is not None else ()),
         )
         await db.commit()
 
 
-async def release_dispatcher_claim(set_id: str) -> None:
+async def release_dispatcher_claim(set_id: str, workspace_id: str | None = None) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("DELETE FROM dispatcher_dispatch_claims WHERE set_id=? AND state='claimed'", (set_id,))
+        query = "DELETE FROM dispatcher_dispatch_claims WHERE set_id=? AND state='claimed'"
+        params: list = [set_id]
+        if workspace_id is not None:
+            query += " AND workspace_id=?"
+            params.append(workspace_id)
+        await db.execute(query, params)
         await db.commit()
 
 

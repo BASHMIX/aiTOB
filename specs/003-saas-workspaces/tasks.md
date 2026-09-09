@@ -47,15 +47,16 @@ operational check; a rehearsal is never a cutover.
   Remaining runtime inventory to close before cutover (each must use the
   PostgreSQL repository boundary and a trusted workspace context):
   `backend/api/routers/settings.py` (`api_get_settings`, `api_patch_settings`,
-  `api_get_env`, `api_patch_env`, `api_trigger_token_check`) still reads/writes
-  global settings/connections through the owner-password bridge; acceptance:
-  `test_integration_accounts.py` plus a two-workspace HTTP denial test.
-  `backend/api/routers/hub.py` (`api_get_feed`, `api_clear_feed`,
-  `api_bot_command`, `api_get_status`, `api_reload_workflows`) still exposes
-  global status and legacy command queue; feed read/clear and manual queue writes
-  now carry the authenticated workspace (with `bot_feed.workspace_id` added to
-  fresh schema and legacy backfill), covered by
-  `test_bot_feed_workspace_scope.py`; remaining status/worker scope acceptance:
+  `api_get_env`, `api_patch_env`, `api_trigger_token_check`) now has a narrow
+  `require_global_settings_admin` gate: only the platform administrator may
+  access service-global settings/connections, preventing an unrelated workspace
+  Owner from reading them. Integration account data remains workspace-scoped;
+  final removal of the legacy global storage bridge is still pending.
+  `backend/api/routers/hub.py` feed read/clear and manual queue writes carry the
+  authenticated workspace (with `bot_feed.workspace_id` added to fresh schema
+  and legacy backfill), covered by `test_bot_feed_workspace_scope.py`. Global
+  status, workflow reload and Dispatcher master operations are now restricted to
+  the platform administrator; remaining status/worker scope acceptance is in
   `test_event_scoping.py`, `test_dispatch_event_scoping.py`, and a worker
   workspace-claim test.
   `backend/api/routers/tournaments.py` list/import paths remain in the staged
@@ -65,9 +66,12 @@ operational check; a rehearsal is never a cutover.
   `backend/api/routers/planned_streams.py` now passes workspace ownership to
   stream repositories; station/stream collision acceptance remains in
   `test_station_stream_coupling.py`.
-  `backend/bot/main.py` (`get_all_tournament_slugs`, `get_tournaments`, feed
-  and settings helpers) still enumerates all organizations; acceptance:
-  isolated bot worker context tests with a durable workspace id.
+  `backend/bot/main.py` CFN lookup now enumerates only the durable owner
+  workspace when the Discord identity is already owned; `registration.py` also
+  scopes CFN propagation. `test_worker_workspace_scope.py` proves enumeration
+  and CFN writes cannot update the other workspace. Remaining bot task contexts
+  without a durable owner (initial registration and service heartbeats) remain
+  explicitly platform/global until the worker identity migration is complete.
   `backend/core/database.py` legacy repository functions around stations,
   active_matches, settings and connections remain compatibility callers;
   acceptance is a repository import scan plus PostgreSQL concurrency tests,
@@ -140,20 +144,25 @@ operational check; a rehearsal is never a cutover.
   WebSocket hub/overlay paths now derive workspace from trusted session or
   revocable overlay token; worker claims carry durable workspace IDs and
   re-check ownership before effects. Two-workspace station/command/overlay
-  collision tests pass. Remaining legacy routes (settings/players/hub) still
-  use the owner-only compatibility bridge until their repositories are fully
-  scoped. Player reads/creation, entrant links, player overrides and conflict
-  resolution now derive workspace from the authenticated session. Legacy
-  unowned rows are not exposed to a tenant session. MatchCommandService and
-  Discord Ready/Outbox handling now carry the durable match workspace into
-  provider, tournament, station and command lookups; broad bot enumeration and
-  remaining legacy Hub/settings paths still need conversion.
+  collision tests pass. Player reads/creation, entrant links, player overrides
+  and conflict resolution derive workspace from the authenticated session.
+  Settings and global Hub controls now use a platform-admin-only gate rather
+  than exposing global records to an arbitrary workspace Owner; Hub feed and
+  manual queue paths carry the session workspace. Legacy unowned rows are not
+  exposed to a tenant session. MatchCommandService and Discord Ready/Outbox
+  handling now carry the durable match workspace into provider, tournament,
+  station and command lookups. Remaining work is to remove the compatibility
+  bridge after repository parity and finish unowned bot service-heartbeat /
+  initial-registration contexts.
 - [~] **T023 / FR-006** Integration account/destination lookup and credential
   rotation now require an explicit workspace in API paths; the legacy `admin`
   integration ownership marker was normalized during Owner backfill. Unit tests
-  prove cross-workspace lookup/rotation rejection. Scope provider budgets,
-  caches, commands and bot task contexts next; then remove the temporary
-  all-account bot enumeration.
+  prove cross-workspace lookup/rotation rejection. Dispatcher claims now carry
+  a durable workspace ID and scoped claim/queue/release checks; bot CFN
+  enumeration and propagation are scoped to the trusted owner workspace.
+  Provider budgets/caches and remaining global bot service contexts still need
+  explicit tenant ownership before the temporary compatibility enumeration is
+  removed.
 
 ## D. Integrations, assets and overlays
 

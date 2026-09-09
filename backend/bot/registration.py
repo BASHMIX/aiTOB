@@ -190,9 +190,11 @@ class RegistrationManager:
         if not cfn_id or len(cfn_id) < 3:
             await message.channel.send(get_msg("cfn_post_verify_prompt", lang))
             return
-        await create_or_update_player(discord_id, cfn_id=cfn_id)
-        await sync_player_cfns_to_matches(discord_id)
         player = await get_player(discord_id)
+        workspace_id = (player or {}).get("workspace_id")
+        await create_or_update_player(discord_id, workspace_id=workspace_id, cfn_id=cfn_id)
+        await sync_player_cfns_to_matches(discord_id, workspace_id)
+        player = await get_player(discord_id, workspace_id)
         gamer_tag = (player or {}).get("gamer_tag")
         await finalize_verification(discord_id, gamer_tag, avatar_path=None)
         await message.channel.send(get_msg("reg_complete", lang))

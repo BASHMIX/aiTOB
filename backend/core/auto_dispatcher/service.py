@@ -98,7 +98,10 @@ class AutoDispatcherService:
             if recheck:
                 await self._record([recheck])
             return
-        if not await database.claim_dispatcher_match(selected.set_id, selected.tournament_slug):
+        claim = (await database.claim_dispatcher_match(selected.set_id, selected.tournament_slug, workspace_id)
+                 if workspace_id is not None
+                 else await database.claim_dispatcher_match(selected.set_id, selected.tournament_slug))
+        if not claim:
             await self._record([DispatchDecision(
                 selected.tournament_slug, selected.event_id, selected.set_id, "blocked", "dispatch_claimed",
                 "Another dispatcher cycle or the Kill Switch prevented this automatic Call.",
@@ -108,7 +111,10 @@ class AutoDispatcherService:
         queued = False
         try:
             # Covers either switch changing after selection and before workflow entry.
-            if not await database.dispatcher_claim_is_active(selected.set_id):
+            claim_active = (await database.dispatcher_claim_is_active(selected.set_id, workspace_id)
+                            if workspace_id is not None
+                            else await database.dispatcher_claim_is_active(selected.set_id))
+            if not claim_active:
                 await self._record([DispatchDecision(
                     selected.tournament_slug, selected.event_id, selected.set_id, "blocked", "dispatch_stopped",
                     "The tournament dispatcher or global Kill Switch was turned off before the Call started.",
@@ -123,13 +129,19 @@ class AutoDispatcherService:
                     workspace_id=workspace_id,
                 )])
                 return
-            await database.mark_dispatcher_claim_queued(selected.set_id)
+            if workspace_id is not None:
+                await database.mark_dispatcher_claim_queued(selected.set_id, workspace_id)
+            else:
+                await database.mark_dispatcher_claim_queued(selected.set_id)
             queued = True
         finally:
             # A failed/prevented call may be evaluated again; a queued call keeps
             # its durable claim until the Kill Switch cancels pending work.
             if not queued:
-                await database.release_dispatcher_claim(selected.set_id)
+                if workspace_id is not None:
+                    await database.release_dispatcher_claim(selected.set_id, workspace_id)
+                else:
+                    await database.release_dispatcher_claim(selected.set_id)
 
     @staticmethod
     async def _record(decisions: list[DispatchDecision]) -> None:

@@ -1,6 +1,7 @@
 import os, json
 import logging
 import asyncio
+import re
 from fastapi import FastAPI, Header, Request, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,6 +36,24 @@ from backend.api.routers.session import router as session_router
 load_dotenv()
 logger = logging.getLogger("aitob.api")
 _background_tasks: set[asyncio.Task] = set()
+
+
+_ERROR_SECRET_RE = re.compile(
+    r"(?i)(\b(?:token|secret|password|api[_-]?key|authorization|cookie|dsn)\b\s*[:=]\s*)([^\s,;]+)"
+)
+_ERROR_PATH_RE = re.compile(r"(?i)(?:[A-Za-z]:\\|/Users/|/home/|/var/|/tmp/)[^\s,;]+")
+
+
+def _safe_error_detail(detail) -> str | dict | list:
+    """Redact credentials and local paths before HTTPException serialization."""
+    if isinstance(detail, dict):
+        return {str(key): _safe_error_detail(value) for key, value in detail.items()}
+    if isinstance(detail, list):
+        return [_safe_error_detail(value) for value in detail]
+    text = str(detail)
+    text = _ERROR_SECRET_RE.sub(r"\1[REDACTED]", text)
+    text = _ERROR_PATH_RE.sub("[REDACTED_PATH]", text)
+    return text[:1000]
 
 
 def _start_background(coroutine):
@@ -109,7 +128,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     return JSONResponse(
         status_code=exc.status_code,
-        content={"error": True, "message": exc.detail}
+        content={"error": True, "message": _safe_error_detail(exc.detail)}
     )
 
 @app.exception_handler(RequestValidationError)
@@ -446,8 +465,11 @@ async def readiness_check():
     """A redacted internal readiness signal: no DSN/provider credentials leak."""
     try:
         require_runtime_database()
-        from backend.core.database import aiosqlite, DB_PATH
-        async with aiosqlite.connect(DB_PATH) as db:
+        # Readiness must use the same storage transport as every runtime path;
+        # importing the legacy database connector here could accidentally probe
+        # SQLite while the API is configured for PostgreSQL.
+        from backend.core.storage import dbapi
+        async with dbapi.connect() as db:
             await db.execute("SELECT 1")
         return {"status": "ready", "database": "postgresql"}
     except Exception:

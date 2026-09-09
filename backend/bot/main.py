@@ -490,7 +490,10 @@ async def verify_confirm_command(interaction: discord.Interaction):
     cfn_from_sgg: str | None = None
     try:
         from core.database import get_all_tournament_slugs
-        slugs = await get_all_tournament_slugs()
+        # Registration is a bot worker operation, not an HTTP request.  If the
+        # Discord identity is already owned, keep the CFN lookup inside that
+        # durable workspace; never enumerate another tenant's tournaments.
+        slugs = await get_all_tournament_slugs((existing_player or {}).get("workspace_id"))
         if slugs:
             cfn_from_sgg = await sgg.fetch_user_cfn(sgg_user_id, slugs)
     except Exception as _cfn_err:
@@ -509,7 +512,7 @@ async def verify_confirm_command(interaction: discord.Interaction):
     await create_or_update_player(discord_id=discord_id, **player_fields)
     if cfn_from_sgg:
         from core.database import sync_player_cfns_to_matches
-        await sync_player_cfns_to_matches(discord_id)
+        await sync_player_cfns_to_matches(discord_id, (existing_player or {}).get("workspace_id"))
     await delete_pending_verification(discord_id)
     await add_bot_feed(
         f"🔗 Bio-code matched: Discord <{discord_id}> ↔ start.gg user {sgg_user_id} "

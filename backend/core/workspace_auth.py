@@ -28,17 +28,20 @@ ROLE_PERMISSIONS: Final[dict[str, frozenset[str]]] = {
     "owner": frozenset({
         "workspace.read", "workspace.manage", "settings.manage",
         "integrations.manage", "tournament.manage", "match.operate",
+        "match.call", "match.ready", "match.start", "match.stream", "stream.manage",
         "result.report", "dq.manual", "proposal.review",
         "station.manage", "overlay.manage", "conflict.manage",
     }),
-    "tournament_organizer": frozenset({"workspace.read", "settings.manage", "tournament.manage", "match.operate", "result.report", "dq.manual", "proposal.review"}),
-    "stream_operator": frozenset({"workspace.read", "station.manage", "overlay.manage"}),
-    "moderator": frozenset({"workspace.read", "match.operate", "conflict.manage"}),
+    "tournament_organizer": frozenset({"workspace.read", "settings.manage", "tournament.manage", "match.operate", "match.call", "match.ready", "match.start", "match.stream", "result.report", "dq.manual", "proposal.review", "conflict.manage"}),
+    "stream_operator": frozenset({"workspace.read", "station.manage", "overlay.manage", "match.stream", "stream.manage"}),
+    # Moderators can coordinate attendance and review conflicts, but cannot
+    # mutate match configuration, submit results, or perform DQ.
+    "moderator": frozenset({"workspace.read", "match.call", "match.ready", "conflict.manage"}),
     "viewer": frozenset({"workspace.read"}),
     # Legacy rows are mapped explicitly during the staged ownership migration;
     # they remain aliases only until the final role normalization is applied.
-    "organizer": frozenset({"workspace.read", "settings.manage", "tournament.manage", "match.operate", "result.report", "dq.manual", "proposal.review"}),
-    "operator": frozenset({"workspace.read", "station.manage", "overlay.manage"}),
+    "organizer": frozenset({"workspace.read", "settings.manage", "tournament.manage", "match.operate", "match.call", "match.ready", "match.start", "match.stream", "result.report", "dq.manual", "proposal.review", "conflict.manage"}),
+    "operator": frozenset({"workspace.read", "station.manage", "overlay.manage", "match.stream", "stream.manage"}),
 }
 
 
@@ -53,6 +56,45 @@ class SessionPrincipal:
 
 def permission_allowed(role: str, permission: str) -> bool:
     return permission in ROLE_PERMISSIONS.get(role, frozenset())
+
+
+def _api_rate_limit_config() -> tuple[int, int]:
+    """Return bounded, deployment-configurable API request limits.
+
+    The limiter is intentionally shared with auth/upload/AI paths and stored
+    in the database, so separate API processes cannot bypass it. Invalid
+    deployment configuration fails closed instead of silently disabling the
+    control.
+    """
+    try:
+        limit = int(os.getenv("AITOB_API_RATE_LIMIT_PER_MINUTE", "600"))
+        window = int(os.getenv("AITOB_API_RATE_LIMIT_WINDOW_SECONDS", "60"))
+    except ValueError as exc:
+        raise RuntimeError("API rate-limit configuration must be numeric") from exc
+    if not 1 <= limit <= 100_000 or not 10 <= window <= 86_400:
+        raise RuntimeError("API rate-limit configuration is outside the supported range")
+    return limit, window
+
+
+async def enforce_authenticated_api_rate_limit(request, principal: SessionPrincipal) -> None:
+    """Limit authenticated mutations and AI calls once per request.
+
+    FastAPI routes historically declare the same permission dependency both as
+    a decorator and a function argument. Request-state deduplication keeps
+    that compatibility from charging a request twice.
+    """
+    path = str(getattr(request.url, "path", ""))
+    method = str(getattr(request, "method", "GET")).upper()
+    if not (method in {"POST", "PUT", "PATCH", "DELETE"} or "/ai/" in path):
+        return
+    state = getattr(request, "state", None)
+    if state is not None and getattr(state, "aitob_rate_limited", False):
+        return
+    limit, window = _api_rate_limit_config()
+    host = getattr(getattr(request, "client", None), "host", "unknown")
+    await enforce_auth_rate_limit("api", f"{principal.workspace_id}:{host}", limit=limit, window_seconds=window)
+    if state is not None:
+        state.aitob_rate_limited = True
 
 
 def _utcnow() -> dt.datetime:
@@ -539,6 +581,59 @@ async def disable_workspace_member(principal: SessionPrincipal, user_id: str) ->
                 (principal.workspace_id, user_id),
             )
             await db.execute("UPDATE user_sessions SET revoked_at=CURRENT_TIMESTAMP WHERE user_id=? AND workspace_id=? AND revoked_at IS NULL", (user_id, principal.workspace_id))
+            await db.commit()
+        except Exception:
+            await db.rollback(); raise
+
+
+async def disable_workspace(principal: SessionPrincipal) -> None:
+    """Safely disable a workspace without deleting its operational history.
+
+    Disabling is deliberately refused while an external command or local
+    workflow effect is in flight. This avoids claiming that a provider/Discord
+    side effect was rolled back when only the local account was disabled.
+    All sessions and memberships are revoked atomically after the guard passes.
+    """
+    if principal.role != "owner":
+        raise PermissionError("Only an Owner may disable the workspace.")
+    async with aiosqlite.connect(database.DB_PATH) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            await _require_current_owner(db, principal)
+            pending_ledger = await (await db.execute(
+                "SELECT 1 FROM provider_command_ledger WHERE workspace_id=? "
+                "AND state IN ('pending','sending','acknowledged','retrying') LIMIT 1",
+                (principal.workspace_id,),
+            )).fetchone()
+            pending_outbox = await (await db.execute(
+                "SELECT 1 FROM workflow_outbox o JOIN active_matches m ON m.set_id=o.match_id "
+                "WHERE m.workspace_id=? AND o.status IN ('pending','sending','retrying') LIMIT 1",
+                (principal.workspace_id,),
+            )).fetchone()
+            active_workflow = await (await db.execute(
+                "SELECT 1 FROM active_matches WHERE workspace_id=? "
+                "AND status IN ('called','ready','in_progress') LIMIT 1",
+                (principal.workspace_id,),
+            )).fetchone()
+            if pending_ledger or pending_outbox or active_workflow:
+                raise ValueError("Workspace has active operations; drain them before disabling it.")
+            await db.execute(
+                "UPDATE workspaces SET status='disabled', updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (principal.workspace_id,),
+            )
+            await db.execute(
+                "UPDATE workspace_memberships SET status='disabled', updated_at=CURRENT_TIMESTAMP WHERE workspace_id=?",
+                (principal.workspace_id,),
+            )
+            await db.execute(
+                "UPDATE user_sessions SET revoked_at=CURRENT_TIMESTAMP WHERE workspace_id=? AND revoked_at IS NULL",
+                (principal.workspace_id,),
+            )
+            await db.execute(
+                "INSERT INTO audit_events (id, workspace_id, actor_id, action, target_type, target_id, outcome, detail_json) "
+                "VALUES (?, ?, ?, 'workspace.disabled', 'workspace', ?, 'accepted', '{}')",
+                (str(uuid.uuid4()), principal.workspace_id, principal.user_id, principal.workspace_id),
+            )
             await db.commit()
         except Exception:
             await db.rollback(); raise

@@ -173,13 +173,13 @@ async def api_create_active_match(body: CreateActiveMatchRequest, principal: Ses
 
 @router.post(
     "/active-matches/{set_id}/activate",
-    dependencies=[Depends(require_permission("match.operate"))],
+    dependencies=[Depends(require_permission("match.start"))],
     summary="Activate a match",
     response_model=MessageResponse,
     responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
     operation_id="activateMatch"
 )
-async def api_activate_match(set_id: str, principal: SessionPrincipal = Depends(require_permission("match.operate"))):
+async def api_activate_match(set_id: str, principal: SessionPrincipal = Depends(require_permission("match.start"))):
     """Activate a match by pushing its state live. Calls start.gg markSetInProgress for normal play. Requires admin password authentication."""
     m = await get_active_match(set_id, _ws(principal))
     if not m:
@@ -211,13 +211,13 @@ async def api_activate_match(set_id: str, principal: SessionPrincipal = Depends(
 
 @router.post(
     "/active-matches/{set_id}/force-in-progress",
-    dependencies=[Depends(require_permission("match.operate"))],
+    dependencies=[Depends(require_permission("match.start"))],
     summary="Force a called match into in-progress (local-safe)",
     response_model=MessageResponse,
     responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
     operation_id="forceMatchInProgress"
 )
-async def api_force_in_progress(set_id: str, principal: SessionPrincipal = Depends(require_permission("match.operate"))):
+async def api_force_in_progress(set_id: str, principal: SessionPrincipal = Depends(require_permission("match.start"))):
     """Manually elevate a CALLED match to IN_PROGRESS without requiring a provider write.
 
     Unlike /activate (which hard-fails if start.gg markSetInProgress fails), this routes
@@ -242,13 +242,13 @@ async def api_force_in_progress(set_id: str, principal: SessionPrincipal = Depen
 
 @router.post(
     "/active-matches/{set_id}/call",
-    dependencies=[Depends(require_permission("match.operate"))],
+    dependencies=[Depends(require_permission("match.call"))],
     summary="Call players for a match via Discord",
     response_model=MessageResponse,
     responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
     operation_id="callMatch"
 )
-async def api_call_match(set_id: str, principal: SessionPrincipal = Depends(require_permission("match.operate"))):
+async def api_call_match(set_id: str, principal: SessionPrincipal = Depends(require_permission("match.call"))):
     """Transition match status to called, trigger bot notification, and start the check-in timer. Requires admin password auth.
 
     Routes through the shared call_match_core so the Hub button and the AI agent
@@ -275,13 +275,13 @@ async def api_call_match(set_id: str, principal: SessionPrincipal = Depends(requ
 
 @router.post(
     "/active-matches/{set_id}/player-ready",
-    dependencies=[Depends(require_permission("match.operate"))],
+    dependencies=[Depends(require_permission("match.ready"))],
     summary="Mark a player as ready (no auth - used by Discord bot)",
     response_model=MessageResponse,
     responses={400: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
     operation_id="setPlayerReady"
 )
-async def api_player_ready(set_id: str, body: PlayerReadyRequest, principal: SessionPrincipal = Depends(require_permission("match.operate"))):
+async def api_player_ready(set_id: str, body: PlayerReadyRequest, principal: SessionPrincipal = Depends(require_permission("match.ready"))):
     """Mark a player as checked-in and ready for active combat. Invoked automatically by Discord bot without admin authentication."""
     player = body.player
     m = await get_active_match(set_id, _ws(principal))
@@ -303,13 +303,13 @@ async def api_player_ready(set_id: str, body: PlayerReadyRequest, principal: Ses
 
 @router.post(
     "/active-matches/{set_id}/toggle-stream",
-    dependencies=[Depends(require_permission("match.operate"))],
+    dependencies=[Depends(require_permission("match.stream"))],
     summary="Toggle stream match flag",
     response_model=MessageResponse,
     responses={401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
     operation_id="toggleStreamMatch"
 )
-async def api_toggle_stream(set_id: str, body: ToggleStreamRequest, principal: SessionPrincipal = Depends(require_permission("match.operate"))):
+async def api_toggle_stream(set_id: str, body: ToggleStreamRequest, principal: SessionPrincipal = Depends(require_permission("match.stream"))):
     """Mark a match as active on stream, assigning a free OBS broadcast station layout if required. Requires admin password auth."""
     m = await get_active_match(set_id, _ws(principal))
     if not m:

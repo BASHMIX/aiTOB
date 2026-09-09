@@ -4,7 +4,7 @@ from backend.core.database import (
     delete_connections, get_all_settings, set_setting, get_all_connections,
     get_connection, set_connection,
 )
-from backend.api.auth import verify_hub_password
+from backend.api.auth import require_global_settings_admin
 from backend.api.schemas import PatchSettingsRequest, PatchEnvRequest, MessageResponse, ErrorResponse
 
 router = APIRouter(tags=["settings"])
@@ -27,7 +27,7 @@ _MIGRATED_INTEGRATION_KEYS = {
 
 @router.get(
     "/settings",
-    dependencies=[Depends(verify_hub_password)],
+    dependencies=[Depends(require_global_settings_admin)],
     summary="Get all app settings",
     response_model=Dict[str, Dict[str, str]],
     responses={401: {"model": ErrorResponse}},
@@ -40,7 +40,7 @@ async def api_get_settings():
 
 @router.patch(
     "/settings",
-    dependencies=[Depends(verify_hub_password)],
+    dependencies=[Depends(require_global_settings_admin)],
     summary="Update app settings",
     response_model=MessageResponse,
     responses={401: {"model": ErrorResponse}},
@@ -68,7 +68,7 @@ async def api_patch_settings(body: PatchSettingsRequest):
 
 @router.get(
     "/env",
-    dependencies=[Depends(verify_hub_password)],
+    dependencies=[Depends(require_global_settings_admin)],
     summary="Get environment/connection config",
     response_model=Dict[str, str],
     responses={401: {"model": ErrorResponse}},
@@ -95,7 +95,7 @@ async def api_get_env():
 
 @router.patch(
     "/env",
-    dependencies=[Depends(verify_hub_password)],
+    dependencies=[Depends(require_global_settings_admin)],
     summary="Update connection config",
     response_model=MessageResponse,
     responses={401: {"model": ErrorResponse}},
@@ -147,7 +147,7 @@ async def api_patch_env(body: PatchEnvRequest):
 
 @router.post(
     "/settings/token-check",
-    dependencies=[Depends(verify_hub_password)],
+    dependencies=[Depends(require_global_settings_admin)],
     summary="Run token permission probe",
     response_model=Dict[str, Any],
     responses={401: {"model": ErrorResponse}},
@@ -168,7 +168,7 @@ async def api_trigger_token_check():
 
 @router.post(
     "/reconnect",
-    dependencies=[Depends(verify_hub_password)],
+    dependencies=[Depends(require_global_settings_admin)],
     summary="Trigger service reconnection",
     response_model=MessageResponse,
     responses={401: {"model": ErrorResponse}},

@@ -196,7 +196,7 @@ class ProviderSyncManager:
                         provider_reference(tournament),
                         ignore_activity_guard=bool(tournament.get("ignore_activity_guard")),
                     )
-                await sync_active_matches(tournament_slug, provider_sets)
+                await sync_active_matches(tournament_slug, provider_sets, trusted_workspace_id)
                 serialized = [serialize_set(item) for item in provider_sets]
                 await save_bracket_snapshot(tournament_slug, serialized)
                 await set_tournament_sync_status(tournament_slug, True)

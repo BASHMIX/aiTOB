@@ -5,7 +5,7 @@ from backend.core.database import (
     get_setting, set_setting,
 )
 from backend.api.ws_manager import manager as hub_mgr
-from backend.api.auth import verify_hub_password
+from backend.api.auth import verify_hub_password, require_global_settings_admin, require_permission
 from backend.core.workspace_auth import SessionPrincipal
 from backend.api.schemas import (
     BotCommandRequest, MessageResponse, ErrorResponse, BotFeedResponse,
@@ -101,7 +101,10 @@ async def api_bot_command(body: BotCommandRequest, principal: SessionPrincipal |
     responses={401: {"model": ErrorResponse}},
     operation_id="executeHubCommand"
 )
-async def api_hub_command(body: BotCommandRequest):
+async def api_hub_command(
+    body: BotCommandRequest,
+    principal: SessionPrincipal | None = Depends(require_permission("workspace.read")),
+):
     """Legacy shim to the API-owned Assistant, never to the Discord bot.
 
     New clients use ``/ai/assistant/{tournament_slug}``.  Keeping this narrow
@@ -115,7 +118,10 @@ async def api_hub_command(body: BotCommandRequest):
     if not match:
         raise HTTPException(400, "Use the tournament-scoped Organizer Assistant endpoint.")
     try:
-        result = await AIService().answer(tournament_slug=match.group(1).strip(), question=match.group(2).strip())
+        result = await AIService().answer(
+            tournament_slug=match.group(1).strip(), question=match.group(2).strip(),
+            workspace_id=getattr(principal, "workspace_id", None),
+        )
     except AIServiceError as exc:
         raise HTTPException(409, str(exc)) from exc
     return MessageResponse(message=result["answer"], ok=True)
@@ -124,13 +130,13 @@ async def api_hub_command(body: BotCommandRequest):
 
 @router.get(
     "/status",
-    dependencies=[Depends(verify_hub_password)],
+    dependencies=[Depends(require_global_settings_admin)],
     summary="Get service status",
     response_model=Dict[str, Any],
     responses={401: {"model": ErrorResponse}},
     operation_id="getServiceStatus"
 )
-async def api_get_status():
+async def api_get_status(principal: SessionPrincipal | None = Depends(require_global_settings_admin)):
     """Verify operational and connection statuses for database, websockets, and credentials scope. Requires admin password authentication."""
     from backend.core.database import get_all_connections, get_all_settings
     import json
@@ -170,13 +176,13 @@ async def api_get_status():
 
 @router.post(
     "/workflows/reload",
-    dependencies=[Depends(verify_hub_password)],
+    dependencies=[Depends(require_global_settings_admin)],
     summary="Hot-reload match transitions from docs/workflows.json",
     response_model=MessageResponse,
     responses={401: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
     operation_id="reloadWorkflows"
 )
-async def api_reload_workflows():
+async def api_reload_workflows(principal: SessionPrincipal | None = Depends(require_global_settings_admin)):
     """Re-read docs/workflows.json without restarting the API.
 
     Use during a live event when you need to adjust allowed state transitions
@@ -190,20 +196,24 @@ async def api_reload_workflows():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Reload failed: {e}")
     state_count = len(VALID_TRANSITIONS)
-    await add_bot_feed(f"♻️ Match-workflow transitions reloaded ({state_count} states)", "info")
-    await hub_mgr.broadcast({"type": "status_update"})
+    workspace_id = getattr(principal, "workspace_id", None)
+    await add_bot_feed(f"♻️ Match-workflow transitions reloaded ({state_count} states)", "info", workspace_id)
+    await hub_mgr.broadcast({"type": "status_update", "_workspace_id": workspace_id})
     return MessageResponse(message=f"Reloaded {state_count} states", ok=True)
 
 
 @router.post(
     "/dispatcher/master",
-    dependencies=[Depends(verify_hub_password)],
+    dependencies=[Depends(require_global_settings_admin)],
     summary="Flip the GLOBAL auto-dispatcher kill switch",
     response_model=MessageResponse,
     responses={401: {"model": ErrorResponse}},
     operation_id="setDispatcherMaster"
 )
-async def api_set_dispatcher_master(body: DispatcherMasterRequest):
+async def api_set_dispatcher_master(
+    body: DispatcherMasterRequest,
+    principal: SessionPrincipal | None = Depends(require_global_settings_admin),
+):
     """Master ON/OFF for the auto-dispatcher across all tournaments.
 
     When OFF, no tournament's `auto_dispatch_enabled` setting has any effect —

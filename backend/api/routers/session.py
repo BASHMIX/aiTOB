@@ -11,7 +11,7 @@ from backend.api.auth import current_session_principal, require_permission
 from backend.core.workspace_auth import (
     SESSION_COOKIE, SessionPrincipal, accept_workspace_invitation, authenticate_password,
     begin_totp_setup, disable_totp, enable_totp,
-    create_workspace_invitation, disable_workspace_member, public_registration_enabled,
+    create_workspace_invitation, disable_workspace_member, disable_workspace, public_registration_enabled,
     register_workspace_owner, revoke_session, session_public_profile, set_workspace_member_role,
     change_password, create_password_reset, consume_password_reset,
     create_email_verification, consume_email_verification,
@@ -189,6 +189,23 @@ async def remove_member(user_id: str, principal: SessionPrincipal = Depends(requ
 @router.get("/workspace/members")
 async def members(principal: SessionPrincipal = Depends(require_permission("workspace.manage"))):
     return {"members": await list_workspace_members(principal)}
+
+
+@router.post("/workspace/disable", status_code=status.HTTP_202_ACCEPTED)
+async def disable_current_workspace(principal: SessionPrincipal = Depends(require_permission("workspace.manage"))):
+    """Disable this workspace after all local/external work has drained.
+
+    This is intentionally a reversible operational block rather than a hard
+    delete; history and assets remain available for the retention/deletion
+    workflow, while sessions are revoked immediately.
+    """
+    try:
+        await disable_workspace(principal)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"disabled": True, "workspace_id": principal.workspace_id}
 
 
 @router.delete("/workspace/invitations/{invitation_id}", status_code=204)

@@ -81,12 +81,28 @@ async def delete_asset(
     name: str,
     principal: SessionPrincipal = Depends(require_permission("overlay.manage")),
 ):
-    """Remove an uploaded asset file."""
-    file_path = os.path.join(ASSETS_DIR, name)
-    if os.path.exists(file_path):
+    """Remove an uploaded asset only through its workspace-owned record.
+
+    Legacy static files may still be referenced by existing overlays, so this
+    compatibility endpoint must never delete an arbitrary path from the shared
+    directory. New uploads have a managed record and use the same guarded soft
+    deletion path as the explicit ``/managed`` endpoint.
+    """
+    from backend.core.database import list_media_assets, delete_media_asset
+    matches = [asset for asset in await list_media_assets(principal.workspace_id)
+               if asset.get("storage_key") == name or str(asset.get("storage_url", "")).rstrip("/").endswith("/" + name)]
+    if not matches:
+        raise HTTPException(404, "Asset not found or not owned by this workspace")
+    try:
+        deleted = await delete_media_asset(matches[0]["id"], principal.workspace_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not deleted:
+        raise HTTPException(404, "Asset not found")
+    file_path = os.path.join(ASSETS_DIR, os.path.basename(name))
+    if os.path.isfile(file_path):
         os.remove(file_path)
-        return {"message": "Deleted"}
-    raise HTTPException(404, "Asset not found")
+    return {"message": "Deleted"}
 
 
 @router.delete("/managed/{asset_id}", summary="Delete an owned managed asset")

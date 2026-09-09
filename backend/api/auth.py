@@ -12,7 +12,7 @@ from fastapi.security import APIKeyHeader, HTTPBearer, HTTPAuthorizationCredenti
 from backend.core.database import get_setting
 from backend.core.workspace_auth import (
     SESSION_COOKIE, SessionPrincipal, get_session_principal,
-    legacy_owner_principal, permission_allowed,
+    legacy_owner_principal, permission_allowed, enforce_authenticated_api_rate_limit,
 )
 
 api_key_header = APIKeyHeader(name="X-Hub-Password", auto_error=False)
@@ -99,6 +99,10 @@ def require_permission(permission: str) -> Callable:
                 raise _unauthorized()
         if not permission_allowed(principal.role, permission):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permission denied")
+        try:
+            await enforce_authenticated_api_rate_limit(request, principal)
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many requests. Try again later.") from exc
         return principal
     return dependency
 
@@ -107,6 +111,24 @@ async def require_platform_admin(
     principal: SessionPrincipal = Depends(current_session_principal),
 ) -> SessionPrincipal:
     """Gate service-scoped configuration separately from workspace ownership."""
+    from backend.core.database import is_active_platform_admin
+    if not await is_active_platform_admin(principal.user_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Platform administrator permission required")
+    return principal
+
+
+async def require_global_settings_admin(
+    principal: SessionPrincipal = Depends(verify_hub_password),
+) -> SessionPrincipal:
+    """Allow global service settings only to the platform administrator.
+
+    The legacy Hub password bridge is owner-scoped, but an arbitrary workspace
+    Owner must not read or mutate service-wide settings.  This narrow gate keeps
+    the compatibility path available for the designated platform owner while
+    preventing cross-workspace exposure of global connection/status records.
+    """
+    if not principal:
+        raise _unauthorized()
     from backend.core.database import is_active_platform_admin
     if not await is_active_platform_admin(principal.user_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Platform administrator permission required")
