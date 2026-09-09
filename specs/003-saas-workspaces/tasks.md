@@ -122,8 +122,10 @@ operational check; a rehearsal is never a cutover.
   the regression is covered by `test_discord_verify_does_not_target_identities_by_name_similarity`.
 - [~] **T013 / FR-003–005** Owner-only invite creation, token acceptance, role
   change and membership disable are implemented with last-Owner protection;
-  tests cover invitation replay and role/removal safety. Cancellation, member
-  management UI and mail delivery remain.
+  tests cover invitation replay and role/removal safety. Account Settings now
+  exposes owner-only role changes and member disable actions, while the API
+  remains the enforcement point. Invitation cancellation and mail delivery
+  remain deployment-dependent.
 
 ## C. Ownership and tenant isolation
 
