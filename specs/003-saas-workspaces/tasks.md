@@ -306,12 +306,13 @@ operational check; a rehearsal is never a cutover.
   external Discord/provider effects. A PostgreSQL `pg_dump` backup was created
   on 2026-09-09 and restored into a newly created disposable database;
   `pg_restore` returned success and the application initialized against that
-  target with external probes disabled. The source PostgreSQL database
+  target with external probes disabled. The source PostgreSQL database itself
   currently contains only two stations and no workspaces, tournaments or
-  integration credentials, so relationship and encrypted-secret readability
-  acceptance is blocked until a populated PostgreSQL rehearsal is created from
-  the owned operational copy. The disposable target was dropped after
-  verification; no production rows changed.
+  integration credentials, so it is not the populated runtime cutover source.
+  A separate populated SQLite-to-PostgreSQL rehearsal decrypted all five
+  encrypted credential rows using their recorded `owner_kind` (including the
+  OAuth application secret), with zero failures. Both disposable targets were
+  dropped after verification; no production rows changed.
 
 ## F. Migration, cutover and acceptance
 

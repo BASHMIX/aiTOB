@@ -186,8 +186,10 @@ restored it into a newly created disposable target. The restored API initialized
 successfully with provider probes disabled, then the target was dropped. The
 source currently contains only two stations and no workspace/tournament/
 credential rows, so this proves dump/restore mechanics but not populated
-relationship or encrypted-secret recovery; that remains blocked until the
-PostgreSQL rehearsal is populated from the owned operational copy.
+relationship or encrypted-secret recovery. A separate populated SQLite-to-
+PostgreSQL rehearsal decrypted all five encrypted credential rows using their
+recorded owner kind, including the OAuth application secret, with zero failures.
+Neither disposable target was retained or used for production cutover.
 
 ## Explicit recovery backup
 
