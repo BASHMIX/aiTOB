@@ -31,15 +31,18 @@ operational check; a rehearsal is never a cutover.
   used. Repository-specific Workspace/row locks remain responsible for
   bootstrap, approvals, reservations, claims and ledger operations, avoiding
   serialization of unrelated organizations. Full local regression after the
-  identity-link, overlay-isolation, retention and worker-scope fixes: 388 passed,
-  20 skipped (2026-09-09; four worker/role assertions were added after the
-  earlier 384-pass baseline). The two bot SQLite reads were replaced with
+  identity-link, overlay-isolation, retention, worker-scope and WebSocket
+  authorization fixes: 397 passed, 20 skipped (2026-09-09; nine acceptance
+  assertions were added after the earlier 388-pass run). The two bot SQLite
+  reads were replaced with
   repository calls and are guarded by `test_runtime_bot_paths_do_not_open_sqlite_directly`.
   Player listing and platform-admin checks now use repository functions and are
   guarded by `test_workspace_api_paths_use_repository_boundary`.
   Latest disposable PostgreSQL acceptance (storage plus migration) is 19/19
-  passing on 2026-09-09; the current official local backend result is 388
-  passed / 20 intentionally skipped.
+  passing on 2026-09-09; the current official local backend result is 397
+  passed / 20 intentionally skipped. Current focused sync/authorization runs
+  also pass (40 tests), including tenant-qualified scheduler keys and revocable
+  Hub/Overlay WebSocket access.
   ProviderSyncManager now carries the trusted tournament workspace through
   startup, periodic, stale-open and post-score worker paths; unowned fixtures
   retain the legacy one-argument test hook only. Its in-process refresh lock is
@@ -123,8 +126,9 @@ operational check; a rehearsal is never a cutover.
   deployment-dependent and public registration stays closed.
 - [~] **T012 / FR-003** Canonical Owner / TO / Stream operator / Moderator /
   Viewer permission matrix is now present in `workspace_auth.py`, with legacy
-  aliases retained only for staged data migration; session tests pass. Route,
-  WebSocket and exhaustive forbidden-action acceptance remain required. The
+  aliases retained only for staged data migration; session and WebSocket
+  authorization tests pass. Exhaustive forbidden-action acceptance remains
+  required. The
   Discord `/verify` path no longer matches identities by name similarity: it
   requires an explicit profile URL or organizer-confirmed entrant link, and
   the regression is covered by `test_discord_verify_does_not_target_identities_by_name_similarity`.
@@ -133,7 +137,8 @@ operational check; a rehearsal is never a cutover.
   tests cover invitation replay and role/removal safety. Account Settings now
   exposes owner-only role changes and member disable actions, while the API
   remains the enforcement point. Invitation cancellation and mail delivery
-  remain deployment-dependent.
+  remain deployment-dependent. Owner-visible invitation listing and
+  cancellation are now covered without exposing invitation hashes/tokens.
 
 ## C. Ownership and tenant isolation
 
