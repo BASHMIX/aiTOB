@@ -32,7 +32,7 @@ operational check; a rehearsal is never a cutover.
   bootstrap, approvals, reservations, claims and ledger operations, avoiding
   serialization of unrelated organizations. Full local regression after the
   identity-link, overlay-isolation, retention, worker-scope and WebSocket
-  authorization fixes: 432 passed, 21 skipped (2026-09-09; additional
+  authorization fixes: 433 passed, 21 skipped (2026-09-09; additional
   acceptance and recovery-safety assertions were added after the earlier
   388-pass run). The two bot SQLite
   reads were replaced with
@@ -40,7 +40,7 @@ operational check; a rehearsal is never a cutover.
   Player listing and platform-admin checks now use repository functions and are
   guarded by `test_workspace_api_paths_use_repository_boundary`.
   Latest disposable PostgreSQL acceptance (storage, migration and station-overlay
-  isolation) is 26/26 passing on 2026-09-09; the current official local backend result is 432
+  isolation) is 26/26 passing on 2026-09-09; the current official local backend result is 433
   passed / 21 intentionally skipped. Current focused sync/authorization runs
   also pass (40 tests), including tenant-qualified scheduler keys and revocable
   Hub/Overlay WebSocket access.
@@ -353,6 +353,12 @@ operational check; a rehearsal is never a cutover.
   API startup now supports the explicit `AITOB_DISABLE_BACKGROUND_WORKERS`
   pause switch for cutover review; a regression proves recovery, Live schedule,
   sync and reconciliation workers are not started while the switch is active.
+  The populated cutover candidate was inspected before any worker resume: it has
+  eight pending `workflow_outbox` events and nine pending manual Hub commands,
+  all owned by the migrated workspace. Its sole provider ledger row is already
+  `snapshot_verified` (score), so no provider mutation is eligible for replay.
+  These rows are a cutover reconciliation gate; they were not executed,
+  rewritten, or deleted.
 
 ## F. Migration, cutover and acceptance
 

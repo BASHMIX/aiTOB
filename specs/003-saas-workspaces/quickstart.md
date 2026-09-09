@@ -83,12 +83,12 @@ claims, and unique command keys. No global compatibility lock serializes
 unrelated Workspaces; bootstrap and other critical paths use scoped locks.
 Two independent membership transactions cannot remove both last Owners.
 
-The local complete suite completed without hanging (432 passed / 21 skipped),
+The local complete suite completed without hanging (433 passed / 21 skipped),
 but exposed a thread-cleanup warning. The focused recovery/budget/coordinator
 group reproduced it with warnings treated as errors. Scheduler `close()` now
 awaits stopped tasks, and the explicit test-only SQLite connector drains opening
 and closing work on cancellation. The focused group then passed all 17 tests.
-The full post-fix rerun completed at 432 passed / 21 skipped (2026-09-09).
+The full post-fix rerun completed at 433 passed / 21 skipped (2026-09-09).
 
 The official local backend command is:
 
@@ -158,11 +158,11 @@ path.
 
 The latest PostgreSQL acceptance rerun completed 26/26 tests on disposable
 databases after the workspace feed/station changes. The local backend suite is
-432 passed / 21 skipped; skipped cases remain the explicitly PostgreSQL-only
+433 passed / 21 skipped; skipped cases remain the explicitly PostgreSQL-only
 cases when no `AITOB_PG_TEST_URL` is supplied to the local command.
 
 The post-acceptance additions include two redacted error-telemetry tests and
-seven backup-manifest restore-safety tests; they are included in the 432-pass
+seven backup-manifest restore-safety tests; they are included in the 433-pass
 count above.
 
 PostgreSQL runtime smoke (2026-09-09) loaded the FastAPI lifespan against the
@@ -183,6 +183,15 @@ validated, all five encrypted credentials authenticated in a service process,
 and a fresh custom-format backup with a verified manifest was created. The
 candidate is intentionally not referenced by `.env.production`; no worker or
 external integration is pointed at it yet.
+
+Before any worker resume, the candidate queues were inspected from the candidate
+database itself. It contains eight pending `workflow_outbox` events (Discord/OBS
+and next-match local effects) and nine pending manual `hub_commands`, all owned by
+the migrated workspace. The only `provider_command_ledger` row is a score command
+already at `snapshot_verified`; it is not replayable. No queue row was executed,
+rewritten, or deleted, and the old database's `pg-unknown-effect` fixture remains
+isolated there. These candidate rows block blind worker resumption and require the
+T052 reconciliation procedure; they do not justify changing the external provider.
 
 Docker Compose now requires both service-level encryption keys explicitly for
 the API and bot containers. A local configuration check passed after loading
