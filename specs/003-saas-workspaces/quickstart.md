@@ -173,6 +173,15 @@ an unknown outcome or restart before local success becomes `needs_review`.
 Only an explicit adapter proof of no send permits automatic retry. No live
 Discord/provider effects were used by these tests.
 
+PostgreSQL backup/restore drill (2026-09-09): `backup_database.py` created a
+custom-format dump from the local Docker PostgreSQL and `restore_database.py`
+restored it into a newly created disposable target. The restored API initialized
+successfully with provider probes disabled, then the target was dropped. The
+source currently contains only two stations and no workspace/tournament/
+credential rows, so this proves dump/restore mechanics but not populated
+relationship or encrypted-secret recovery; that remains blocked until the
+PostgreSQL rehearsal is populated from the owned operational copy.
+
 ## Explicit recovery backup
 
 Runtime backups use PostgreSQL `pg_dump` and never include service secrets in the

@@ -303,7 +303,15 @@ operational check; a rehearsal is never a cutover.
   Discord/provider reconciliation acceptance remain. The acceptance must
   separately prove backup integrity, restore to a new target, key recovery,
   retention behavior, safe Workspace disable/deletion, and reconciliation of
-  external Discord/provider effects.
+  external Discord/provider effects. A PostgreSQL `pg_dump` backup was created
+  on 2026-09-09 and restored into a newly created disposable database;
+  `pg_restore` returned success and the application initialized against that
+  target with external probes disabled. The source PostgreSQL database
+  currently contains only two stations and no workspaces, tournaments or
+  integration credentials, so relationship and encrypted-secret readability
+  acceptance is blocked until a populated PostgreSQL rehearsal is created from
+  the owned operational copy. The disposable target was dropped after
+  verification; no production rows changed.
 
 ## F. Migration, cutover and acceptance
 
