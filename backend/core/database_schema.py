@@ -127,6 +127,8 @@ TABLE_SCHEMAS = [
         billing_state TEXT NOT NULL DEFAULT 'non_billed',
         limits_json TEXT NOT NULL DEFAULT '{}',
         usage_json TEXT NOT NULL DEFAULT '{}',
+        expires_at TIMESTAMP,
+        suspended_at TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
     ''',
@@ -769,6 +771,7 @@ INDEXES = [
     ,"CREATE INDEX IF NOT EXISTS idx_user_sessions_lookup ON user_sessions(token_hash, expires_at)"
     ,"CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id, revoked_at)"
     ,"CREATE INDEX IF NOT EXISTS idx_auth_rate_limits_window ON auth_rate_limits(window_started_at)"
+    ,"CREATE INDEX IF NOT EXISTS idx_workspace_entitlements_expiry ON workspace_entitlements(expires_at, suspended_at)"
     ,"CREATE INDEX IF NOT EXISTS idx_error_events_created ON error_events(created_at)"
     ,"CREATE UNIQUE INDEX IF NOT EXISTS uq_stations_workspace_public_id ON stations(workspace_id, public_id)"
     ,"CREATE INDEX IF NOT EXISTS idx_overlay_access_station ON overlay_access_tokens(workspace_id, station_id, revoked_at)"
@@ -778,6 +781,8 @@ INDEXES = [
 MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN email_verified_at TIMESTAMP",
     "ALTER TABLE users ADD COLUMN is_platform_admin BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE workspace_entitlements ADD COLUMN expires_at TIMESTAMP",
+    "ALTER TABLE workspace_entitlements ADD COLUMN suspended_at TIMESTAMP",
     # Preparatory ownership migration. These remain nullable until a designated
     # Owner workspace performs and validates the legacy backfill.
     "ALTER TABLE tournaments ADD COLUMN workspace_id TEXT",

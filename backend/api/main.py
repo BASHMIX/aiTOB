@@ -32,6 +32,7 @@ from backend.api.routers.action_proposals import router as action_proposals_rout
 from backend.api.routers.organizer_console import router as organizer_console_router
 from backend.api.routers.ai_service import router as ai_service_router
 from backend.api.routers.session import router as session_router
+from backend.api.routers.entitlements import router as entitlements_router
 
 load_dotenv()
 logger = logging.getLogger("aitob.api")
@@ -195,6 +196,7 @@ app.include_router(challonge_oauth_router, prefix="/api/auth")
 app.include_router(action_proposals_router, prefix="/api")
 app.include_router(organizer_console_router, prefix="/api")
 app.include_router(ai_service_router, prefix="/api")
+app.include_router(entitlements_router, prefix="/api")
 
 
 # Static files
