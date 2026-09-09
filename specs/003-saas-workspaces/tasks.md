@@ -440,6 +440,11 @@ operational check; a rehearsal is never a cutover.
   pending without blocking the free/non-billed cutover. Pause writes/workers,
   create verified backup, inspect pending commands/outbox,
   migrate latest data, start API/bot/workers on PostgreSQL, and verify recovery.
+  A bounded candidate-only recheck (2026-09-09) verified the reviewed backup
+  manifest and confirmed from two independent PostgreSQL process contexts that
+  the explicit queue hold leaves zero claimable Outbox or Hub commands. The
+  candidate remains isolated and is not the runtime source; the held rows still
+  require reconciliation before this task can be closed.
 - [ ] **T053 / SC-001–006, FR-017** Run final acceptance only after T004–T051a;
   the required matrix is:
 
@@ -456,4 +461,8 @@ operational check; a rehearsal is never a cutover.
   No row is accepted when its required external/live test is skipped. The local
   DQ safety behavior has a dedicated regression, but T053 remains open until
   every row has evidence; it is not closed by local unit
-  tests alone.
+  tests alone. The PostgreSQL candidate acceptance subset was re-run with
+  external effects mocked: storage/queue-hold/recovery/overlay/asset/workspace
+  checks passed (35 PostgreSQL tests and 40 local tests). This proves the
+  database and isolation safeguards but does not close live provider/Discord/
+  OBS evidence or authorize cutover.

@@ -173,6 +173,14 @@ provider merely because a credential exists. An acceptance operator may set
 keeps startup free of provider probes and preserves the explicit manual probe
 path.
 
+Manual non-payment entitlements are available only to an authenticated platform
+administrator through `/api/platform/workspaces/{workspace_id}/subscription`.
+The `activate`, `extend`, and `suspend` actions update the local plan/status
+and expiry atomically with a redacted audit event; they do not perform checkout,
+charge a card, or call an external billing gateway. A missing payment gateway
+therefore blocks only paid checkout/webhooks, not the free/non-billed runtime.
+The API returns status metadata only and never payment or integration secrets.
+
 The latest PostgreSQL acceptance rerun completed 26/26 tests on disposable
 databases after the workspace feed/station changes. The local backend suite is
 438 passed / 21 skipped; skipped cases remain the explicitly PostgreSQL-only
