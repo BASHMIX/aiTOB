@@ -219,6 +219,9 @@ cutover evidence is tracked separately under T043/T052/T053.
 Action proposals, Organizer Console, manual entitlements, and workspace
 session/role acceptance add 43/43 passing PostgreSQL cases in the latest
 isolated run; no external provider or Discord side effect was enabled.
+The role acceptance now includes HTTP-positive/negative checks for TO, Stream
+operator, Moderator and Viewer (the same test passes on SQLite and PostgreSQL),
+and policy-level denial coverage for every non-owner mutating permission.
 The V2 provider lease/outbox repositories now also pass 4/4 on PostgreSQL;
 the migration-fixture test remains SQLite-only by design because it validates
 upgrading a pre-V2 file rather than runtime PostgreSQL behavior.

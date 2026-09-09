@@ -470,7 +470,12 @@ def test_roles_are_positive_and_negative_over_http(isolated_workspace_db):
     async def seed_match():
         async with aiosqlite.connect(isolated_workspace_db) as db:
             workspace_id = (await (await db.execute("SELECT id FROM workspaces")).fetchone())[0]
-            for role, email in (("tournament_organizer", "positive-to@example.test"), ("stream_operator", "positive-stream@example.test")):
+            for role, email in (
+                ("tournament_organizer", "positive-to@example.test"),
+                ("stream_operator", "positive-stream@example.test"),
+                ("moderator", "positive-moderator@example.test"),
+                ("viewer", "positive-viewer@example.test"),
+            ):
                 user_id = str(uuid.uuid4())
                 await db.execute(
                     "INSERT INTO users (id,email,display_name,password_hash) VALUES (?,?,?,?)",
@@ -491,6 +496,10 @@ def test_roles_are_positive_and_negative_over_http(isolated_workspace_db):
             "role-match", workspace_id=workspace_id, tournament_slug="role-acceptance",
             p1_name="P1", p2_name="P2", status="not_started",
         )
+        await database.upsert_active_match(
+            "role-moderator-match", workspace_id=workspace_id, tournament_slug="role-acceptance",
+            p1_name="P1", p2_name="P2", status="not_started",
+        )
     run(seed_match())
 
     to = TestClient(app)
@@ -501,6 +510,17 @@ def test_roles_are_positive_and_negative_over_http(isolated_workspace_db):
     assert stream.post("/api/session/login", json={"email": "positive-stream@example.test", "password": "positive-password"}).status_code == 200
     assert stream.post("/api/active-matches/role-match/toggle-stream", json={"is_stream_match": True}).status_code == 200
     assert stream.post("/api/active-matches/role-match/send").status_code == 403
+
+    moderator = TestClient(app)
+    assert moderator.post("/api/session/login", json={"email": "positive-moderator@example.test", "password": "positive-password"}).status_code == 200
+    assert moderator.post("/api/active-matches/role-moderator-match/call").status_code == 200
+    assert moderator.post("/api/active-matches/role-moderator-match/send").status_code == 403
+    assert moderator.post("/api/active-matches/role-moderator-match/dq", json={"player": "p1"}).status_code == 403
+
+    viewer = TestClient(app)
+    assert viewer.post("/api/session/login", json={"email": "positive-viewer@example.test", "password": "positive-password"}).status_code == 200
+    assert viewer.get("/api/tournaments").status_code == 200
+    assert viewer.post("/api/active-matches/role-moderator-match/call").status_code == 403
 
 
 def test_email_verification_token_is_hashed_expiring_and_one_use(isolated_workspace_db):

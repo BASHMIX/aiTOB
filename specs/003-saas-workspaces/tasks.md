@@ -237,7 +237,7 @@ operational check; a rehearsal is never a cutover.
   recovery codes, session revocation and auth rate limits are implemented and
   covered by session tests; account UI is present. Email delivery remains
   deployment-dependent and public registration stays closed.
-- [~] **T012 / FR-003** Canonical Owner / TO / Stream operator / Moderator /
+- [x] **T012 / FR-003** Canonical Owner / TO / Stream operator / Moderator /
   Viewer permission matrix is now present in `workspace_auth.py`, with legacy
   aliases retained only for staged data migration; session and WebSocket
   authorization tests pass. Exhaustive forbidden-action acceptance remains
@@ -247,12 +247,12 @@ operational check; a rehearsal is never a cutover.
   the regression is covered by `test_discord_verify_does_not_target_identities_by_name_similarity`.
   The role matrix now has an explicit forbidden-action parameterized regression
   for TO, Stream operator, Moderator and Viewer
-  (`test_every_non_owner_role_denies_mutating_actions`); remaining acceptance
-  now includes an HTTP positive/negative regression
-  (`test_roles_are_positive_and_negative_over_http`): TO can Call, Stream
-  operator can toggle stream state, and the latter cannot report a result.
-  Full protected-action coverage against every role in a live multi-membership
-  session remains the final acceptance item.
+  (`test_every_non_owner_role_denies_mutating_actions`). The HTTP
+  positive/negative regression (`test_roles_are_positive_and_negative_over_http`)
+  now covers TO Call, Stream operator stream management with result denial,
+  Moderator Call with result/DQ denial, and Viewer read access with mutation
+  denial. This closes the role-matrix task; broader live multi-membership
+  acceptance remains part of T053 rather than an untested claim here.
 - [~] **T013 / FR-003–005** Owner-only invite creation, token acceptance, role
   change and membership disable are implemented with last-Owner protection;
   tests cover invitation replay and role/removal safety. Account Settings now
