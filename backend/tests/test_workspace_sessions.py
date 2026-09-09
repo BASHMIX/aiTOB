@@ -333,7 +333,9 @@ def test_workspace_disable_refuses_inflight_work_and_revokes_after_drain(isolate
             audit = await (await db.execute("SELECT action, outcome FROM audit_events WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1", (owner.workspace_id,))).fetchone()
         assert workspace[0] == "disabled"
         assert membership[0] == "disabled"
-        assert tuple(audit) == ("workspace.disabled", "accepted")
+        assert audit is not None
+        assert audit[0] == "workspace.disabled"
+        assert audit[1] == "accepted"
         assert await get_session_principal(owner.session_id) is None
 
     run(verify())
@@ -511,6 +513,24 @@ def test_hub_command_claim_is_atomic_and_owner_checked(isolated_workspace_db):
         owner = "worker-a" if first else "worker-b"
         assert not await database.finish_hub_command(claimed[0]["id"], "other-worker", "done")
         assert await database.finish_hub_command(claimed[0]["id"], owner, "done")
+
+    run(verify())
+
+
+def test_hub_command_worker_scope_cannot_claim_another_workspace(isolated_workspace_db):
+    """A bot bound to one integration account must not lease another tenant's queue."""
+    async def verify():
+        await database.add_hub_command("call_match first", workspace_id="workspace-one")
+        await database.add_hub_command("call_match second", workspace_id="workspace-two")
+
+        assert [row["command_text"] for row in await database.get_pending_hub_commands("workspace-one")] == ["call_match first"]
+        assert [row["command_text"] for row in await database.get_pending_hub_commands("workspace-two")] == ["call_match second"]
+
+        claimed = await database.claim_pending_hub_commands(
+            "workspace-one-worker", limit=10, workspace_id="workspace-one",
+        )
+        assert [row["command_text"] for row in claimed] == ["call_match first"]
+        assert [row["command_text"] for row in await database.get_pending_hub_commands("workspace-two")] == ["call_match second"]
 
     run(verify())
 
