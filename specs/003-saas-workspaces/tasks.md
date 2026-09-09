@@ -68,7 +68,7 @@ operational check; a rehearsal is never a cutover.
   bootstrap, approvals, reservations, claims and ledger operations, avoiding
   serialization of unrelated organizations. Full local regression after the
   identity-link, overlay-isolation, retention, worker-scope and WebSocket
-  authorization fixes: 444 passed, 21 skipped (2026-09-09; additional
+  authorization fixes: 445 passed, 21 skipped (2026-09-10; additional
   acceptance and recovery-safety assertions were added after the earlier
   388-pass run). The two bot SQLite
   reads were replaced with
@@ -76,7 +76,7 @@ operational check; a rehearsal is never a cutover.
   Player listing and platform-admin checks now use repository functions and are
   guarded by `test_workspace_api_paths_use_repository_boundary`.
   Latest disposable PostgreSQL acceptance (storage, migration and station-overlay
-  isolation) is 32/32 passing on 2026-09-09; the current official local backend result is 444
+  isolation) is 32/32 passing on 2026-09-09; the current official local backend result is 445
   passed / 21 intentionally skipped. Current focused sync/authorization runs
   also pass (40 tests), including tenant-qualified scheduler keys and revocable
   Hub/Overlay WebSocket access.
@@ -187,7 +187,7 @@ operational check; a rehearsal is never a cutover.
   A broad `--postgres` sweep exposed 36 legacy fixture/harness incompatibilities
   during the first run; these were not suppressed. After the targeted fixes and
   explicit SQLite-source marker, the complete PostgreSQL-targeted regression
-  passes 460/460 with five intentional skips (three source-migration cases,
+  passes 461/461 with five intentional skips (three source-migration cases,
   the disabled AI Referee benchmark, and one live-network test). The remaining
   T004 work is limited to documented compatibility contexts, not runtime
   SQLite fallback or unscoped transactions.
