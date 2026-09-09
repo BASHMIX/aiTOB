@@ -32,7 +32,7 @@ operational check; a rehearsal is never a cutover.
   bootstrap, approvals, reservations, claims and ledger operations, avoiding
   serialization of unrelated organizations. Full local regression after the
   identity-link, overlay-isolation, retention, worker-scope and WebSocket
-  authorization fixes: 397 passed, 20 skipped (2026-09-09; nine acceptance
+  authorization fixes: 401 passed, 20 skipped (2026-09-09; thirteen acceptance
   assertions were added after the earlier 388-pass run). The two bot SQLite
   reads were replaced with
   repository calls and are guarded by `test_runtime_bot_paths_do_not_open_sqlite_directly`.
@@ -118,7 +118,10 @@ operational check; a rehearsal is never a cutover.
 - [~] **T010 / FR-003–005** One-time Owner bootstrap and session base are in
   place. Registration is implemented behind the explicit
   `ALLOW_PUBLIC_REGISTRATION` setting (default closed), and tests prove the
-  closed gate. Keep the implemented path closed until T022/T053 isolation
+  closed gate. The HTTP registration path is separately rate-limited by
+  client origin only after the gate is explicitly opened; the regression
+  proves closed=403, one opened registration=201, then 429 at the configured
+  bound. Keep the implemented path closed until T022/T053 isolation
   acceptance; add the protected Owner setup/account UI before closure.
 - [~] **T011 / FR-003–005** Email verification, password change/reset, TOTP
   recovery codes, session revocation and auth rate limits are implemented and
@@ -207,7 +210,11 @@ operational check; a rehearsal is never a cutover.
   ownership-key migration now rebuilds SQLite legacy tables and upgrades
   PostgreSQL constraints to workspace/name and workspace/tournament/entrant
   uniqueness; existing installations must apply its migration receipt before
-  relying on cross-workspace duplicate keys.
+  relying on cross-workspace duplicate keys. The deletion guard now recursively
+  checks every owning-workspace overlay JSON value (including nested image
+  `src` and `background_url`) and rejects a referenced asset; SQLite focused
+  and disposable-PostgreSQL regressions pass. Legacy unowned preset backfill
+  remains a cutover concern.
 - [~] **T033 / FR-008** Revocable hashed workspace-station Browser Source tokens
   and least-privilege `/obs/{station}/data` plus authenticated overlay WebSocket
   are implemented; issuance/revocation and cross-workspace tests pass. Existing

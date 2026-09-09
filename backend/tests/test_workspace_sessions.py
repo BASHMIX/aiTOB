@@ -90,6 +90,53 @@ def test_registration_gate_invites_and_last_owner_protection(isolated_workspace_
     run(verify())
 
 
+def test_public_registration_endpoint_stays_closed_and_is_rate_limited_when_enabled(
+    isolated_workspace_db: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """Registration is implemented but closed by default; opening it is bounded.
+
+    This exercises the HTTP entry point rather than only the repository helper,
+    so a future UI change cannot accidentally turn the public-registration gate
+    into an unbounded account-creation endpoint.
+    """
+    client = TestClient(app)
+    closed = client.post(
+        "/api/session/register",
+        json={
+            "email": "closed-registration@example.test",
+            "password": "closed-registration-password",
+            "display_name": "Closed Registration",
+            "workspace_name": "Closed Registration Workspace",
+        },
+    )
+    assert closed.status_code == 403
+
+    run(database.set_setting("ALLOW_PUBLIC_REGISTRATION", "true"))
+    monkeypatch.setenv("AITOB_REGISTRATION_RATE_LIMIT", "1")
+    monkeypatch.setenv("AITOB_REGISTRATION_RATE_LIMIT_WINDOW_SECONDS", "3600")
+    opened = client.post(
+        "/api/session/register",
+        json={
+            "email": "first-registration@example.test",
+            "password": "first-registration-password",
+            "display_name": "First Registration",
+            "workspace_name": "First Registration Workspace",
+        },
+    )
+    assert opened.status_code == 201
+
+    limited = client.post(
+        "/api/session/register",
+        json={
+            "email": "second-registration@example.test",
+            "password": "second-registration-password",
+            "display_name": "Second Registration",
+            "workspace_name": "Second Registration Workspace",
+        },
+    )
+    assert limited.status_code == 429
+
+
 def test_invitation_cannot_demote_existing_owner_or_accept_wrong_password(isolated_workspace_db: Path):
     async def verify():
         _, owner = await authenticate_password(OWNER_EMAIL, OWNER_PASSWORD)
@@ -435,5 +482,47 @@ def test_overlay_link_is_workspace_scoped_hashed_and_revocable(isolated_workspac
         assert stored and stored[0] != token
         assert await revoke_overlay_access(owner.workspace_id, token_id)
         assert await resolve_overlay_access(token, "broadcast") is None
+
+    run(verify())
+
+
+def test_managed_asset_deletion_refuses_workspace_overlay_config_reference(isolated_workspace_db):
+    """An owned upload remains undeletable while an overlay preset uses it.
+
+    Overlay JSON is intentionally flexible, so this covers both the canonical
+    ``background_url`` and a nested image element source.  A guarded deletion
+    must examine the saved preset rather than only player/match projections.
+    """
+    async def verify():
+        _, owner = await authenticate_password(OWNER_EMAIL, OWNER_PASSWORD)
+        asset = await database.record_media_asset(
+            workspace_id=owner.workspace_id,
+            asset_type="overlay_asset",
+            owner_type="workspace",
+            owner_id=owner.workspace_id,
+            storage_url="/static/assets/workspace-logo.png",
+            storage_key="workspace-logo.png",
+        )
+        await database.save_overlay(
+            "broadcast-layout",
+            {
+                "background_url": "/static/assets/workspace-logo.png",
+                "elements": {},
+            },
+            owner.workspace_id,
+        )
+        with pytest.raises(ValueError, match="referenced"):
+            await database.delete_media_asset(asset["id"], owner.workspace_id)
+
+            await database.save_overlay(
+                "broadcast-layout-nested",
+                {"elements": {"sponsor": {"type": "image", "src": "/static/assets/workspace-logo.png"}}},
+                owner.workspace_id,
+            )
+        with pytest.raises(ValueError, match="referenced"):
+            await database.delete_media_asset(asset["id"], owner.workspace_id)
+
+        await database.save_overlay("broadcast-layout", {"elements": {}}, owner.workspace_id)
+        assert await database.delete_media_asset(asset["id"], owner.workspace_id)
 
     run(verify())

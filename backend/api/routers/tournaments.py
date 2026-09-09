@@ -342,7 +342,7 @@ async def api_reset_tournament_hub(slug: str, principal: SessionPrincipal = Depe
     """Delete all active matches for the given tournament slug from local tracking. Requires admin password auth."""
     if not await get_tournament(slug, _workspace(principal)):
         raise HTTPException(status_code=404, detail="Tournament not found")
-    await delete_tournament_active_matches(slug)
+    await delete_tournament_active_matches(slug, _workspace(principal))
     await hub_mgr.broadcast({"type": "match_update", "_workspace_id": _workspace(principal)})
     return MessageResponse(message="Hub matches reset", ok=True)
 

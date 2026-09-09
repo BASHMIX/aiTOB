@@ -76,6 +76,23 @@ def _api_rate_limit_config() -> tuple[int, int]:
     return limit, window
 
 
+def _public_registration_rate_limit_config() -> tuple[int, int]:
+    """Return a bounded rate limit for the deliberately opt-in registration path.
+
+    Public sign-up remains disabled by default.  When an operator explicitly
+    enables it after the tenant-isolation gate, account creation must still be
+    protected independently of the login and password-reset limits.
+    """
+    try:
+        limit = int(os.getenv("AITOB_REGISTRATION_RATE_LIMIT", "5"))
+        window = int(os.getenv("AITOB_REGISTRATION_RATE_LIMIT_WINDOW_SECONDS", "3600"))
+    except ValueError as exc:
+        raise RuntimeError("Registration rate-limit configuration must be numeric") from exc
+    if not 1 <= limit <= 1_000 or not 60 <= window <= 86_400:
+        raise RuntimeError("Registration rate-limit configuration is outside the supported range")
+    return limit, window
+
+
 async def enforce_authenticated_api_rate_limit(request, principal: SessionPrincipal) -> None:
     """Limit authenticated mutations and AI calls once per request.
 
@@ -95,6 +112,15 @@ async def enforce_authenticated_api_rate_limit(request, principal: SessionPrinci
     await enforce_auth_rate_limit("api", f"{principal.workspace_id}:{host}", limit=limit, window_seconds=window)
     if state is not None:
         state.aitob_rate_limited = True
+
+
+async def enforce_public_registration_rate_limit(subject: str) -> None:
+    """Rate-limit public account creation across all API processes."""
+    limit, window = _public_registration_rate_limit_config()
+    await enforce_auth_rate_limit(
+        "public_registration", subject,
+        limit=limit, window_seconds=window,
+    )
 
 
 def _utcnow() -> dt.datetime:

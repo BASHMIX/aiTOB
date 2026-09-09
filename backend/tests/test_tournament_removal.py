@@ -51,3 +51,17 @@ async def test_safe_removal_cleans_local_tournament_projection_and_releases_its_
         assert (await (await db.execute("SELECT active_match_id FROM stations WHERE id='station-2'")).fetchone())[0] == "keep-done"
         assert (await (await db.execute("SELECT COUNT(*) FROM planned_streams WHERE tournament_slug=?", (removal_db,))).fetchone())[0] == 0
         assert (await (await db.execute("SELECT COUNT(*) FROM provider_bracket_snapshots WHERE tournament_slug=?", (removal_db,))).fetchone())[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_reset_active_matches_is_workspace_scoped_for_colliding_slugs(tmp_path, monkeypatch):
+    """Resetting one tenant's Hub projection cannot wipe a sibling tenant."""
+    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "reset-scope.sqlite"))
+    await database.init_db()
+    await database.upsert_active_match("tenant-a-set", tournament_slug="same-slug", workspace_id="ws-a", status="not_started")
+    await database.upsert_active_match("tenant-b-set", tournament_slug="same-slug", workspace_id="ws-b", status="not_started")
+
+    await database.delete_tournament_active_matches("same-slug", "ws-a")
+
+    assert await database.get_active_match("tenant-a-set", workspace_id="ws-a") is None
+    assert await database.get_active_match("tenant-b-set", workspace_id="ws-b")

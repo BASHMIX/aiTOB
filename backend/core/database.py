@@ -643,6 +643,26 @@ async def list_media_assets(workspace_id: str) -> list[dict]:
             return [dict(row) for row in await cursor.fetchall()]
 
 
+def _overlay_config_references_asset(config: object, references: set[str]) -> bool:
+    """Return whether a flexible overlay JSON document still points at an asset.
+
+    Overlay presets deliberately accept arbitrary nested element properties, so
+    reference checks cannot rely on one particular key such as ``src`` or
+    ``background_url``.  Be conservative for deletion: a filename-qualified
+    URL is enough to keep the managed object alive until the organizer removes
+    the reference from the preset.
+    """
+    if isinstance(config, dict):
+        return any(_overlay_config_references_asset(value, references) for value in config.values())
+    if isinstance(config, (list, tuple)):
+        return any(_overlay_config_references_asset(value, references) for value in config)
+    if not isinstance(config, str):
+        return False
+    value = config.strip()
+    return any(value == reference or value.rstrip("/").endswith("/" + reference)
+               for reference in references if reference)
+
+
 async def delete_media_asset(asset_id: str, workspace_id: str) -> bool:
     """Soft-delete an asset only when it is owned and no live row references it."""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -663,6 +683,24 @@ async def delete_media_asset(asset_id: str, workspace_id: str) -> bool:
             async with db.execute(query, params) as cursor:
                 if await cursor.fetchone():
                     raise ValueError("Asset is still referenced by an active record")
+
+        # Overlay configs are JSON documents, not normalized asset relations.
+        # Inspect every preset in the owning workspace before soft deletion so
+        # a Browser Source cannot silently lose its background or image layer.
+        references = {str(item) for item in (url, key) if item}
+        async with db.execute("SELECT config FROM overlays WHERE workspace_id=?", (workspace_id,)) as cursor:
+            configs = await cursor.fetchall()
+        for row in configs:
+            raw_config = row[0]
+            try:
+                parsed_config = json.loads(raw_config) if isinstance(raw_config, str) else raw_config
+            except (TypeError, ValueError, json.JSONDecodeError):
+                # A malformed legacy preset cannot be parsed reliably; it also
+                # cannot prove a reference, so preserve existing behavior while
+                # avoiding a deletion crash.
+                continue
+            if _overlay_config_references_asset(parsed_config, references):
+                raise ValueError("Asset is still referenced by an overlay configuration")
         await db.execute("UPDATE media_assets SET deleted_at=CURRENT_TIMESTAMP WHERE id=? AND workspace_id=?", (asset_id, workspace_id))
         await db.commit()
     return True
@@ -1352,22 +1390,23 @@ async def update_station(station_id: str, workspace_id: str | None = None, **kwa
 
 async def update_station_active_overlay(station_id: str, overlay_name: str | None, workspace_id: str | None = None):
     async with aiosqlite.connect(DB_PATH) as db:
-        query = "UPDATE stations SET active_overlay = ? WHERE id = ?"
-        params: list = [overlay_name, station_id]
-        if workspace_id is not None:
-            query += " AND workspace_id = ?"
-            params.append(workspace_id)
-        await db.execute(query, params)
+        # Browser Source URLs and API routes use a stable public station id.
+        # A colliding id in another workspace is stored internally as
+        # ``<workspace>:<public-id>``, so resolve it inside this connection
+        # before mutating.  Do not let an unqualified public id silently miss
+        # its own station or update a sibling workspace's row.
+        storage_id = await _station_storage_id(db, station_id, workspace_id)
+        if storage_id is None:
+            raise ValueError("Station not found in workspace")
+        await db.execute("UPDATE stations SET active_overlay = ? WHERE id = ?", (overlay_name, storage_id))
         await db.commit()
 
 async def get_station_active_overlay(station_id: str, workspace_id: str | None = None) -> str | None:
     async with aiosqlite.connect(DB_PATH) as db:
-        query = "SELECT active_overlay FROM stations WHERE id = ?"
-        params: list = [station_id]
-        if workspace_id is not None:
-            query += " AND workspace_id = ?"
-            params.append(workspace_id)
-        async with db.execute(query, params) as cursor:
+        storage_id = await _station_storage_id(db, station_id, workspace_id)
+        if storage_id is None:
+            return None
+        async with db.execute("SELECT active_overlay FROM stations WHERE id = ?", (storage_id,)) as cursor:
             row = await cursor.fetchone()
             return row[0] if row else None
 
@@ -1396,39 +1435,40 @@ async def get_all_station_overlays(workspace_id: str | None = None):
 async def get_station_overlays(station_id: str, workspace_id: str | None = None):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        query = "SELECT so.* FROM station_overlays so WHERE so.station_id = ?"
-        params: list = [station_id]
-        if workspace_id is not None:
-            query += " AND EXISTS (SELECT 1 FROM stations s WHERE s.id = so.station_id AND s.workspace_id = ?)"
-            params.append(workspace_id)
-        async with db.execute(query + " ORDER BY sort_order", params) as cursor:
+        storage_id = await _station_storage_id(db, station_id, workspace_id)
+        if storage_id is None:
+            return []
+        async with db.execute(
+            "SELECT so.* FROM station_overlays so WHERE so.station_id = ? ORDER BY sort_order",
+            (storage_id,),
+        ) as cursor:
             return [dict(r) for r in await cursor.fetchall()]
 
 async def add_station_overlay(station_id: str, overlay_name: str, workspace_id: str | None = None):
     async with aiosqlite.connect(DB_PATH) as db:
-        if workspace_id is not None:
-            owned = await (await db.execute("SELECT 1 FROM stations WHERE id = ? AND workspace_id = ?", (station_id, workspace_id))).fetchone()
-            if not owned:
-                raise PermissionError("Station belongs to another workspace")
+        storage_id = await _station_storage_id(db, station_id, workspace_id)
+        if storage_id is None:
+            raise PermissionError("Station belongs to another workspace")
         async with db.execute(
-            "SELECT MAX(sort_order) FROM station_overlays WHERE station_id = ?", (station_id,)
+            "SELECT MAX(sort_order) FROM station_overlays WHERE station_id = ?", (storage_id,)
         ) as c:
             row = await c.fetchone()
             next_order = (row[0] or 0) + 1
         await db.execute(
             "INSERT INTO station_overlays (station_id, overlay_name, sort_order) VALUES (?, ?, ?)",
-            (station_id, overlay_name, next_order)
+            (storage_id, overlay_name, next_order)
         )
         await db.commit()
 
 async def remove_station_overlay(station_id: str, overlay_name: str, workspace_id: str | None = None):
     async with aiosqlite.connect(DB_PATH) as db:
-        query = "DELETE FROM station_overlays WHERE station_id = ? AND overlay_name = ?"
-        params: list = [station_id, overlay_name]
-        if workspace_id is not None:
-            query += " AND EXISTS (SELECT 1 FROM stations s WHERE s.id = station_overlays.station_id AND s.workspace_id = ?)"
-            params.append(workspace_id)
-        await db.execute(query, params)
+        storage_id = await _station_storage_id(db, station_id, workspace_id)
+        if storage_id is None:
+            raise PermissionError("Station belongs to another workspace")
+        await db.execute(
+            "DELETE FROM station_overlays WHERE station_id = ? AND overlay_name = ?",
+            (storage_id, overlay_name),
+        )
         await db.commit()
 
 # ── Active Matches ─────────────────────────────────────────────────────────
@@ -1924,10 +1964,20 @@ async def sync_active_matches(tournament_slug: str, provider_sets: list[Provider
         else:
             await add_hub_command(cmd)
 
-async def delete_tournament_active_matches(slug: str):
-    """Wipes all local active matches for a specific tournament."""
+async def delete_tournament_active_matches(slug: str, workspace_id: str | None = None):
+    """Wipes local active matches for a tournament within the caller's workspace.
+
+    The optional scope keeps legacy migration fixtures working, while every
+    authenticated API caller supplies its trusted workspace so a colliding
+    slug in another tenant cannot be reset accidentally.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("DELETE FROM active_matches WHERE tournament_slug = ?", (slug,))
+        query = "DELETE FROM active_matches WHERE tournament_slug = ?"
+        params: list[str] = [slug]
+        if workspace_id is not None:
+            query += " AND workspace_id = ?"
+            params.append(workspace_id)
+        await db.execute(query, params)
         await db.commit()
 
 async def delete_active_match(set_id: str, workspace_id: str | None = None):

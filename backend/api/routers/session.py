@@ -16,7 +16,7 @@ from backend.core.workspace_auth import (
     change_password, create_password_reset, consume_password_reset,
     create_email_verification, consume_email_verification,
     list_workspace_members, list_workspace_invitations, cancel_workspace_invitation,
-    enforce_auth_rate_limit,
+    enforce_auth_rate_limit, enforce_public_registration_rate_limit,
 )
 
 router = APIRouter(tags=["session"])
@@ -111,8 +111,21 @@ async def login(body: SessionLoginRequest, response: Response, request: Request)
 
 
 @router.post("/session/register", status_code=status.HTTP_201_CREATED)
-async def register(body: RegistrationRequest, response: Response):
+async def register(body: RegistrationRequest, response: Response, request: Request):
     """Implemented registration, explicitly closed until the isolation gate opens."""
+    # Do not create a limiter row while registration is closed.  Once an
+    # operator explicitly opens the gate, bound account creation by client
+    # origin rather than email so changing email addresses cannot bypass it.
+    if await public_registration_enabled():
+        try:
+            await enforce_public_registration_rate_limit(
+                request.client.host if request.client else "unknown",
+            )
+        except PermissionError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many registration attempts. Try again later.",
+            ) from exc
     try:
         principal = await register_workspace_owner(body.email, body.password, body.display_name, body.workspace_name)
         # Registration creates a session through the same durable session store.
