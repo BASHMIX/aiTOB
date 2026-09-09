@@ -336,6 +336,11 @@ operational check; a rehearsal is never a cutover.
   reopening it with the existing service-level integration key authenticated
   all five ciphertext rows without emitting the key. Both disposable targets
   were dropped after verification; no production rows changed.
+  A direct preflight against the configured runtime PostgreSQL target found
+  existing schema history, two stations, and one `workflow_outbox` record in
+  `needs_review`; `--allow-schema-only-target` correctly refused the merge
+  because the target was not empty. The pending external-effect record remains
+  intact for the T052 pause/reconciliation procedure.
 
 ## F. Migration, cutover and acceptance
 

@@ -177,6 +177,12 @@ encrypted credential rows. The key was not emitted or copied into this
 document; hosted deployments must inject `AITOB_INTEGRATION_MASTER_KEY` and
 `AITOB_AI_SERVICE_MASTER_KEY` separately.
 
+The configured runtime PostgreSQL database was not overwritten: a cutover
+preflight found existing schema history, two seeded stations, and one
+`workflow_outbox` row in `needs_review`, so the migration tool correctly refused
+to merge into it. That pending external-effect record must be reconciled during
+the controlled pause before T052; no row was deleted or rewritten.
+
 On 2026-09-09 a consistent read-only backup of the current SQLite fixture was
 restored byte-for-byte, then migrated to a disposable PostgreSQL database and
 validated through `app_migrations`. The rehearsal copied 50 tables and the
