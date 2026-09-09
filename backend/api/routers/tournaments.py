@@ -17,6 +17,7 @@ from backend.core.challonge_resolution import resolution_service
 from backend.core.provider_feature_flags import get_provider_feature_flags
 from backend.core.providers.challonge.client import ChallongeError, ChallongeRateLimitError
 from backend.core.database import persist_challonge_identity
+from backend.core.entitlements import EntitlementLimitExceeded, require_workspace_capacity
 from backend.api.ws_manager import manager as hub_mgr
 from backend.api.auth import verify_hub_password, require_permission
 from backend.core.workspace_auth import SessionPrincipal
@@ -181,6 +182,14 @@ async def api_add_tournament(body: AddTournamentRequest, principal: SessionPrinc
     provider_type = body.provider_type or "startgg"
     slug = (body.identifier or body.slug or "").strip()
     if not slug: raise HTTPException(status_code=400, detail="Tournament identifier is required")
+    # Capacity is checked before any provider request.  Re-importing the same
+    # local projection does not consume another free-plan slot.
+    workspace_id = _workspace(principal)
+    if workspace_id is not None and not await get_tournament(slug, workspace_id):
+        try:
+            await require_workspace_capacity(workspace_id, "tournaments")
+        except EntitlementLimitExceeded as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     if provider_type == "challonge":
         if not get_provider_feature_flags().challonge_read_enabled:

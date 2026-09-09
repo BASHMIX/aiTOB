@@ -21,6 +21,7 @@ from backend.core.storage import dbapi as aiosqlite, is_postgres
 from cryptography.fernet import Fernet, InvalidToken
 
 from backend.core import database
+from backend.core.entitlements import get_workspace_limit
 
 
 AI_SERVICE_ACTOR = "ai_service"
@@ -318,13 +319,23 @@ async def _reserve(config: dict[str, Any], tournament_slug: str, estimated_input
             # A process-local lock/BEGIN cannot serialize quota reservations.
             # This lock covers the current service-level budget across workers.
             await db.execute("SELECT id FROM ai_service_config WHERE id=1 FOR UPDATE")
+        usage_scope = " AND workspace_id=?" if workspace_id is not None else ""
+        usage_params: tuple[Any, ...] = (period_key, *(() if workspace_id is None else (workspace_id,)))
         row = await (await db.execute(
-            "SELECT COUNT(*), COALESCE(SUM(estimated_input_tokens + response_tokens), 0) FROM ai_usage_ledger WHERE period_key=? AND outcome IN ('reserved','completed')", (period_key,)
+            "SELECT COUNT(*), COALESCE(SUM(estimated_input_tokens + response_tokens), 0) "
+            "FROM ai_usage_ledger WHERE period_key=? AND outcome IN ('reserved','completed')" + usage_scope,
+            usage_params,
         )).fetchone()
         # Reserve the maximum permitted response too.  Otherwise two long
         # concurrent completions could both pass an input-only quota check.
         reserved_response_tokens = max(1, int(config["response_char_limit"]) // 4)
-        if int(row[0]) >= int(config["request_limit"]) or int(row[1]) + estimated_input_tokens + reserved_response_tokens > int(config["token_limit"]):
+        request_limit = await get_workspace_limit(workspace_id, "ai_requests_per_hour", int(config["request_limit"]))
+        token_limit = await get_workspace_limit(workspace_id, "ai_tokens_per_hour", int(config["token_limit"]))
+        if request_limit is not None:
+            request_limit = min(int(config["request_limit"]), int(request_limit))
+        if token_limit is not None:
+            token_limit = min(int(config["token_limit"]), int(token_limit))
+        if (request_limit is not None and int(row[0]) >= request_limit) or (token_limit is not None and int(row[1]) + estimated_input_tokens + reserved_response_tokens > token_limit):
             await db.rollback()
             raise AIUsageLimitError("AI request or token limit reached for the current hour.")
         await db.execute(

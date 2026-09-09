@@ -20,6 +20,7 @@ from backend.core.integrations import (
     disable_integration_account, list_integration_accounts, set_integration_secret,
     list_integration_destinations,
 )
+from backend.core.entitlements import EntitlementLimitExceeded, require_workspace_capacity
 
 router = APIRouter(tags=["integrations"])
 
@@ -42,7 +43,10 @@ async def list_accounts(principal: SessionPrincipal = Depends(require_permission
 @router.post("/integrations", status_code=status.HTTP_201_CREATED)
 async def create_account(body: IntegrationAccountRequest, principal: SessionPrincipal = Depends(require_permission("integrations.manage"))):
     try:
+        await require_workspace_capacity(principal.workspace_id, "integrations")
         return await create_integration_account(principal.workspace_id, body.provider_type, body.external_account_id, body.display_name, metadata=body.metadata)
+    except EntitlementLimitExceeded as exc:
+        raise HTTPException(409, str(exc)) from exc
     except IntegrationError as exc:
         raise HTTPException(422, str(exc)) from exc
 

@@ -7,6 +7,7 @@ from backend.core.database import (
 )
 from backend.api.auth import require_permission
 from backend.core.workspace_auth import SessionPrincipal
+from backend.core.entitlements import EntitlementLimitExceeded, require_workspace_capacity
 from backend.api.schemas import (
     CreateStationRequest, UpdateStationRequest, AddStationOverlayRequest, SetActiveOverlayRequest
 )
@@ -68,6 +69,10 @@ async def api_get_stations(principal: SessionPrincipal = Depends(require_permiss
              summary="Create a station")
 async def api_create_station(body: CreateStationRequest, principal: SessionPrincipal = Depends(require_permission("station.manage"))):
     """Register a new station (OBS scene / stream setup)."""
+    try:
+        await require_workspace_capacity(principal.workspace_id, "stations")
+    except EntitlementLimitExceeded as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     await create_station(body.id, body.name, principal.workspace_id)
     return {"message": "Created"}
 

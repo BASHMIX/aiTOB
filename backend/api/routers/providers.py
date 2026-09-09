@@ -4,6 +4,7 @@ from backend.api.auth import require_permission
 from backend.core.workspace_auth import SessionPrincipal
 from backend.core.providers.registry import get_provider
 from backend.core.database import get_provider_usage
+from backend.core.entitlements import get_workspace_limit
 from backend.core.provider_projection import provider_capability_projection
 from backend.core.challonge_resolution import resolution_service
 from backend.core.provider_feature_flags import get_provider_feature_flags
@@ -43,7 +44,9 @@ async def provider_usage(provider_type: str, account_id: str | None = None, prin
         from backend.core.integrations import get_integration_account
         if not await get_integration_account(account_id, workspace_id=_workspace(principal)):
             raise HTTPException(404, "Integration account not found")
-    return await get_provider_usage("challonge", monthly_limit=500, workspace_id=_workspace(principal), provider_account_id=account_id)
+    workspace_id = _workspace(principal)
+    monthly_limit = await get_workspace_limit(workspace_id, "provider_requests_per_month", 500)
+    return await get_provider_usage("challonge", monthly_limit=monthly_limit, workspace_id=workspace_id, provider_account_id=account_id)
 
 @router.get("/challonge/connection", response_model=ChallongeConnectionStateResponse)
 async def challonge_connection_state(principal: SessionPrincipal = Depends(require_permission("workspace.read"))):

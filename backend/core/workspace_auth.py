@@ -11,6 +11,7 @@ import base64
 import datetime as dt
 import hashlib
 import hmac
+import json
 import os
 import re
 import secrets
@@ -684,9 +685,20 @@ async def disable_workspace(principal: SessionPrincipal) -> None:
                 "AND state IN ('pending','sending','acknowledged','retrying') LIMIT 1",
                 (principal.workspace_id,),
             )).fetchone()
+            # New rows carry their workspace directly.  The match join is
+            # retained for old outbox rows that predate the ownership column;
+            # either form must block disablement while an effect could still
+            # be delivered after the workspace is revoked.
             pending_outbox = await (await db.execute(
-                "SELECT 1 FROM workflow_outbox o JOIN active_matches m ON m.set_id=o.match_id "
-                "WHERE m.workspace_id=? AND o.status IN ('pending','sending','retrying') LIMIT 1",
+                "SELECT 1 FROM workflow_outbox o "
+                "LEFT JOIN active_matches m ON m.set_id=o.match_id "
+                "WHERE o.status IN ('pending','sending','retrying') "
+                "AND (o.workspace_id=? OR m.workspace_id=?) LIMIT 1",
+                (principal.workspace_id, principal.workspace_id),
+            )).fetchone()
+            pending_hub_command = await (await db.execute(
+                "SELECT 1 FROM hub_commands WHERE workspace_id=? "
+                "AND status IN ('pending','processing','sending','retrying') LIMIT 1",
                 (principal.workspace_id,),
             )).fetchone()
             active_workflow = await (await db.execute(
@@ -694,7 +706,7 @@ async def disable_workspace(principal: SessionPrincipal) -> None:
                 "AND status IN ('called','ready','in_progress') LIMIT 1",
                 (principal.workspace_id,),
             )).fetchone()
-            if pending_ledger or pending_outbox or active_workflow:
+            if pending_ledger or pending_outbox or pending_hub_command or active_workflow:
                 raise ValueError("Workspace has active operations; drain them before disabling it.")
             await db.execute(
                 "UPDATE workspaces SET status='disabled', updated_at=CURRENT_TIMESTAMP WHERE id=?",
@@ -716,6 +728,50 @@ async def disable_workspace(principal: SessionPrincipal) -> None:
             await db.commit()
         except Exception:
             await db.rollback(); raise
+
+
+async def get_workspace_lifecycle(principal: SessionPrincipal) -> dict[str, object]:
+    """Return the safe disable/deletion policy for the current workspace.
+
+    Workspace disablement is a reversible operational block.  Hard deletion
+    is intentionally not exposed by this foundation: assets and operational
+    history must first go through an explicit retention/deletion workflow.
+    This read-only projection lets the UI explain why disablement is blocked
+    without inspecting another workspace or claiming that external effects
+    can be rolled back.
+    """
+    if principal.role not in {"owner", "organizer", "tournament_organizer"}:
+        raise PermissionError("Workspace lifecycle details require an organizer role.")
+    async with aiosqlite.connect(database.DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        workspace = await (await db.execute(
+            "SELECT id, status FROM workspaces WHERE id=?", (principal.workspace_id,)
+        )).fetchone()
+        if not workspace:
+            raise ValueError("Workspace was not found.")
+        blockers: list[str] = []
+        checks = (
+            ("provider_commands", "SELECT 1 FROM provider_command_ledger WHERE workspace_id=? AND state IN ('pending','sending','acknowledged','retrying') LIMIT 1"),
+            ("workflow_outbox", "SELECT 1 FROM workflow_outbox o LEFT JOIN active_matches m ON m.set_id=o.match_id WHERE o.status IN ('pending','sending','retrying') AND (o.workspace_id=? OR m.workspace_id=?) LIMIT 1"),
+            ("hub_commands", "SELECT 1 FROM hub_commands WHERE workspace_id=? AND status IN ('pending','processing','sending','retrying') LIMIT 1"),
+            ("active_matches", "SELECT 1 FROM active_matches WHERE workspace_id=? AND status IN ('called','ready','in_progress') LIMIT 1"),
+        )
+        for name, query in checks:
+            params = (principal.workspace_id, principal.workspace_id) if name == "workflow_outbox" else (principal.workspace_id,)
+            if await (await db.execute(query, params)).fetchone():
+                blockers.append(name)
+        asset_row = await (await db.execute(
+            "SELECT COUNT(*) FROM media_assets WHERE workspace_id=? AND deleted_at IS NULL",
+            (principal.workspace_id,),
+        )).fetchone()
+    return {
+        "workspace_id": str(workspace["id"]),
+        "status": str(workspace["status"]),
+        "disable_eligible": not blockers and str(workspace["status"]) == "active",
+        "disable_blockers": blockers,
+        "active_asset_count": int(asset_row[0] if asset_row else 0),
+        "hard_delete": {"available": False, "reason": "retention_workflow_required"},
+    }
 
 
 async def bootstrap_initial_owner_from_env() -> bool:
@@ -752,6 +808,14 @@ async def bootstrap_initial_owner_from_env() -> bool:
             await db.execute("INSERT INTO users (id, email, display_name, password_hash, is_platform_admin) VALUES (?, ?, ?, ?, TRUE)", (user_id, email, display_name[:120], hash_password(password)))
             await db.execute("INSERT INTO workspaces (id, slug, name) VALUES (?, ?, ?)", (workspace_id, slug, workspace_name[:120]))
             await db.execute("INSERT INTO workspace_memberships (workspace_id, user_id, role) VALUES (?, ?, 'owner')", (workspace_id, user_id))
+            # Every workspace receives an explicit free/non-billed
+            # entitlement at bootstrap, just like public/invited owners.
+            # Limits are interpreted by ``entitlements.py`` so an empty JSON
+            # value never becomes an accidental unlimited bypass.
+            await db.execute(
+                "INSERT INTO workspace_entitlements (workspace_id, plan_key, billing_state) VALUES (?, 'free', 'non_billed')",
+                (workspace_id,),
+            )
             await db.commit()
         except Exception:
             await db.rollback()
@@ -926,7 +990,11 @@ async def session_public_profile(principal: SessionPrincipal) -> dict[str, objec
             row = await cursor.fetchone()
     if not row:
         raise PermissionError("Session account no longer exists")
-    return {"user_id": principal.user_id, "email": str(row["email"]), "display_name": str(row["display_name"]), "workspace_id": principal.workspace_id, "workspace_name": str(row["workspace_name"]), "workspace_slug": str(row["workspace_slug"]), "role": principal.role, "email_verified": row["email_verified_at"] is not None, "mfa_enabled": bool(row["mfa_enabled"]), "plan_key": str(row["plan_key"]), "billing_state": str(row["billing_state"]), "limits_json": str(row["limits_json"])}
+    # Project effective free-plan limits without exposing billing credentials
+    # or making the UI depend on a second source of truth.
+    from backend.core.entitlements import get_workspace_entitlement
+    entitlement = await get_workspace_entitlement(principal.workspace_id)
+    return {"user_id": principal.user_id, "email": str(row["email"]), "display_name": str(row["display_name"]), "workspace_id": principal.workspace_id, "workspace_name": str(row["workspace_name"]), "workspace_slug": str(row["workspace_slug"]), "role": principal.role, "email_verified": row["email_verified_at"] is not None, "mfa_enabled": bool(row["mfa_enabled"]), "plan_key": entitlement["plan_key"], "billing_state": entitlement["billing_state"], "limits_json": json.dumps(entitlement["limits"], separators=(",", ":"))}
 
 
 async def legacy_owner_principal() -> SessionPrincipal | None:
