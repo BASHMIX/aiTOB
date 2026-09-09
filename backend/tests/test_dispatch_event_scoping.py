@@ -8,7 +8,7 @@ matches must only land on an idle stream station bound to the same event.
 import os
 import pytest
 
-import aiosqlite
+from backend.core.storage import dbapi as aiosqlite
 
 from backend.core.database import (
     init_db, upsert_active_match, upsert_tournament,
@@ -45,7 +45,7 @@ async def _arm_tournament(slug=SLUG, concurrency=1, stop_at=2):
     await upsert_tournament(slug, "Major X", "", "", "", "{}")
     async with aiosqlite.connect(TEST_DB_PATH) as db:
         await db.execute(
-            "UPDATE tournaments SET auto_dispatch_enabled = 1, "
+            "UPDATE tournaments SET auto_dispatch_enabled = TRUE, "
             "auto_dispatch_concurrency = ?, auto_dispatch_stop_at = ? WHERE slug = ?",
             (concurrency, stop_at, slug),
         )
@@ -176,7 +176,7 @@ async def test_eligible_events_can_be_restricted_to_one_workspace(setup_test_db)
     await upsert_tournament("tenant-a", "Tenant A", "", "", "", "{}", workspace_id="ws-a")
     await upsert_tournament("tenant-b", "Tenant B", "", "", "", "{}", workspace_id="ws-b")
     async with aiosqlite.connect(TEST_DB_PATH) as db:
-        await db.execute("UPDATE tournaments SET auto_dispatch_enabled=1 WHERE workspace_id IN ('ws-a','ws-b')")
+        await db.execute("UPDATE tournaments SET auto_dispatch_enabled=TRUE WHERE workspace_id IN ('ws-a','ws-b')")
         await db.commit()
     await upsert_active_match("a-1", workspace_id="ws-a", tournament_slug="tenant-a", event_id="e", p1_name="A", p2_name="B", p1_entrant_id="a", p2_entrant_id="b", status="not_started")
     await upsert_active_match("b-1", workspace_id="ws-b", tournament_slug="tenant-b", event_id="e", p1_name="C", p2_name="D", p1_entrant_id="c", p2_entrant_id="d", status="not_started")

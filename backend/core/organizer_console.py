@@ -46,27 +46,27 @@ async def read_organizer_console(tournament_slug: str, workspace_id: str | None 
         conflicts = [dict(row) for row in await (await db.execute(
             """SELECT c.id, c.set_id, c.created_at, am.p1_name, am.p2_name
                FROM conflicts c JOIN active_matches am ON am.set_id=c.set_id
-               WHERE c.resolved=FALSE AND am.tournament_slug=? AND (? IS NULL OR am.workspace_id=?) ORDER BY c.created_at DESC""", (tournament_slug, workspace_id, workspace_id)
+               WHERE c.resolved=FALSE AND am.tournament_slug=? AND (CAST(? AS TEXT) IS NULL OR am.workspace_id=?) ORDER BY c.created_at DESC""", (tournament_slug, workspace_id, workspace_id)
         )).fetchall()]
         provider_commands = [dict(row) for row in await (await db.execute(
             """SELECT id, set_id, action, state, reason, error_message, created_at, updated_at
-               FROM provider_command_ledger WHERE tournament_slug=? AND (? IS NULL OR workspace_id=?) ORDER BY updated_at DESC LIMIT 100""", (tournament_slug, workspace_id, workspace_id)
+               FROM provider_command_ledger WHERE tournament_slug=? AND (CAST(? AS TEXT) IS NULL OR workspace_id=?) ORDER BY updated_at DESC LIMIT 100""", (tournament_slug, workspace_id, workspace_id)
         )).fetchall()]
         decisions = [dict(row) for row in await (await db.execute(
             """SELECT id, event_id, set_id, decision, reason_code, explanation, first_seen_at, last_seen_at, seen_count
-               FROM dispatcher_decisions WHERE tournament_slug=? AND (? IS NULL OR workspace_id=?) ORDER BY last_seen_at DESC LIMIT 100""", (tournament_slug, workspace_id, workspace_id)
+               FROM dispatcher_decisions WHERE tournament_slug=? AND (CAST(? AS TEXT) IS NULL OR workspace_id=?) ORDER BY last_seen_at DESC LIMIT 100""", (tournament_slug, workspace_id, workspace_id)
         )).fetchall()]
         outbox = [dict(row) for row in await (await db.execute(
             """SELECT o.event_id, o.match_id, o.event_type, o.status, o.attempts, o.created_at, o.updated_at, o.completed_at
                FROM workflow_outbox o LEFT JOIN active_matches am ON am.set_id=o.match_id
                LEFT JOIN action_proposals ap ON ap.outbox_event_id=o.event_id
-               WHERE (am.tournament_slug=? OR ap.tournament_slug=?) AND (? IS NULL OR o.workspace_id=?)
+               WHERE (am.tournament_slug=? OR ap.tournament_slug=?) AND (CAST(? AS TEXT) IS NULL OR o.workspace_id=?)
                ORDER BY o.updated_at DESC LIMIT 100""", (tournament_slug, tournament_slug, workspace_id, workspace_id)
         )).fetchall()]
         commands = [dict(row) for row in await (await db.execute(
             """SELECT hc.id, hc.source, hc.status, hc.created_at, ap.id AS proposal_id, ap.match_id
                FROM hub_commands hc JOIN action_proposals ap ON ap.command_id=hc.id
-               WHERE ap.tournament_slug=? AND (? IS NULL OR hc.workspace_id=?) ORDER BY hc.created_at DESC LIMIT 100""", (tournament_slug, workspace_id, workspace_id)
+               WHERE ap.tournament_slug=? AND (CAST(? AS TEXT) IS NULL OR hc.workspace_id=?) ORDER BY hc.created_at DESC LIMIT 100""", (tournament_slug, workspace_id, workspace_id)
         )).fetchall()]
 
     failed_commands = [row for row in provider_commands if row["state"] in {"failed", "permanent_failure", "conflict", "needs_review"}]

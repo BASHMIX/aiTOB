@@ -117,6 +117,10 @@ operational check; a rehearsal is never a cutover.
   correcting event grouping, Boolean predicates, nullable workspace casts, and
   PG-compatible row assertions. This closes the previously observed PG query
   failures; compatibility-bridge removal and final cutover acceptance remain.
+  Follow-up PostgreSQL runs also cover Challonge identity persistence and
+  per-event Dispatcher scoping: 20/20 identity/event cases pass after casting
+  nullable workspace predicates, preserving text match numbers in numeric-safe
+  ordering, and using Boolean literals in the PG fixtures (2026-09-10).
 - [~] **T005 / FR-009–011** PostgreSQL acceptance now proves concurrent
   provider-ledger idempotency/lease ownership as well as approval, Outbox and
   station and hub-command claims (`test_postgres_storage.py`: 19 passing PG

@@ -348,14 +348,14 @@ async def get_tournament_player_links(tournament_slug: str, workspace_id: str | 
                    p.team, p.country, p.cfn_id
             FROM tournament_player_links l
             LEFT JOIN players p ON p.discord_id = l.player_discord_id
-                                  AND (? IS NULL OR p.workspace_id = l.workspace_id)
+                                  AND (CAST(? AS TEXT) IS NULL OR p.workspace_id = l.workspace_id)
             WHERE l.tournament_slug = ?
-              AND (? IS NULL OR EXISTS (
+              AND (CAST(? AS TEXT) IS NULL OR EXISTS (
                     SELECT 1 FROM tournaments t
                     WHERE t.slug = l.tournament_slug
                       AND (t.workspace_id = ? OR t.workspace_id IS NULL)
               ))
-              AND (? IS NULL OR l.workspace_id = ?)
+              AND (CAST(? AS TEXT) IS NULL OR l.workspace_id = ?)
             """,
             (workspace_id, tournament_slug, workspace_id, workspace_id, workspace_id, workspace_id),
         ) as cursor:
@@ -432,7 +432,7 @@ async def unlink_tournament_entrant(tournament_slug: str, entrant_id: str, works
             if not tournament or tournament[0] not in (None, workspace_id):
                 return False
         async with db.execute(
-            "SELECT player_discord_id FROM tournament_player_links WHERE tournament_slug = ? AND entrant_id = ? AND (? IS NULL OR workspace_id = ?)",
+            "SELECT player_discord_id FROM tournament_player_links WHERE tournament_slug = ? AND entrant_id = ? AND (CAST(? AS TEXT) IS NULL OR workspace_id = ?)",
             (tournament_slug, str(entrant_id), workspace_id, workspace_id),
         ) as cursor:
             row = await cursor.fetchone()
@@ -440,7 +440,7 @@ async def unlink_tournament_entrant(tournament_slug: str, entrant_id: str, works
             return False
         discord_id = str(row[0])
         await db.execute(
-            "DELETE FROM tournament_player_links WHERE tournament_slug = ? AND entrant_id = ? AND (? IS NULL OR workspace_id = ?)",
+            "DELETE FROM tournament_player_links WHERE tournament_slug = ? AND entrant_id = ? AND (CAST(? AS TEXT) IS NULL OR workspace_id = ?)",
             (tournament_slug, str(entrant_id), workspace_id, workspace_id),
         )
         # A later Start.gg sync may restore a native Start.gg account link.
@@ -831,7 +831,7 @@ async def persist_challonge_identity(
             """
             SELECT * FROM tournaments
             WHERE provider_type = 'challonge'
-              AND (? IS NULL OR workspace_id = ?)
+              AND (CAST(? AS TEXT) IS NULL OR workspace_id = ?)
               AND provider_account_id = ?
               AND COALESCE(provider_subdomain, '') = ?
               AND provider_tournament_id = ?
@@ -1140,8 +1140,8 @@ async def get_provider_usage(provider_type: str, monthly_limit: int | None = Non
             f"""
             SELECT COUNT(*) FROM provider_api_usage
             WHERE provider_type = ?
-              AND (? IS NULL OR workspace_id = ?)
-              AND (? IS NULL OR provider_account_id = ?)
+              AND (CAST(? AS TEXT) IS NULL OR workspace_id = ?)
+              AND (CAST(? AS TEXT) IS NULL OR provider_account_id = ?)
               AND created_at >= {month_start}
             """,
             (provider_type, workspace_id, workspace_id, provider_account_id, provider_account_id),
@@ -2763,10 +2763,16 @@ async def get_dispatch_candidates(tournament_slug: str, limit: int, event_id: st
     if event_id is not None:
         sql += " AND COALESCE(event_id, '') = ?"
         params.append(event_id)
-    sql += """
+    match_order = (
+        "CASE WHEN match_number ~ '^[0-9]+$' THEN match_number::BIGINT ELSE 999999 END"
+        if is_postgres() else
+        "CASE WHEN match_number GLOB '[0-9]*' AND match_number NOT GLOB '*[^0-9]*' "
+        "THEN CAST(match_number AS INTEGER) ELSE 999999 END"
+    )
+    sql += f"""
         ORDER BY
           COALESCE(NULLIF(phase_group, ''), 'zzzz'),
-          COALESCE(match_number, 999999),
+          {match_order},
           created_at
         LIMIT ?
     """
@@ -3549,7 +3555,7 @@ async def get_live_sync_state_v2(tournament_slug: str, workspace_id: str | None 
                  SUM(CASE WHEN COALESCE(hub_status, status) IN ('called', 'ready') THEN 1 ELSE 0 END),
                  SUM(CASE WHEN sync_status IN ('pending', 'acknowledged_unverified', 'retrying') THEN 1 ELSE 0 END)
                FROM active_matches WHERE tournament_slug=?
-                 AND (? IS NULL OR workspace_id=?)""",
+                 AND (CAST(? AS TEXT) IS NULL OR workspace_id=?)""",
             (tournament_slug, workspace_id, workspace_id),
         ) as cursor:
             active, called, pending = await cursor.fetchone()

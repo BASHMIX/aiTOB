@@ -132,7 +132,7 @@ async def list_action_proposals(tournament_slug: str, workspace_id: str | None =
     async with aiosqlite.connect(database.DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
-            "SELECT * FROM action_proposals WHERE tournament_slug=? AND (? IS NULL OR workspace_id=?) ORDER BY created_at DESC",
+            "SELECT * FROM action_proposals WHERE tournament_slug=? AND (CAST(? AS TEXT) IS NULL OR workspace_id=?) ORDER BY created_at DESC",
             (tournament_slug, workspace_id, workspace_id),
         )).fetchall()
     return [dict(row) for row in rows]
