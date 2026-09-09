@@ -111,6 +111,12 @@ operational check; a rehearsal is never a cutover.
   storage; `test_provider_snapshot_workspace_scope.py` proves a foreign
   workspace cannot read or write the same snapshot. Direct legacy callers
   retain the unscoped signature only for migration/test fixtures.
+  PostgreSQL worker/dispatcher acceptance on 2026-09-10 completed 21 passed / 1
+  skipped across `test_auto_dispatcher_service.py`,
+  `test_worker_workspace_scope.py`, and `test_provider_recovery.py` after
+  correcting event grouping, Boolean predicates, nullable workspace casts, and
+  PG-compatible row assertions. This closes the previously observed PG query
+  failures; compatibility-bridge removal and final cutover acceptance remain.
 - [~] **T005 / FR-009–011** PostgreSQL acceptance now proves concurrent
   provider-ledger idempotency/lease ownership as well as approval, Outbox and
   station and hub-command claims (`test_postgres_storage.py`: 19 passing PG
@@ -123,6 +129,10 @@ operational check; a rehearsal is never a cutover.
   The post-recovery workspace-scope and provider-recovery run passes 28/28 on
   disposable PostgreSQL; an untyped nullable workspace predicate found there
   was corrected to an explicit scoped clause without changing SQLite behavior.
+  The follow-up worker/dispatcher run is 21/21 passing with one intentional
+  skip on 2026-09-10, including restart-safe claims and kill-switch/tournament
+  rechecks. Full cutover and broader two-organization operational acceptance
+  are still required before closing T005.
 - [~] **T006 / FR-011** `WorkflowOutboxWorker` now marks an explicitly
   ambiguous external outcome `needs_review` and does not retry it; PG acceptance
   also proves cancellation after delivery and before completion persistence

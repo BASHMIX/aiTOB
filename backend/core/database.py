@@ -2680,7 +2680,9 @@ async def get_dispatch_eligible_events(workspace_id: str | None = None) -> list[
               AND (t.workspace_id IS NULL OR am.workspace_id = t.workspace_id)
             WHERE t.auto_dispatch_enabled = TRUE
             """ + (" AND t.workspace_id = ?" if workspace_id is not None else "") + """
-            GROUP BY t.slug, t.workspace_id, COALESCE(am.event_id, '')
+            GROUP BY t.slug, t.name, t.workspace_id,
+                     t.auto_dispatch_concurrency, t.auto_dispatch_stop_at,
+                     COALESCE(am.event_id, ''), COALESCE(am.event_name, '')
             """
         async with db.execute(query, ([workspace_id] if workspace_id is not None else [])) as cursor:
             return [dict(r) for r in await cursor.fetchall()]
@@ -2963,10 +2965,10 @@ async def dispatcher_claim_is_active(set_id: str, workspace_id: str | None = Non
                JOIN tournaments t ON t.slug=c.tournament_slug
                JOIN global_settings s ON s.key='auto_dispatch_master_switch'
                WHERE c.set_id=? AND c.state='claimed'
-                 AND (? IS NULL OR c.workspace_id=? )
-                 AND (? IS NULL OR t.workspace_id=? )
+                 AND (CAST(? AS TEXT) IS NULL OR c.workspace_id=CAST(? AS TEXT) )
+                 AND (CAST(? AS TEXT) IS NULL OR t.workspace_id=CAST(? AS TEXT) )
                  AND lower(s.value)='on'
-                 AND COALESCE(t.auto_dispatch_enabled, 0)=1""",
+                 AND COALESCE(t.auto_dispatch_enabled, FALSE)=TRUE""",
             (set_id, workspace_id, workspace_id, workspace_id, workspace_id),
         ) as cursor:
             return await cursor.fetchone() is not None
@@ -3891,9 +3893,9 @@ async def upsert_provider_identity_link_v2(link: dict, workspace_id: str | None 
         async with db.execute(
             """SELECT * FROM provider_identity_links
                WHERE provider_type=? AND tournament_slug=?
-                 AND (? IS NULL OR workspace_id=?)
-                 AND COALESCE(provider_entrant_id, '')=COALESCE(?, '')
-                 AND COALESCE(discord_user_id, '')=COALESCE(?, '')
+                 AND (CAST(? AS TEXT) IS NULL OR workspace_id=CAST(? AS TEXT))
+                 AND COALESCE(provider_entrant_id, '')=COALESCE(CAST(? AS TEXT), '')
+                 AND COALESCE(discord_user_id, '')=COALESCE(CAST(? AS TEXT), '')
                ORDER BY id DESC LIMIT 1""",
             (link["provider_type"], link["tournament_slug"], workspace_id, workspace_id, link.get("provider_entrant_id"), link.get("discord_user_id")),
         ) as cursor:
@@ -3909,7 +3911,7 @@ async def get_verified_discord_identity_link_v2(provider_type: str, tournament_s
         async with db.execute(
             """SELECT * FROM provider_identity_links
                WHERE provider_type=? AND tournament_slug=? AND provider_entrant_id=?
-                 AND (? IS NULL OR workspace_id=?)
+                 AND (CAST(? AS TEXT) IS NULL OR workspace_id=CAST(? AS TEXT))
                  AND verification_state IN ('verified', 'organizer_override')
                  AND discord_user_id IS NOT NULL
                ORDER BY verified_at DESC, id DESC LIMIT 1""",

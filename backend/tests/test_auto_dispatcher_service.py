@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-import aiosqlite
 import pytest
 
 from backend.core import database
@@ -12,6 +11,7 @@ from backend.core.auto_dispatcher.policy import DispatchPolicy
 from backend.core.auto_dispatcher.service import AutoDispatcherService
 from backend.api.schemas import PatchTournamentSettingsRequest
 from pydantic import ValidationError
+from backend.core.storage import dbapi as aiosqlite
 
 
 SLUG = "dispatch/test"
@@ -151,8 +151,10 @@ async def test_service_calls_through_hub_workflow_once_and_deduplicates_decision
     commands = await database.get_pending_hub_commands()
     assert [(command["command_text"], command["source"]) for command in commands] == [("call_match m1", "dispatcher")]
     async with aiosqlite.connect(database.DB_PATH) as db:
-        async with db.execute("SELECT COUNT(*), seen_count FROM dispatcher_decisions WHERE set_id='m1' AND reason_code='eligible'") as cursor:
-            count, seen = await cursor.fetchone()
+        async with db.execute("SELECT COUNT(*) FROM dispatcher_decisions WHERE set_id='m1' AND reason_code='eligible'") as cursor:
+            count = (await cursor.fetchone())[0]
+        async with db.execute("SELECT seen_count FROM dispatcher_decisions WHERE set_id='m1' AND reason_code='eligible'") as cursor:
+            seen = (await cursor.fetchone())[0]
     # The next tick sees the durable `called` state, so it does not produce a
     # second selection audit or a duplicate Hub command.
     assert (count, seen) == (1, 1)
@@ -184,10 +186,15 @@ async def test_repeated_skip_updates_one_audit_record_instead_of_spamming(dispat
 
     async with aiosqlite.connect(database.DB_PATH) as db:
         async with db.execute(
-            "SELECT COUNT(*), seen_count FROM dispatcher_decisions "
+            "SELECT COUNT(*) FROM dispatcher_decisions "
             "WHERE set_id='stream' AND reason_code='on_stream_excluded'"
         ) as cursor:
-            count, seen = await cursor.fetchone()
+            count = (await cursor.fetchone())[0]
+        async with db.execute(
+            "SELECT seen_count FROM dispatcher_decisions "
+            "WHERE set_id='stream' AND reason_code='on_stream_excluded'"
+        ) as cursor:
+            seen = (await cursor.fetchone())[0]
     assert (count, seen) == (1, 2)
 
 
@@ -215,7 +222,9 @@ async def test_kill_switch_between_selection_and_execution_prevents_call_and_can
     async with aiosqlite.connect(database.DB_PATH) as db:
         async with db.execute("SELECT command_text, status FROM hub_commands ORDER BY id") as cursor:
             rows = await cursor.fetchall()
-    assert rows == [("call_match manual", "pending"), ("call_match automatic", "cancelled")]
+    assert [(row["command_text"], row["status"]) if isinstance(row, dict) else tuple(row) for row in rows] == [
+        ("call_match manual", "pending"), ("call_match automatic", "cancelled")
+    ]
 
 
 def test_dispatcher_setting_bounds_are_rejected_by_the_backend_schema():
@@ -282,5 +291,9 @@ async def test_tournament_pause_cancels_only_its_pending_automatic_work(dispatch
             commands = await cursor.fetchall()
         async with db.execute("SELECT set_id, state FROM dispatcher_dispatch_claims ORDER BY set_id") as cursor:
             claims = await cursor.fetchall()
-    assert commands == [("call_match first", "cancelled"), ("call_match second", "pending")]
-    assert claims == [("first", "cancelled"), ("second", "queued")]
+    assert [(row["command_text"], row["status"]) if isinstance(row, dict) else tuple(row) for row in commands] == [
+        ("call_match first", "cancelled"), ("call_match second", "pending")
+    ]
+    assert [(row["set_id"], row["state"]) if isinstance(row, dict) else tuple(row) for row in claims] == [
+        ("first", "cancelled"), ("second", "queued")
+    ]

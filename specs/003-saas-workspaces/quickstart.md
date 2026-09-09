@@ -192,6 +192,14 @@ databases after the workspace feed/station changes. The local backend suite is
 444 passed / 21 skipped; skipped cases remain the explicitly PostgreSQL-only
 cases when no `AITOB_PG_TEST_URL` is supplied to the local command.
 
+On 2026-09-10 the PostgreSQL worker/dispatcher acceptance was rerun after
+fixing nullable workspace predicates, Boolean coercion, event grouping, and
+SQLite-only test assertions. `test_auto_dispatcher_service.py`,
+`test_worker_workspace_scope.py`, and `test_provider_recovery.py` completed
+21 passed / 1 skipped. The run exercised scoped claims, kill-switch and
+tournament pause rechecks, outage freshness, deduplicated decisions, and
+workspace-safe worker recovery against the disposable PostgreSQL database.
+
 The post-acceptance additions include two redacted error-telemetry tests,
 seven backup-manifest restore-safety tests and the selector-loop regression;
 they are included in the 444-pass count above.
