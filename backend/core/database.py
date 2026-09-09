@@ -2897,15 +2897,21 @@ async def get_open_provider_command_for_match_v2(match_id: str, action: str, wor
     return dict(row) if row else None
 
 
-async def set_match_sync_status_v2(match_id: str, sync_status: str, *, reason: str | None = None) -> dict:
+async def set_match_sync_status_v2(
+    match_id: str, sync_status: str, *, reason: str | None = None,
+    workspace_id: str | None = None,
+) -> dict:
     """Persist remote-command certainty without claiming a Hub completion."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        scope = " AND workspace_id=?" if workspace_id is not None else ""
+        params = (sync_status, reason, match_id) + ((workspace_id,) if workspace_id is not None else ())
         await db.execute(
-            """UPDATE active_matches SET sync_status=?, sync_reason=? WHERE set_id=?""",
-            (sync_status, reason, match_id),
+            """UPDATE active_matches SET sync_status=?, sync_reason=? WHERE set_id=?""" + scope,
+            params,
         )
-        async with db.execute("SELECT * FROM active_matches WHERE set_id=?", (match_id,)) as cursor:
+        async with db.execute("SELECT * FROM active_matches WHERE set_id=?" + scope,
+                              (match_id,) + ((workspace_id,) if workspace_id is not None else ())) as cursor:
             row = await cursor.fetchone()
         await db.commit()
     if not row:
@@ -3049,15 +3055,15 @@ async def enqueue_workflow_outbox_v2(event: dict) -> dict:
             """
             INSERT INTO workflow_outbox (
                 event_id, match_id, event_type, payload_json, deduplication_key,
-                status, attempts, next_attempt_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                status, attempts, next_attempt_at, workspace_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(deduplication_key) DO NOTHING
             """,
             (
                 event["event_id"], event["match_id"], event["event_type"],
                 json.dumps(event.get("payload", {})), event["deduplication_key"],
                 event.get("status", "pending"), int(event.get("attempts", 0)),
-                event.get("next_attempt_at"),
+                event.get("next_attempt_at"), event.get("workspace_id"),
             ),
         )
         await db.commit()

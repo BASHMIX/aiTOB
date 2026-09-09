@@ -48,22 +48,26 @@ class AttendanceTimerService:
         if remaining <= 0:
             return "overdue_review"
         self.cancel(match_id)
-        self._tasks[match_id] = asyncio.create_task(self._wait(match_id, remaining))
+        self._tasks[match_id] = asyncio.create_task(
+            self._wait(match_id, remaining, str(match.get("workspace_id") or "") or None)
+        )
         return "scheduled"
 
-    async def _wait(self, match_id: str, seconds: float) -> None:
+    async def _wait(self, match_id: str, seconds: float, workspace_id: str | None = None) -> None:
         try:
             await self._sleep(seconds)
-            current = await database.get_active_match(match_id)
+            current = await database.get_active_match(match_id, workspace_id)
             if not current or current.get("hub_status") == "complete" or current.get("provider_state_normalized") == "complete":
                 return
             await database.set_match_sync_status_v2(
-                match_id, "needs_review", reason="Attendance deadline elapsed while recovery was active"
+                match_id, "needs_review", workspace_id=workspace_id,
+                reason="Attendance deadline elapsed while recovery was active",
             )
             await database.enqueue_workflow_outbox_v2({
                 "event_id": f"attendance-review:{match_id}", "match_id": match_id,
                 "event_type": "attendance_deadline_review",
                 "deduplication_key": f"attendance_deadline_review:{match_id}",
+                "workspace_id": workspace_id,
                 "payload": {"match_id": match_id},
             })
         finally:
@@ -99,7 +103,8 @@ class RecoveryService:
                 future.append(match_id)
             elif result == "overdue_review":
                 await database.set_match_sync_status_v2(
-                    match_id, "needs_review", reason="Attendance deadline elapsed while aiTOB was offline"
+                    match_id, "needs_review", workspace_id=match.get("workspace_id"),
+                    reason="Attendance deadline elapsed while aiTOB was offline",
                 )
                 overdue.append(match_id)
             elif result == "terminal":

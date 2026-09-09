@@ -51,6 +51,11 @@ operational check; a rehearsal is never a cutover.
   tasks now use the same tenant-qualified key; `test_sync_budget_acceptance.py`
   covers identical slugs in two workspaces. Provider usage telemetry records the
   account/workspace and uses PostgreSQL-safe month boundaries.
+  Recovery timer reads, sync-status writes, and attendance review Outbox events
+  now carry the durable match workspace; a wrong-tenant worker context is
+  rejected without modifying the match. Tournament Hub reset also requires the
+  authenticated workspace, and station-overlay helpers resolve tenant-qualified
+  storage IDs before reads or writes.
   Remaining runtime inventory to close before cutover (each must use the
   PostgreSQL repository boundary and a trusted workspace context):
   `backend/api/routers/settings.py` (`api_get_settings`, `api_patch_settings`,

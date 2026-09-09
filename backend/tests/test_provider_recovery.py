@@ -61,6 +61,18 @@ async def test_overdue_timer_requests_review_never_auto_dq(recovery_db):
 
 
 @pytest.mark.asyncio
+async def test_recovery_status_update_requires_match_workspace(recovery_db):
+    """A worker carrying the wrong durable tenant cannot update a match."""
+    with pytest.raises(ValueError, match="Unknown match"):
+        await database.set_match_sync_status_v2(
+            "challonge:future", "needs_review", workspace_id="other-workspace",
+            reason="must not cross tenant",
+        )
+    row = await database.get_active_match("challonge:future")
+    assert row["sync_status"] != "needs_review"
+
+
+@pytest.mark.asyncio
 async def test_call_timer_only_warns_and_never_auto_dq(monkeypatch):
     from backend.core import match_state
 
