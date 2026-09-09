@@ -836,19 +836,39 @@ async def persist_challonge_identity(
         await db.commit()
     return tournament
 
-async def set_tournament_sync_status(slug: str, ready: bool, error: str | None = None):
+async def set_tournament_sync_status(
+    slug: str,
+    ready: bool,
+    error: str | None = None,
+    workspace_id: str | None = None,
+):
     """Record remote freshness without ever retaining provider credentials."""
     async with aiosqlite.connect(DB_PATH) as db:
+        scope = " AND workspace_id = ?" if workspace_id else ""
+        params = ("ready" if ready else "error", None if ready else (error or "Provider synchronization failed."), slug)
+        if workspace_id:
+            params += (workspace_id,)
         await db.execute(
-            "UPDATE tournaments SET provider_sync_status = ?, provider_sync_error = ?, provider_last_synced_at = CURRENT_TIMESTAMP WHERE slug = ?",
-            ("ready" if ready else "error", None if ready else (error or "Provider synchronization failed."), slug),
+            "UPDATE tournaments SET provider_sync_status = ?, provider_sync_error = ?, provider_last_synced_at = CURRENT_TIMESTAMP WHERE slug = ?" + scope,
+            params,
         )
         await db.commit()
 
 
-async def save_bracket_snapshot(tournament_slug: str, sets: list[dict]) -> None:
+async def save_bracket_snapshot(
+    tournament_slug: str,
+    sets: list[dict],
+    workspace_id: str | None = None,
+) -> None:
     """Persist the provider-normalized bracket for local-only dashboard reads."""
     async with aiosqlite.connect(DB_PATH) as db:
+        if workspace_id:
+            owned = await (await db.execute(
+                "SELECT 1 FROM tournaments WHERE slug = ? AND workspace_id = ?",
+                (tournament_slug, workspace_id),
+            )).fetchone()
+            if not owned:
+                raise ValueError("Tournament is not owned by the requested workspace")
         await db.execute(
             """
             INSERT INTO provider_bracket_snapshots (tournament_slug, sets_json, synced_at)
@@ -861,13 +881,23 @@ async def save_bracket_snapshot(tournament_slug: str, sets: list[dict]) -> None:
         await db.commit()
 
 
-async def get_bracket_snapshot(tournament_slug: str) -> dict:
+async def get_bracket_snapshot(
+    tournament_slug: str,
+    workspace_id: str | None = None,
+) -> dict:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT sets_json, synced_at FROM provider_bracket_snapshots WHERE tournament_slug = ?",
-            (tournament_slug,),
-        ) as cursor:
+        query = """
+            SELECT s.sets_json, s.synced_at
+            FROM provider_bracket_snapshots s
+            JOIN tournaments t ON t.slug = s.tournament_slug
+            WHERE s.tournament_slug = ?
+        """
+        params: tuple[str, ...] = (tournament_slug,)
+        if workspace_id:
+            query += " AND t.workspace_id = ?"
+            params += (workspace_id,)
+        async with db.execute(query, params) as cursor:
             row = await cursor.fetchone()
     if not row:
         return {"sets": [], "synced_at": None}

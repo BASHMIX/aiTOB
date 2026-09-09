@@ -101,6 +101,11 @@ operational check; a rehearsal is never a cutover.
   API startup no longer issues a provider request merely because a credential
   exists. The default startup path is covered by
   `test_api_shutdown_drains_started_tasks_and_does_not_import_secrets`.
+  Tournament refresh/stream lookup and bracket snapshot/status paths now pass
+  the authenticated workspace through provider resolution and local snapshot
+  storage; `test_provider_snapshot_workspace_scope.py` proves a foreign
+  workspace cannot read or write the same snapshot. Direct legacy callers
+  retain the unscoped signature only for migration/test fixtures.
 - [~] **T005 / FR-009–011** PostgreSQL acceptance now proves concurrent
   provider-ledger idempotency/lease ownership as well as approval, Outbox and
   station and hub-command claims (`test_postgres_storage.py`: 19 passing PG

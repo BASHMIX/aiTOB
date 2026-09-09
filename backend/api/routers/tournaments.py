@@ -241,9 +241,12 @@ async def api_add_tournament(body: AddTournamentRequest, principal: SessionPrinc
         for s in info.streams
     ], _workspace(principal))
     try:
-        await sync_manager.sync_bracket(slug, reason="initial-import")
+        if _workspace(principal):
+            await sync_manager.sync_bracket(slug, workspace_id=_workspace(principal), reason="initial-import")
+        else:
+            await sync_manager.sync_bracket(slug, reason="initial-import")
     except Exception as exc:
-        await set_tournament_sync_status(slug, False, str(exc))
+        await set_tournament_sync_status(slug, False, str(exc), workspace_id=_workspace(principal))
         raise HTTPException(status_code=502, detail=f"Tournament saved but first sync failed: {exc}")
     return MessageResponse(message=f"Tournament {info.name} added successfully.", ok=True)
 
@@ -259,8 +262,12 @@ async def api_get_sets(slug: str, principal: SessionPrincipal = Depends(require_
     t = await get_tournament(slug, _workspace(principal))
     if not t:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tournament not found")
-    scheduled = await sync_manager.maybe_sync_on_stale_open(slug)
-    snapshot = await get_bracket_snapshot(slug)
+    workspace_id = _workspace(principal)
+    scheduled = (
+        await sync_manager.maybe_sync_on_stale_open(slug, workspace_id=workspace_id)
+        if workspace_id else await sync_manager.maybe_sync_on_stale_open(slug)
+    )
+    snapshot = await get_bracket_snapshot(slug, _workspace(principal))
     return {
         **snapshot,
         "last_provider_sync": t.get("provider_last_synced_at"),
@@ -286,7 +293,11 @@ async def api_sync_bracket(slug: str, principal: SessionPrincipal = Depends(requ
             detail="Challonge read support is not enabled for this Hub.",
         )
     try:
-        await sync_manager.sync_bracket(slug, reason="manual")
+        workspace_id = _workspace(principal)
+        if workspace_id:
+            await sync_manager.sync_bracket(slug, workspace_id=workspace_id, reason="manual")
+        else:
+            await sync_manager.sync_bracket(slug, reason="manual")
         await hub_mgr.broadcast({"type": "match_update", "_workspace_id": _workspace(principal)})
         return MessageResponse(message="Bracket synchronized.", ok=True)
     except Exception as exc:
@@ -390,7 +401,8 @@ async def api_refresh_tournament(slug: str, principal: SessionPrincipal = Depend
             status_code=409,
             detail="Challonge identity imports do not refresh bracket or metadata in Phase 4.",
         )
-    provider = await get_provider_for_tournament(slug)
+    workspace_id = _workspace(principal)
+    provider = await get_provider_for_tournament(slug, workspace_id) if workspace_id else await get_provider_for_tournament(slug)
     info = await provider.fetch_tournament(provider_reference(t or {"slug": slug}))
     if not info:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Could not find tournament: {slug}")
@@ -512,7 +524,8 @@ async def api_verify_tournament_stream(slug: str, principal: SessionPrincipal = 
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tournament not found")
 
     # LIVE fetch (not the cache) — this is the whole point of the preflight.
-    provider = await get_provider_for_tournament(slug)
+    workspace_id = _workspace(principal)
+    provider = await get_provider_for_tournament(slug, workspace_id) if workspace_id else await get_provider_for_tournament(slug)
     try:
         live = await provider.fetch_streams(slug)
     except Exception as e:
