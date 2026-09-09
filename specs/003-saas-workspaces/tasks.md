@@ -271,6 +271,10 @@ operational check; a rehearsal is never a cutover.
   the data: tournaments, matches,
   players/identities/assets, stations/overlays, integrations/destinations,
   commands/ledger/outbox, caches/budgets, proposals, Dispatcher and audit.
+  PostgreSQL acceptance now exercises colliding workspace/station/tournament
+  scopes, worker claims, snapshots and WebSocket subscriptions; the latest
+  workspace/worker/WS run passes 54 cases. Final non-null ownership enforcement
+  for every legacy row remains gated by the controlled cutover backfill.
 - [~] **T021 / FR-001, FR-009–010** The current operational SQLite file was
   inspected read-only on 2026-09-09. It contains exactly one active Owner
   workspace (`bashmix-tournament-hub`), one Owner membership, and zero NULL
@@ -300,6 +304,10 @@ operational check; a rehearsal is never a cutover.
   The legacy assistant player projection is no longer an unscoped tenant read:
   `get_players_tool` is bound to the active Discord integration workspace and
   its regression passes in `backend/tests/test_ai_assistant_safety.py`.
+  The latest PostgreSQL run also passes authenticated Hub/Overlay WebSocket
+  cross-workspace denial and the HTTP role matrix; no tenant request can select
+  a foreign workspace. Remaining work is removal of staged owner-only
+  compatibility and the final unowned service identity, tracked for cutover.
 - [~] **T023 / FR-006** Integration account/destination lookup and credential
   rotation now require an explicit workspace in API paths; the legacy `admin`
   integration ownership marker was normalized during Owner backfill. Unit tests
@@ -313,7 +321,9 @@ operational check; a rehearsal is never a cutover.
   repository parity pass.
   Tournament snapshot/status and refresh/stream lookup now carry the trusted
   workspace; the new regression proves cross-workspace snapshot reads/writes
-  are denied. The remaining gap is the legacy unowned worker/service context.
+  are denied. Account isolation, rotation, provider snapshot scoping and worker
+  claim acceptance pass on PostgreSQL; the remaining gap is migration of the
+  final service identity and durable ownership constraints.
 
 ## D. Integrations, assets and overlays
 
