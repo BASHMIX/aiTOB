@@ -38,8 +38,8 @@ operational check; a rehearsal is never a cutover.
   repository calls and are guarded by `test_runtime_bot_paths_do_not_open_sqlite_directly`.
   Player listing and platform-admin checks now use repository functions and are
   guarded by `test_workspace_api_paths_use_repository_boundary`.
-  Latest disposable PostgreSQL acceptance (storage plus migration) is 19/19
-  passing on 2026-09-09; the current official local backend result is 397
+  Latest disposable PostgreSQL acceptance (storage, migration and station-overlay
+  isolation) is 21/21 passing on 2026-09-09; the current official local backend result is 401
   passed / 20 intentionally skipped. Current focused sync/authorization runs
   also pass (40 tests), including tenant-qualified scheduler keys and revocable
   Hub/Overlay WebSocket access.
