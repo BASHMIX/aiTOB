@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import json
 
-import aiosqlite
 import pytest
 
 from backend.core import database
+from backend.core.storage import dbapi as aiosqlite
 
 
 @pytest.fixture

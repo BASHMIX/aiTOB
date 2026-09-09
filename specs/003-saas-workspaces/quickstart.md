@@ -199,6 +199,10 @@ SQLite-only test assertions. `test_auto_dispatcher_service.py`,
 21 passed / 1 skipped. The run exercised scoped claims, kill-switch and
 tournament pause rechecks, outage freshness, deduplicated decisions, and
 workspace-safe worker recovery against the disposable PostgreSQL database.
+The same PostgreSQL run now includes Challonge local workflow (8/8), identity
+and per-event dispatch scoping (20/20), SQL-safety and tournament-removal
+checks (7/7); all are passing against disposable databases. SQLite-only
+migration-fixture tests remain intentionally separate from this runtime proof.
 
 The post-acceptance additions include two redacted error-telemetry tests,
 seven backup-manifest restore-safety tests and the selector-loop regression;

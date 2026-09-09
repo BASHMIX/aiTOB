@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import json
 
-import aiosqlite
 import pytest
 
 from backend.core import database
+from backend.core.storage import dbapi as aiosqlite
 
 
 @pytest.fixture
@@ -63,7 +63,12 @@ async def test_challonge_call_ready_start_and_station_are_atomic_and_provider_si
         async with db.execute("SELECT COUNT(*) FROM provider_reconciliation_audit WHERE set_id='challonge:m1'") as cursor:
             assert (await cursor.fetchone())[0] == 5
         async with db.execute("SELECT event_type, COUNT(*) FROM workflow_outbox WHERE match_id='challonge:m1' GROUP BY event_type") as cursor:
-            effects = dict(await cursor.fetchall())
+                effect_rows = await cursor.fetchall()
+                effects = {
+                    (row["event_type"], row["count"]) if isinstance(row, dict) else tuple(row)
+                    for row in effect_rows
+                }
+                effects = dict(effects)
         async with db.execute("SELECT active_match_id FROM stations WHERE id='station-a'") as cursor:
             assert (await cursor.fetchone())[0] == "challonge:m1"
     assert effects == {"discord_call": 1, "discord_ready": 2, "obs_match_started": 1, "obs_station_assigned": 1}
@@ -75,7 +80,7 @@ async def test_challonge_stream_station_assignment_marks_the_local_match_on_stre
     from backend.core.match_commands import MatchCommandService
 
     async with aiosqlite.connect(database.DB_PATH) as db:
-        await db.execute("UPDATE stations SET is_stream_station=1 WHERE id='station-a'")
+        await db.execute("UPDATE stations SET is_stream_station=TRUE WHERE id='station-a'")
         await db.commit()
 
     service = MatchCommandService(feature_flags={"CHALLONGE_LOCAL_WORKFLOW_ENABLED": "true"})
@@ -133,7 +138,7 @@ async def test_hub_routes_use_the_local_challonge_service_without_provider_lifec
     assert (await matches.api_activate_match("challonge:m1")).ok is True
 
     async with aiosqlite.connect(database.DB_PATH) as db:
-        await db.execute("UPDATE stations SET is_stream_station=1 WHERE id='station-a'")
+        await db.execute("UPDATE stations SET is_stream_station=TRUE WHERE id='station-a'")
         await db.commit()
     assert (await matches.api_patch_active_match(
         "challonge:m1", PatchActiveMatchRequest(station_id="station-a"),
