@@ -168,6 +168,13 @@ disposable target was dropped after the check. This was rehearsal only, not a
 production cutover; database restore does not roll back accepted external
 provider results or Discord deliveries.
 
+On 2026-09-09 a second populated rehearsal used the current operational copy as
+the read-only source and a fresh PostgreSQL database as target. It validated 50
+tables, one Owner workspace, two tournaments, 19 active matches, nine overlays,
+two stations, two players and two integration accounts, with zero NULL ownership
+in tournaments, active matches and players. The target was dropped after the
+checks; this does not authorize production cutover.
+
 Outbox lease ownership is not remote exactly-once delivery. After dispatch starts,
 an unknown outcome or restart before local success becomes `needs_review`.
 Only an explicit adapter proof of no send permits automatic retry. No live

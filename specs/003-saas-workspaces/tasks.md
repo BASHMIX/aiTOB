@@ -325,7 +325,12 @@ operational check; a rehearsal is never a cutover.
   and validated the read-only source/restore path. Remains open for the final
   source-column ownership constraints and cutover; the rehearsal is not full
   production migration acceptance. Latest disposable PostgreSQL migration
-  acceptance: 1 passed (2026-09-08) plus the current-copy rehearsal.
+  acceptance: 1 passed (2026-09-08) plus the current-copy rehearsal. A fresh
+  populated rehearsal on 2026-09-09 migrated the current operational copy into
+  a new PostgreSQL database using the project virtualenv, validated 50 tables,
+  preserved 1 Owner workspace/2 tournaments/19 active matches/9 overlays/2
+  stations/2 players/2 integration accounts, and found zero NULL ownership in
+  tournaments, active matches or players; the temporary target was then dropped.
 - [~] **T051 / FR-009–010** Rehearsed a faithful copy of the current SQLite
   operational file on 2026-09-09: consistent backup and SQLite restore passed,
   then the read-only source migrated to a disposable PostgreSQL target (50
