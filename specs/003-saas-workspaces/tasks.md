@@ -158,6 +158,11 @@ operational check; a rehearsal is never a cutover.
   Discord `/verify` path no longer matches identities by name similarity: it
   requires an explicit profile URL or organizer-confirmed entrant link, and
   the regression is covered by `test_discord_verify_does_not_target_identities_by_name_similarity`.
+  The role matrix now has an explicit forbidden-action parameterized regression
+  for TO, Stream operator, Moderator and Viewer
+  (`test_every_non_owner_role_denies_mutating_actions`); remaining acceptance
+  is limited to exercising every protected HTTP action against each role in a
+  live multi-membership session.
 - [~] **T013 / FR-003–005** Owner-only invite creation, token acceptance, role
   change and membership disable are implemented with last-Owner protection;
   tests cover invitation replay and role/removal safety. Account Settings now

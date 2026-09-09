@@ -296,6 +296,21 @@ def test_permission_matrix_is_explicit_and_denies_unknown_actions():
     assert permission_allowed("owner", "integrations.manage")
     assert permission_allowed("tournament_organizer", "dq.manual")
     assert not permission_allowed("stream_operator", "result.report")
+
+
+@pytest.mark.parametrize(
+    ("role", "forbidden"),
+    [
+        ("tournament_organizer", {"workspace.manage", "integrations.manage", "station.manage", "overlay.manage"}),
+        ("stream_operator", {"tournament.manage", "match.call", "match.ready", "result.report", "dq.manual", "proposal.review"}),
+        ("moderator", {"tournament.manage", "match.start", "result.report", "dq.manual", "station.manage", "overlay.manage"}),
+        ("viewer", {"settings.manage", "tournament.manage", "match.call", "match.ready", "result.report", "dq.manual", "station.manage", "conflict.manage"}),
+    ],
+)
+def test_every_non_owner_role_denies_mutating_actions(role, forbidden):
+    """Role checks are backend-enforced, not merely UI button visibility."""
+    for permission in forbidden:
+        assert not permission_allowed(role, permission), (role, permission)
     assert not permission_allowed("viewer", "match.operate")
     assert not permission_allowed("owner", "unknown.action")
     assert permission_allowed("owner", "station.manage")
