@@ -252,6 +252,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", default=str(ROOT / "backend/core/database.sqlite"), help="SQLite source path; it is always opened mode=ro")
     parser.add_argument("--dsn", default=os.getenv("DATABASE_URL", ""), help="PostgreSQL DSN (prefer DATABASE_URL from ignored .env.production)")
+    parser.add_argument(
+        "--allow-schema-only-target",
+        action="store_true",
+        help="allow an existing PostgreSQL target only when every public table is empty",
+    )
     args = parser.parse_args()
     load_dotenv(ROOT / ".env.production")
     dsn = args.dsn or os.getenv("DATABASE_URL", "")
@@ -271,7 +276,25 @@ def main() -> int:
             cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_schema='public'")
             existing = int(cur.fetchone()[0])
         if existing:
-            raise SystemExit("Target PostgreSQL database is not empty; refusing to merge data.")
+            if not args.allow_schema_only_target:
+                raise SystemExit("Target PostgreSQL database is not empty; refusing to merge data.")
+            with target.cursor() as cur:
+                cur.execute(
+                    """SELECT table_name FROM information_schema.tables
+                       WHERE table_schema='public' AND table_type='BASE TABLE'
+                       ORDER BY table_name"""
+                )
+                target_tables = [str(row[0]) for row in cur.fetchall()]
+                occupied = []
+                for table in target_tables:
+                    cur.execute(sql.SQL("SELECT COUNT(*) FROM {}").format(sql.Identifier(table)))
+                    if int(cur.fetchone()[0]):
+                        occupied.append(table)
+            if occupied:
+                raise SystemExit(
+                    "Target PostgreSQL database has data; refusing to merge data: "
+                    + ", ".join(occupied)
+                )
         create_schema(target)
         copied = {}
         for table in tables:
