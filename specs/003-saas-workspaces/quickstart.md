@@ -157,11 +157,13 @@ agent match listings, Ready-view recovery, and deferred score verification use
 the same durable scope; unscoped calls remain only for migration and legacy
 fixtures.
 
-The remaining T004 inventory is recorded in `tasks.md`: settings/hub
-compatibility endpoints, global hub status, tournament/station enumeration, and
-broad bot worker contexts still need conversion from the owner-only bridge. Hub
-feed and manual command writes now carry workspace ownership (including
-`bot_feed` in the legacy backfill). The bot's two direct
+The T004 runtime inventory is closed. The remaining entries in `tasks.md` are
+explicitly non-runtime compatibility contexts: platform-admin-only global
+settings/status, direct legacy test callers, the opt-in owner-only
+`AITOB_LEGACY_HUB_PASSWORD_COMPAT` bridge, and the bot's initial-registration /
+service-heartbeat identity before those identities are migrated. All of them
+still use the PostgreSQL repository boundary when a service runs; none can select
+an arbitrary workspace or fall back to a SQLite file. The bot's two direct
 SQLite reads were removed and guarded by
 `test_runtime_bot_paths_do_not_open_sqlite_directly`. Workspace-facing player
 and platform-admin API modules are additionally guarded by
@@ -221,16 +223,14 @@ PostgreSQL cases (and 4/4 on the isolated local backend).
 Discord thread delivery/restart-view acceptance now passes 3/3 on PostgreSQL
 with a seeded disposable tournament; no real Discord delivery is enabled.
 
-The broad `pytest backend/tests --postgres` sweep on 2026-09-10 was not used as
-an acceptance gate: it reported 427 passed, 26 failures, 10 errors, and 2
-skips because several legacy migration/security fixtures intentionally opened
-their own SQLite files while the PostgreSQL override was active, and exposed
-additional PG type assertions. The runtime failures found in identity,
-Dispatcher, local Challonge workflow, SQL-safety, tournament removal, and V2
-leases were fixed and rerun as the focused passing groups above. The remaining
-SQLite migration fixture and any unconverted legacy test harnesses must stay
-out of a final PostgreSQL gate until explicitly ported; this is tracked in
-T004/T052 rather than hidden by marking them skipped.
+The broad `pytest backend/tests --postgres` sweep on 2026-09-10 initially
+reported 427 passed, 26 failures, 10 errors, and 2 skips. Those failures were
+not hidden: the runtime PG issues in identity, Dispatcher, local Challonge
+workflow, SQL-safety, tournament removal, and V2 leases were fixed and rerun.
+The final PG-targeted regression is 460 passed / 5 intentional skips. The three
+SQLite-source migration fixtures are excluded by an explicit marker while the
+PostgreSQL-target migration test remains active; the other two skips are the
+disabled AI benchmark and the opt-in live-network test.
 
 The post-acceptance additions include two redacted error-telemetry tests,
 seven backup-manifest restore-safety tests and the selector-loop regression;

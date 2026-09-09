@@ -78,3 +78,21 @@ def test_workspace_api_paths_use_repository_boundary():
     for path in (root / "backend" / "api" / "routers" / "players.py", root / "backend" / "api" / "auth.py"):
         source = path.read_text(encoding="utf-8")
         assert "aiosqlite.connect" not in source, str(path)
+
+
+def test_all_runtime_modules_use_storage_adapter_not_sqlite_driver():
+    """T004 guard: SQLite drivers are confined to the adapter and migration code."""
+    import re
+
+    root = Path(__file__).resolve().parents[2]
+    allowed = {
+        root / "backend" / "core" / "storage.py",
+        root / "backend" / "core" / "database.py",
+        root / "backend" / "core" / "schema_migrations.py",
+    }
+    direct_import = re.compile(r"^\s*(?:from|import)\s+(?:aiosqlite|sqlite3)(?:\s|$)", re.MULTILINE)
+    for base in (root / "backend" / "api", root / "backend" / "bot", root / "backend" / "core"):
+        for path in base.rglob("*.py"):
+            if path in allowed or "tests" in path.parts:
+                continue
+            assert not direct_import.search(path.read_text(encoding="utf-8")), str(path)

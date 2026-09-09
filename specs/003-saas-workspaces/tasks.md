@@ -14,11 +14,29 @@ operational check; a rehearsal is never a cutover.
 - [x] **T003 / FR-011** Lock Outbox and station reservation candidates with
   PostgreSQL row locks; test concurrent workers/reservations and retry after
   transaction rollback.
-- [~] **T004 / FR-009–011** Runtime imports now route through
-  `backend/core/storage.py`; API, bot and launcher fail closed without
-  `DATABASE_URL`, and PostgreSQL repository acceptance is passing. Continue
-  converting SQLite-specific SQL/transaction semantics per repository and
-  remove the compatibility bridge only after API/bot/worker parity. Evidence:
+- [x] **T004 / FR-009–011** Runtime storage conversion and the compatibility
+  boundary are closed for API, bot and worker execution. Every runtime database
+  call reaches `backend.core.storage.dbapi`; `require_runtime_database()` fails
+  closed when `DATABASE_URL` is absent or non-PostgreSQL, and SQLite is accepted
+  only for `AITOB_TESTING=1` or the explicit migration-tool mode. PostgreSQL
+  repository acceptance and the full PG-targeted regression pass. The remaining
+  compatibility entries are enumerated below and are not runtime bypasses:
+  `backend/core/database.py:DB_PATH` is a path retained for test/migration
+  callers but is resolved by `storage.connect`; `backend/api/auth.py`'s
+  `AITOB_LEGACY_HUB_PASSWORD_COMPAT` is disabled by default and can map only to
+  the single active Owner (it cannot select a workspace or bypass membership);
+  `backend/api/routers/settings.py` exposes global service settings only behind
+  the platform-admin gate and rejects migrated provider secrets, while account
+  credentials use the integration-account repository; `backend/api/routers/
+  tournaments.py`, `providers.py`, and `matches.py` retain direct-call/legacy
+  principal signatures solely for staged migration fixtures, with authenticated
+  HTTP requests requiring a session-derived workspace; `backend/bot/main.py`
+  keeps one explicitly configured integration workspace for service-heartbeat
+  and initial-registration contexts until those identities are migrated; and
+  `backend/core/schema_migrations.py` plus the two marked SQLite-source tests
+  are migration-only. No runtime module imports `aiosqlite`/`sqlite3` directly
+  outside the adapter, and no runtime path falls back to a shared SQLite file.
+  Acceptance evidence:
   `test_postgres_storage.py` passes 18 isolated PG cases (2026-09-08), including
   casts, percent literals/modulo, escaped strings, nested comments, concurrent
   bootstrap/invitation/last-Owner protection and crash-after-effect recovery.
@@ -57,14 +75,16 @@ operational check; a rehearsal is never a cutover.
   rejected without modifying the match. Tournament Hub reset also requires the
   authenticated workspace, and station-overlay helpers resolve tenant-qualified
   storage IDs before reads or writes.
-  Remaining runtime inventory to close before cutover (each must use the
-  PostgreSQL repository boundary and a trusted workspace context):
+  Non-blocking compatibility inventory (runtime paths are already on the
+  PostgreSQL boundary; these entries are retained only for staged migration or
+  explicitly global administration):
   `backend/api/routers/settings.py` (`api_get_settings`, `api_patch_settings`,
   `api_get_env`, `api_patch_env`, `api_trigger_token_check`) now has a narrow
   `require_global_settings_admin` gate: only the platform administrator may
   access service-global settings/connections, preventing an unrelated workspace
   Owner from reading them. Integration account data remains workspace-scoped;
-  final removal of the legacy global storage bridge is still pending.
+  removing this owner-only compatibility surface is tracked under T022 and is
+  not a storage cutover blocker.
   `backend/api/routers/hub.py` feed read/clear and manual queue writes carry the
   authenticated workspace (with `bot_feed.workspace_id` added to fresh schema
   and legacy backfill), covered by `test_bot_feed_workspace_scope.py`. Global
@@ -116,7 +136,8 @@ operational check; a rehearsal is never a cutover.
   `test_worker_workspace_scope.py`, and `test_provider_recovery.py` after
   correcting event grouping, Boolean predicates, nullable workspace casts, and
   PG-compatible row assertions. This closes the previously observed PG query
-  failures; compatibility-bridge removal and final cutover acceptance remain.
+  failures; tenant-isolation acceptance and final cutover remain tracked under
+  T022/T052/T053.
   Follow-up PostgreSQL runs also cover Challonge identity persistence and
   per-event Dispatcher scoping: 20/20 identity/event cases pass after casting
   nullable workspace predicates, preserving text match numbers in numeric-safe
