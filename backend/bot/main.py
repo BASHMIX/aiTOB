@@ -24,6 +24,7 @@ load_dotenv()
 
 TOKEN = None
 ACTIVE_DISCORD_ACCOUNT_ID = None
+ACTIVE_DISCORD_WORKSPACE_ID = None
 # Credentials are fetched from the encrypted account store at process startup.
 API_BASE_URL_ENV = os.getenv("API_BASE_URL", "http://localhost:8000")
 
@@ -100,7 +101,9 @@ async def on_ready():
         drain_workflow_outbox.start()
     if get_provider_feature_flags().challonge_local_workflow_enabled:
         from backend.bot.match_threads import restore_ready_check_views
-        restored_ready_views = await restore_ready_check_views(bot)
+        restored_ready_views = await restore_ready_check_views(
+            bot, workspace_id=ACTIVE_DISCORD_WORKSPACE_ID,
+        )
         if restored_ready_views:
             await ws_add_bot_feed(f"Restored {restored_ready_views} persisted Challonge Ready view(s)", "info")
     # Drain anything queued before the bot came online.
@@ -868,7 +871,13 @@ async def run_drain():
     lease_owner = f"discord-bot:{os.getpid()}"
     async with _drain_lock:
         try:
-            pending = await claim_pending_hub_commands(lease_owner)
+            # The bot process is bound to exactly one Discord integration
+            # account at startup. Resolve its workspace once and constrain the
+            # queue claim itself; filtering after a global claim is too late
+            # because it temporarily leases another tenant's command.
+            pending = await claim_pending_hub_commands(
+                lease_owner, workspace_id=ACTIVE_DISCORD_WORKSPACE_ID,
+            )
         except Exception as e:
             print(f"[BOT] drain fetch failed: {e}")
             return
@@ -1136,7 +1145,7 @@ async def workflow_rules(ctx):
 async def workflow_status(ctx):
     """Show current states of all active matches."""
     from core.database import get_active_matches
-    matches = await get_active_matches()
+    matches = await get_active_matches(workspace_id=ACTIVE_DISCORD_WORKSPACE_ID)
     
     if not matches:
         await ctx.send("ℹ️ No active matches in the system right now.")
@@ -1170,7 +1179,7 @@ async def workflow_status(ctx):
 async def workflow_validate(ctx, set_id: str):
     """Validate transition pathways for a match."""
     from core.database import get_active_match
-    match = await get_active_match(set_id)
+    match = await get_active_match(set_id, ACTIVE_DISCORD_WORKSPACE_ID)
     if not match:
         await ctx.send(f"❌ Match with set ID `{set_id}` not found.")
         return
@@ -1273,7 +1282,7 @@ async def handle_conflict_statement_dm(message) -> bool:
 
     # Find a conflicted match this player belongs to.
     match, slot = None, None
-    for m in await get_active_matches():
+    for m in await get_active_matches(workspace_id=ACTIVE_DISCORD_WORKSPACE_ID):
         if m.get("status") != "conflict":
             continue
         if str(m.get("p1_discord")) == author_id:
@@ -1369,7 +1378,7 @@ async def get_active_matches_tool():
     import json
     from core.database import get_active_matches
     from bot.agent.tool_helpers import project_match_for_agent
-    matches = await get_active_matches()
+    matches = await get_active_matches(workspace_id=ACTIVE_DISCORD_WORKSPACE_ID)
     return json.dumps([project_match_for_agent(m) for m in matches])
 
 @tool
@@ -1788,12 +1797,13 @@ if __name__ == "__main__":
         token = await get_discord_credential(accounts[0]["id"])
         if not token:
             raise RuntimeError("Selected Discord account has no bot token.")
-        return accounts[0]["id"], token
+        from backend.core.integrations import get_integration_workspace_id
+        return accounts[0]["id"], token, await get_integration_workspace_id(accounts[0]["id"])
 
     try:
         from backend.core.storage import require_runtime_database
         require_runtime_database()
-        ACTIVE_DISCORD_ACCOUNT_ID, TOKEN = asyncio.run(_load_account_token())
+        ACTIVE_DISCORD_ACCOUNT_ID, TOKEN, ACTIVE_DISCORD_WORKSPACE_ID = asyncio.run(_load_account_token())
         bot.run(TOKEN)
     except Exception:
         print("Discord bot did not start: its selected integration account is unavailable.")

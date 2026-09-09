@@ -2459,38 +2459,59 @@ async def add_hub_command(command_text: str, *, source: str = "manual", workspac
     # Fire AFTER commit so the consumer sees the row when it drains.
     _fire_hub_command_listener()
 
-async def get_pending_hub_commands():
+async def get_pending_hub_commands(workspace_id: str | None = None):
+    """Return pending Hub commands for a trusted worker workspace.
+
+    The unscoped form is retained for migration/tests and deliberately should
+    not be used by a multi-tenant worker.  Runtime consumers pass the
+    workspace selected by their integration account or task context.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        scope = " AND workspace_id = ?" if workspace_id is not None else ""
+        params = (workspace_id,) if workspace_id is not None else ()
         async with db.execute(
-            "SELECT * FROM hub_commands WHERE status = 'pending' ORDER BY created_at ASC"
+            "SELECT * FROM hub_commands WHERE status = 'pending'" + scope + " ORDER BY created_at ASC",
+            params,
         ) as cursor:
             return [dict(r) for r in await cursor.fetchall()]
 
 
-async def claim_pending_hub_commands(lease_owner: str, *, limit: int = 25, lease_seconds: int = 120) -> list[dict]:
-    """Atomically claim queue rows across API/bot processes."""
+async def claim_pending_hub_commands(
+    lease_owner: str, *, limit: int = 25, lease_seconds: int = 120,
+    workspace_id: str | None = None,
+) -> list[dict]:
+    """Atomically claim queue rows across API/bot processes.
+
+    A worker workspace is an authorization boundary, not merely a display
+    filter.  When supplied, both the claim and returned rows are constrained
+    to it, so a bot processing one integration account cannot drain another
+    workspace's queue.  The unscoped form remains only for legacy migration
+    fixtures and single-tenant compatibility during the staged rollout.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         await db.execute("BEGIN IMMEDIATE")
+        scope = " AND workspace_id = ?" if workspace_id is not None else ""
+        scope_params = (workspace_id,) if workspace_id is not None else ()
         if is_postgres():
             rows = await (await db.execute(
                 """WITH candidates AS (
                      SELECT id FROM hub_commands
-                     WHERE status='pending' OR (status='processing' AND lease_expires_at<CURRENT_TIMESTAMP)
+                     WHERE (status='pending' OR (status='processing' AND lease_expires_at<CURRENT_TIMESTAMP))""" + scope + """
                      ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT ?
                    )
                    UPDATE hub_commands h SET status='processing', lease_owner=?,
                      lease_expires_at=CURRENT_TIMESTAMP + (? * INTERVAL '1 second'),
                      attempts=COALESCE(attempts,0)+1
                    FROM candidates c WHERE h.id=c.id RETURNING h.*""",
-                (limit, lease_owner, lease_seconds),
+                (*scope_params, limit, lease_owner, lease_seconds),
             )).fetchall()
         else:
             ids = await (await db.execute(
                 """SELECT id FROM hub_commands
-                   WHERE status='pending' OR (status='processing' AND lease_expires_at<CURRENT_TIMESTAMP)
-                   ORDER BY created_at LIMIT ?""", (limit,)
+                   WHERE (status='pending' OR (status='processing' AND lease_expires_at<CURRENT_TIMESTAMP))""" + scope + """
+                   ORDER BY created_at LIMIT ?""", (*scope_params, limit)
             )).fetchall()
             if not ids:
                 await db.commit(); return []

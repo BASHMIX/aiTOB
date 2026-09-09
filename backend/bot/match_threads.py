@@ -416,14 +416,18 @@ async def _challonge_local_workflow_enabled() -> bool:
     return get_provider_feature_flags().challonge_local_workflow_enabled
 
 
-async def restore_ready_check_views(bot) -> int:
+async def restore_ready_check_views(bot, workspace_id: str | None = None) -> int:
     """Re-register durable Challonge Ready buttons after a bot process restart.
 
     This reads SQLite only.  It neither sends a Discord message nor performs a
     provider request, and is intentionally limited to stored called matches.
     """
     restored = 0
-    for match in await get_active_matches():
+    # Keep the no-argument compatibility path for legacy test/tool providers;
+    # a real bot process always supplies its account workspace at startup.
+    matches = (await get_active_matches(workspace_id=workspace_id)
+               if workspace_id is not None else await get_active_matches())
+    for match in matches:
         if (
             match.get("provider_type") != "challonge"
             or match.get("status") != "called"
