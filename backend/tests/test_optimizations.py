@@ -1,6 +1,6 @@
 import pytest
 import os
-import aiosqlite
+from backend.core.storage import dbapi as aiosqlite
 
 from backend.core.database import (
     init_db,
