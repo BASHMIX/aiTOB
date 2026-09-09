@@ -229,15 +229,24 @@ class ProviderSyncManager:
                     )
                 await sync_active_matches(tournament_slug, provider_sets, trusted_workspace_id)
                 serialized = [serialize_set(item) for item in provider_sets]
-                await save_bracket_snapshot(tournament_slug, serialized, trusted_workspace_id)
-                await set_tournament_sync_status(tournament_slug, True, workspace_id=trusted_workspace_id)
+                if trusted_workspace_id:
+                    await save_bracket_snapshot(tournament_slug, serialized, trusted_workspace_id)
+                    await set_tournament_sync_status(tournament_slug, True, workspace_id=trusted_workspace_id)
+                else:
+                    await save_bracket_snapshot(tournament_slug, serialized)
+                    await set_tournament_sync_status(tournament_slug, True)
                 return {"sets": serialized, "reason": reason}
             except StaleProviderSnapshotError:
                 # A newer durable projection remains readable; do not turn a
                 # rejected old arrival into a false failed sync.
                 raise
             except Exception as exc:
-                await set_tournament_sync_status(tournament_slug, False, str(exc), workspace_id=workspace_id)
+                if workspace_id:
+                    await set_tournament_sync_status(
+                        tournament_slug, False, str(exc), workspace_id=workspace_id,
+                    )
+                else:
+                    await set_tournament_sync_status(tournament_slug, False, str(exc))
                 raise
 
     async def maybe_sync_on_stale_open(
