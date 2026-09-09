@@ -33,15 +33,15 @@ def run(coro):
 
 
 @pytest.fixture(autouse=True)
-def patch_db(tmp_path):
+def patch_db(tmp_path, monkeypatch):
     global TEST_DB
     TEST_DB = str(tmp_path / "station-stream-coupling.sqlite")
     orig = db.DB_PATH
     db.DB_PATH = TEST_DB
     ms.DB_PATH = TEST_DB
-    os.environ["AITOB_BOOTSTRAP_OWNER_EMAIL"] = "station-test@example.test"
-    os.environ["AITOB_BOOTSTRAP_OWNER_PASSWORD"] = "station-test-password"
-    os.environ["AITOB_LEGACY_HUB_PASSWORD_COMPAT"] = "true"
+    monkeypatch.setenv("AITOB_BOOTSTRAP_OWNER_EMAIL", "station-test@example.test")
+    monkeypatch.setenv("AITOB_BOOTSTRAP_OWNER_PASSWORD", "station-test-password")
+    monkeypatch.setenv("AITOB_LEGACY_HUB_PASSWORD_COMPAT", "true")
     run(db.init_db())
     run(db.set_setting("HUB_PASSWORD", "admin"))
     yield

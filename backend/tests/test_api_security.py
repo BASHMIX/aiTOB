@@ -11,10 +11,10 @@ from backend.api.main import app
 
 
 @pytest.fixture(autouse=True)
-def setup_db():
-    os.environ["AITOB_BOOTSTRAP_OWNER_EMAIL"] = "api-security@example.test"
-    os.environ["AITOB_BOOTSTRAP_OWNER_PASSWORD"] = "api-security-password"
-    os.environ["AITOB_LEGACY_HUB_PASSWORD_COMPAT"] = "true"
+def setup_db(monkeypatch):
+    monkeypatch.setenv("AITOB_BOOTSTRAP_OWNER_EMAIL", "api-security@example.test")
+    monkeypatch.setenv("AITOB_BOOTSTRAP_OWNER_PASSWORD", "api-security-password")
+    monkeypatch.setenv("AITOB_LEGACY_HUB_PASSWORD_COMPAT", "true")
     asyncio.run(init_db())
     asyncio.run(set_setting("HUB_PASSWORD", "admin"))
 
