@@ -181,11 +181,17 @@ operational check; a rehearsal is never a cutover.
   the data: tournaments, matches,
   players/identities/assets, stations/overlays, integrations/destinations,
   commands/ledger/outbox, caches/budgets, proposals, Dispatcher and audit.
-- [~] **T021 / FR-001, FR-009–010** A one-time local Owner bootstrap created
-  the BASHMIX Owner workspace (no default account). `backfill_legacy_workspace.py`
-  was rehearsed on a consistent copy and then applied atomically while API
-  writes were stopped: all currently scoped operational rows have a valid
-  workspace ID, and legacy integration `owner_id='admin'` was normalized.
+- [~] **T021 / FR-001, FR-009–010** The current operational SQLite file was
+  inspected read-only on 2026-09-09. It contains exactly one active Owner
+  workspace (`bashmix-tournament-hub`), one Owner membership, and zero NULL
+  `workspace_id` values across tournaments, active matches, players, stations,
+  overlays and integration accounts. The corresponding consistent backup is
+  `.migration-backups/database-post-owner-workspace-20260908.sqlite`; the
+  rehearsal copy is `.migration-backups/workspace-backfill-rehearsal-20260908.sqlite`.
+  These artifacts and the database state are evidence that the Owner bootstrap
+  and backfill had already been applied before this pass; no write or repeat
+  migration was performed here. `backfill_legacy_workspace.py` remains
+  idempotent and requires an explicit active Owner before `--apply`.
   PostgreSQL `NOT NULL`/unique constraints and two-tenant acceptance remain.
 - [~] **T022 / FR-001–003, FR-006** HTTP match/tournament/station/provider and
   WebSocket hub/overlay paths now derive workspace from trusted session or

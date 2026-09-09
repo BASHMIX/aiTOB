@@ -57,9 +57,12 @@ The corresponding API rehearsal started against that PostgreSQL target, logged
 in the designated Owner, returned a PostgreSQL readiness signal, and confirmed
 that public registration is closed. External startup calls were not instrumented
 in that earlier rehearsal, so it is **not** evidence of zero external calls or
-complete operational acceptance. The operational SQLite Hub was first backed up and then assigned to
-the designated Owner workspace in one transaction; all scoped operational rows
-now have a valid workspace reference.
+complete operational acceptance. The operational SQLite Hub was first backed
+up and then assigned to the designated Owner workspace in one transaction. A
+read-only audit on 2026-09-09 found one active Owner workspace and zero NULL
+ownership values across the scoped operational tables. The source was not
+written during that audit; the evidence files are the post-owner backup and
+rehearsal copy under `.migration-backups/`.
 
 ## Cutover gate
 
