@@ -150,6 +150,8 @@ operational check; a rehearsal is never a cutover.
   Focused runtime groups were repaired and pass, while the remaining pre-V2
   migration harness and any direct-file fixtures are explicit T004/T052 closure
   work before a final PostgreSQL gate.
+  Error telemetry redaction and Challonge repair acceptance add 4/4 passing PG
+  cases; no external effects are used by these tests.
 - [~] **T006 / FR-011** `WorkflowOutboxWorker` now marks an explicitly
   ambiguous external outcome `needs_review` and does not retry it; PG acceptance
   also proves cancellation after delivery and before completion persistence

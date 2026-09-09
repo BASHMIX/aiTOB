@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import json
-import aiosqlite
 import pytest
 
 from backend.core import database
+from backend.core.storage import dbapi as aiosqlite
 
 
 @pytest.fixture
@@ -69,4 +69,7 @@ async def test_apply_requires_exact_report_fingerprint_and_never_changes_startgg
             "WHERE set_id='challonge:eligible' AND action='state_repair_apply'"
         ) as cursor:
             audit_rows = await cursor.fetchall()
-    assert audit_rows == [("in_progress", "not_started")]
+    assert [
+        (row["before_hub_status"], row["after_hub_status"]) if isinstance(row, dict) else tuple(row)
+        for row in audit_rows
+    ] == [("in_progress", "not_started")]

@@ -211,6 +211,8 @@ isolated run; no external provider or Discord side effect was enabled.
 The V2 provider lease/outbox repositories now also pass 4/4 on PostgreSQL;
 the migration-fixture test remains SQLite-only by design because it validates
 upgrading a pre-V2 file rather than runtime PostgreSQL behavior.
+Redacted error telemetry and Challonge state-repair acceptance add 4/4 passing
+PostgreSQL cases (and 4/4 on the isolated local backend).
 
 The broad `pytest backend/tests --postgres` sweep on 2026-09-10 was not used as
 an acceptance gate: it reported 427 passed, 26 failures, 10 errors, and 2
