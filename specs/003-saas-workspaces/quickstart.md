@@ -177,6 +177,13 @@ encrypted credential rows. The key was not emitted or copied into this
 document; hosted deployments must inject `AITOB_INTEGRATION_MASTER_KEY` and
 `AITOB_AI_SERVICE_MASTER_KEY` separately.
 
+A separate PostgreSQL database `aitob_cutover_candidate_20260909` is now
+prepared from the latest read-only SQLite copy. Its 50-table content was
+validated, all five encrypted credentials authenticated in a service process,
+and a fresh custom-format backup with a verified manifest was created. The
+candidate is intentionally not referenced by `.env.production`; no worker or
+external integration is pointed at it yet.
+
 The configured runtime PostgreSQL database was not overwritten: a cutover
 preflight found existing schema history, two seeded stations, and one
 `workflow_outbox` row in `needs_review`, so the migration tool correctly refused

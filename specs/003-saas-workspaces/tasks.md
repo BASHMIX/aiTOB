@@ -341,6 +341,11 @@ operational check; a rehearsal is never a cutover.
   `needs_review`; `--allow-schema-only-target` correctly refused the merge
   because the target was not empty. The pending external-effect record remains
   intact for the T052 pause/reconciliation procedure.
+  A separate `aitob_cutover_candidate_20260909` PostgreSQL database was then
+  created and populated from the latest read-only SQLite copy; content and
+  ownership validation passed, all five encrypted credentials authenticated,
+  and a verified candidate backup was created. Services still point to the
+  original database until the pending effect and cutover pause are resolved.
 
 ## F. Migration, cutover and acceptance
 
