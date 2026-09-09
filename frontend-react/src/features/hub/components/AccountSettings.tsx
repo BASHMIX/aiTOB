@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
 
-type Profile = { email: string; display_name: string; role: string; workspace_name: string; mfa_enabled?: boolean };
+type Profile = { email: string; display_name: string; role: string; workspace_id: string; workspace_name: string; mfa_enabled?: boolean };
+type Subscription = { plan_key: string; status: string; billing_state: string; expires_at?: string | null };
 type Member = { id: string; email: string; display_name: string; role: string; status: string };
 type Invitation = { id: string; email: string; role: string; expires_at: string; accepted_at?: string | null; cancelled_at?: string | null };
 
@@ -18,6 +19,8 @@ export function AccountSettings() {
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState('viewer');
+  const [subscription, setSubscription] = useState<Subscription | null>(null);
+  const [subscriptionBusy, setSubscriptionBusy] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -30,6 +33,9 @@ export function AccountSettings() {
       setProfile(session.data);
       setMembers(memberResponse.data.members || []);
       setInvitations(invitationResponse.data.invitations || []);
+      axios.get(`/api/platform/workspaces/${encodeURIComponent(session.data.workspace_id)}/subscription`)
+        .then((response) => alive && setSubscription(response.data))
+        .catch(() => { /* only platform administrators can see this panel */ });
     }).catch(() => alive && setNotice('Account settings could not be loaded.'));
     return () => { alive = false; };
   }, []);
@@ -96,6 +102,21 @@ export function AccountSettings() {
     }
   };
 
+  const updateSubscription = async (action: 'activate' | 'extend' | 'suspend') => {
+    if (!profile || subscriptionBusy) return;
+    setSubscriptionBusy(true); setNotice('');
+    try {
+      const payload = action === 'activate'
+        ? { action, plan_key: 'managed', expires_at: new Date(Date.now() + 30 * 86400000).toISOString() }
+        : action === 'extend' ? { action, extend_days: 30 } : { action };
+      const response = await axios.post(`/api/platform/workspaces/${encodeURIComponent(profile.workspace_id)}/subscription`, payload);
+      setSubscription(response.data);
+      setNotice(`Subscription ${action}d.`);
+    } catch (error) {
+      setNotice(axios.isAxiosError(error) ? (error.response?.data?.detail || 'Subscription update failed.') : 'Subscription update failed.');
+    } finally { setSubscriptionBusy(false); }
+  };
+
   if (!profile) return <p className="text-sm text-textDim">{notice || 'Loading account…'}</p>;
   return (
     <div className="space-y-5">
@@ -108,6 +129,12 @@ export function AccountSettings() {
           <div><dt className="text-textDim">Two-factor authentication</dt><dd className="mt-1 font-semibold text-white">{profile.mfa_enabled ? 'Enabled' : 'Not enabled'}</dd></div>
         </dl>
       </section>
+      {subscription && <section className="rounded-xl border border-white/10 bg-cardDark p-5">
+        <h2 className="text-base font-bold text-white">Manual workspace activation</h2>
+        <p className="mt-1 text-xs text-textDim">Platform-admin control only · no payment or checkout is performed.</p>
+        <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-3"><div><dt className="text-textDim">Plan</dt><dd className="font-semibold text-white">{subscription.plan_key}</dd></div><div><dt className="text-textDim">Status</dt><dd className="font-semibold text-white">{subscription.status}</dd></div><div><dt className="text-textDim">Expiry</dt><dd className="font-semibold text-white">{subscription.expires_at ? new Date(subscription.expires_at).toLocaleString() : 'None'}</dd></div></dl>
+        <div className="mt-3 flex flex-wrap gap-2"><button type="button" disabled={subscriptionBusy} onClick={() => updateSubscription('activate')} className="rounded-lg bg-accentYellow px-3 py-2 text-xs font-bold text-black disabled:opacity-40">Activate managed</button><button type="button" disabled={subscriptionBusy} onClick={() => updateSubscription('extend')} className="rounded-lg border border-accentYellow/50 px-3 py-2 text-xs font-bold text-accentYellow disabled:opacity-40">Extend 30 days</button><button type="button" disabled={subscriptionBusy} onClick={() => updateSubscription('suspend')} className="rounded-lg border border-statusRed/40 px-3 py-2 text-xs font-bold text-statusRed disabled:opacity-40">Suspend</button></div>
+      </section>}
       <section className="rounded-xl border border-white/10 bg-cardDark p-5">
         <h2 className="text-base font-bold text-white">Change password</h2>
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
