@@ -172,6 +172,39 @@ async def enforce_auth_rate_limit(
     async with aiosqlite.connect(database.DB_PATH) as db:
         await db.execute("BEGIN IMMEDIATE")
         try:
+            if is_postgres():
+                # A SELECT-then-INSERT sequence is not safe when the first
+                # request for a subject arrives concurrently: two
+                # transactions can both observe the missing row and the
+                # second ON CONFLICT update can reset the window.  Let
+                # PostgreSQL serialize the unique-key upsert and increment
+                # the existing window atomically.  Rolling back an over-limit
+                # increment preserves the fixed-window semantics.
+                row = await (await db.execute(
+                    """INSERT INTO auth_rate_limits
+                           (action, subject_hash, window_started_at, attempt_count)
+                       VALUES (?, ?, ?, 1)
+                       ON CONFLICT(action, subject_hash) DO UPDATE SET
+                         window_started_at = CASE
+                           WHEN EXTRACT(EPOCH FROM
+                               (EXCLUDED.window_started_at - auth_rate_limits.window_started_at)) >= ?
+                           THEN EXCLUDED.window_started_at
+                           ELSE auth_rate_limits.window_started_at
+                         END,
+                         attempt_count = CASE
+                           WHEN EXTRACT(EPOCH FROM
+                               (EXCLUDED.window_started_at - auth_rate_limits.window_started_at)) >= ?
+                           THEN 1
+                           ELSE auth_rate_limits.attempt_count + 1
+                         END
+                       RETURNING attempt_count""",
+                    (action, subject_hash, observed.isoformat(), window_seconds, window_seconds),
+                )).fetchone()
+                if int(row[0]) > limit:
+                    raise PermissionError("Too many attempts. Try again later.")
+                await db.commit()
+                return
+
             suffix = " FOR UPDATE" if is_postgres() else ""
             row = await (await db.execute(
                 "SELECT window_started_at, attempt_count FROM auth_rate_limits "

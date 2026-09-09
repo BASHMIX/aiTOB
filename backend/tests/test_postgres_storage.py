@@ -261,6 +261,24 @@ async def test_ai_usage_reservations_obey_limit_across_connections():
 
 
 @pytest.mark.asyncio
+async def test_auth_rate_limit_concurrent_first_window_is_not_reset_by_upsert_race():
+    """A missing limiter row must not let concurrent first requests all pass.
+
+    This specifically exercises the race where two PostgreSQL connections see
+    no row, then both attempt an INSERT.  The conflict path must increment the
+    already-created window rather than reset it to one.
+    """
+    from backend.core.workspace_auth import enforce_auth_rate_limit
+
+    outcomes = await asyncio.gather(*(
+        enforce_auth_rate_limit("test", "same-subject", limit=1, window_seconds=3600)
+        for _ in range(8)
+    ), return_exceptions=True)
+    assert sum(value is None for value in outcomes) == 1
+    assert sum(isinstance(value, PermissionError) for value in outcomes) == 7
+
+
+@pytest.mark.asyncio
 async def test_recovery_code_is_consumed_once_across_postgres_sessions(monkeypatch):
     from cryptography.fernet import Fernet
     from backend.core.workspace_auth import (
