@@ -1385,9 +1385,11 @@ async def get_active_matches_tool():
 async def get_players_tool():
     """Returns a list of all registered players and their Discord IDs."""
     # This read-only legacy tool is retained for compatibility, but it must go
-    # through the repository boundary so PostgreSQL is used at runtime.
+    # through the repository boundary so PostgreSQL is used at runtime.  The
+    # assistant process is bound to one integration workspace; omitting that
+    # scope would expose every tenant's player projection to a read-only tool.
     from core.database import get_players_for_workspace
-    return str(await get_players_for_workspace())
+    return str(await get_players_for_workspace(ACTIVE_DISCORD_WORKSPACE_ID))
 
 @tool
 async def call_match_tool(set_id: str = "", p1_discord_id: str = "", p2_discord_id: str = ""):

@@ -73,6 +73,22 @@ async def test_legacy_assistant_path_rejects_unscoped_input_without_touching_dis
 
 
 @pytest.mark.asyncio
+async def test_legacy_player_read_tool_is_bound_to_active_workspace(monkeypatch):
+    """The compatibility assistant read must not enumerate another tenant."""
+    from backend.bot import main
+    import core.database as bot_database
+
+    reader = AsyncMock(return_value=[{"discord_id": "player-a"}])
+    monkeypatch.setattr(bot_database, "get_players_for_workspace", reader)
+    monkeypatch.setattr(main, "ACTIVE_DISCORD_WORKSPACE_ID", "workspace-a")
+
+    result = await main.get_players_tool.ainvoke({})
+
+    assert "player-a" in result
+    reader.assert_awaited_once_with("workspace-a")
+
+
+@pytest.mark.asyncio
 async def test_manual_bot_endpoint_keeps_explicit_commands_unchanged(monkeypatch):
     connection = SimpleNamespace(send_text=AsyncMock())
     monkeypatch.setattr(hub.hub_mgr, "bot_connection", connection)
