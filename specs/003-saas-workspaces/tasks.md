@@ -32,7 +32,7 @@ operational check; a rehearsal is never a cutover.
   bootstrap, approvals, reservations, claims and ledger operations, avoiding
   serialization of unrelated organizations. Full local regression after the
   identity-link, overlay-isolation, retention, worker-scope and WebSocket
-  authorization fixes: 418 passed, 21 skipped (2026-09-09; thirty acceptance
+  authorization fixes: 422 passed, 21 skipped (2026-09-09; thirty-four acceptance
   assertions were added after the earlier 388-pass run). The two bot SQLite
   reads were replaced with
   repository calls and are guarded by `test_runtime_bot_paths_do_not_open_sqlite_directly`.
