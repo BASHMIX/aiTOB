@@ -222,6 +222,12 @@ isolated run; no external provider or Discord side effect was enabled.
 The role acceptance now includes HTTP-positive/negative checks for TO, Stream
 operator, Moderator and Viewer (the same test passes on SQLite and PostgreSQL),
 and policy-level denial coverage for every non-owner mutating permission.
+The latest PostgreSQL assets/integrations/overlay/entitlement/retention/error
+regression is 36/36 passing; it exercises encrypted account isolation, overlay
+token ownership, referenced-asset deletion guards, manual entitlement limits,
+retention, and redacted telemetry without external effects. Legacy overlay
+preset ownership backfill and final deletion/Cloudinary operational acceptance
+remain explicit T032/T033 gates.
 The V2 provider lease/outbox repositories now also pass 4/4 on PostgreSQL;
 the migration-fixture test remains SQLite-only by design because it validates
 upgrading a pre-V2 file rather than runtime PostgreSQL behavior.

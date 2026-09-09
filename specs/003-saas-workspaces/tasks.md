@@ -325,6 +325,11 @@ operational check; a rehearsal is never a cutover.
   With both V2 contract/coordinator flags enabled, tenant-owned Start.gg import
   now rejects a missing `provider_account_id` before provider resolution;
   `test_v2_tenant_import_requires_explicit_startgg_account` covers this gate.
+  The latest PostgreSQL integration/assets/overlay/entitlement/retention/error
+  regression is 36/36 passing; these tests use isolated accounts and workspaces
+  and do not enable external effects. Remaining status reflects legacy preset
+  backfill and deployment-level Cloudinary/receipt acceptance, not a failing
+  PostgreSQL repository path.
 - [~] **T031 / FR-007** New Discord registration and participant avatar uploads
   use `image_store` with MIME/decodability, byte/dimension bounds and safe PNG
   transforms. Managed deployments now fail closed without Cloudinary, while
