@@ -32,14 +32,14 @@ operational check; a rehearsal is never a cutover.
   bootstrap, approvals, reservations, claims and ledger operations, avoiding
   serialization of unrelated organizations. Full local regression after the
   identity-link, overlay-isolation, retention, worker-scope and WebSocket
-  authorization fixes: 401 passed, 20 skipped (2026-09-09; thirteen acceptance
+  authorization fixes: 403 passed, 20 skipped (2026-09-09; fifteen acceptance
   assertions were added after the earlier 388-pass run). The two bot SQLite
   reads were replaced with
   repository calls and are guarded by `test_runtime_bot_paths_do_not_open_sqlite_directly`.
   Player listing and platform-admin checks now use repository functions and are
   guarded by `test_workspace_api_paths_use_repository_boundary`.
   Latest disposable PostgreSQL acceptance (storage, migration and station-overlay
-  isolation) is 21/21 passing on 2026-09-09; the current official local backend result is 401
+  isolation) is 21/21 passing on 2026-09-09; the current official local backend result is 403
   passed / 20 intentionally skipped. Current focused sync/authorization runs
   also pass (40 tests), including tenant-qualified scheduler keys and revocable
   Hub/Overlay WebSocket access.
