@@ -190,6 +190,12 @@ the existing ignored development values; API and bot import smoke checks each
 reported both keys present without printing them. Containers were not started
 against the candidate because startup workers may contact providers.
 
+For a cutover review window, set `AITOB_DISABLE_BACKGROUND_WORKERS=true` before
+starting the API. It initializes the database and accepts read-only checks but
+does not restore workflows, schedule Live polling, sync tournaments, or start
+reconciliation. The switch is opt-in and must be removed only after pending
+effects are reviewed.
+
 The configured runtime PostgreSQL database was not overwritten: a cutover
 preflight found existing schema history, two seeded stations, and one
 `workflow_outbox` row in `needs_review`, so the migration tool correctly refused

@@ -329,6 +329,13 @@ async def startup_event():
     # side effect that can recreate plaintext after secure migration.
     print("[SYS] API Started")
 
+    # Cutover/acceptance can start the API with execution workers paused while
+    # an operator reviews pending Hub, Outbox and provider work.  This switch
+    # is deliberately opt-in and leaves the normal runtime unchanged.
+    if os.getenv("AITOB_DISABLE_BACKGROUND_WORKERS", "").strip().lower() in {"1", "true", "yes", "on"}:
+        print("[SYS] Background workers paused by AITOB_DISABLE_BACKGROUND_WORKERS")
+        return
+
     # Restore only Hub-local workflow from SQLite. This creates no provider
     # mutation and does not auto-DQ an attendance deadline that elapsed while
     # aiTOB was offline.

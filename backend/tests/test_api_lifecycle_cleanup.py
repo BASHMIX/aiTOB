@@ -50,3 +50,33 @@ async def test_api_shutdown_drains_started_tasks_and_does_not_import_secrets(mon
             if task.get_coro().__name__ == "reconciliation":
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_api_startup_can_pause_background_workers_for_cutover(monkeypatch):
+    from backend.api import main
+    from backend.core import provider_feature_flags
+    from backend.core.provider_sync_manager import sync_manager
+
+    monkeypatch.setattr(main, "init_db", AsyncMock())
+    monkeypatch.setattr(main, "sync_tracked_tournaments", AsyncMock())
+    reconciliation = AsyncMock()
+    monkeypatch.setattr(main, "reconciliation_loop", reconciliation)
+    monkeypatch.setattr(provider_feature_flags, "get_provider_feature_flags", lambda: SimpleNamespace(
+        challonge_local_workflow_enabled=True, challonge_read_enabled=True,
+    ))
+    restore = AsyncMock()
+    monkeypatch.setattr("backend.core.recovery.RecoveryService.restore", restore)
+    monkeypatch.setattr(sync_manager, "restore_live_schedules", AsyncMock())
+    monkeypatch.setattr(sync_manager, "close_live_schedules", AsyncMock())
+    monkeypatch.setenv("AITOB_DISABLE_BACKGROUND_WORKERS", "true")
+    monkeypatch.delenv("STARTGG_TOKEN_PROBE_ON_STARTUP", raising=False)
+
+    await main.startup_event()
+    try:
+        main.sync_tracked_tournaments.assert_not_awaited()
+        reconciliation.assert_not_awaited()
+        restore.assert_not_awaited()
+        sync_manager.restore_live_schedules.assert_not_awaited()
+    finally:
+        await main.shutdown_event()
