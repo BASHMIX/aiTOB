@@ -465,6 +465,44 @@ def test_granular_match_routes_enforce_role_boundaries(isolated_workspace_db):
     assert stream.post("/api/active-matches/no-such-match/send").status_code == 403
 
 
+def test_roles_are_positive_and_negative_over_http(isolated_workspace_db):
+    """A role acceptance must prove allowed operations, not only denials."""
+    async def seed_match():
+        async with aiosqlite.connect(isolated_workspace_db) as db:
+            workspace_id = (await (await db.execute("SELECT id FROM workspaces")).fetchone())[0]
+            for role, email in (("tournament_organizer", "positive-to@example.test"), ("stream_operator", "positive-stream@example.test")):
+                user_id = str(uuid.uuid4())
+                await db.execute(
+                    "INSERT INTO users (id,email,display_name,password_hash) VALUES (?,?,?,?)",
+                    (user_id, email, role, hash_password("positive-password")),
+                )
+                await db.execute(
+                    "INSERT INTO workspace_memberships (workspace_id,user_id,role) VALUES (?,?,?)",
+                    (workspace_id, user_id, role),
+                )
+            await db.commit()
+            # Close this writer before repository helpers open their own
+            # connection; SQLite cannot safely nest the write transactions.
+        await database.upsert_tournament(
+            "role-acceptance", "Role acceptance", None, None, None, "{}",
+            provider_type="startgg", workspace_id=workspace_id,
+        )
+        await database.upsert_active_match(
+            "role-match", workspace_id=workspace_id, tournament_slug="role-acceptance",
+            p1_name="P1", p2_name="P2", status="not_started",
+        )
+    run(seed_match())
+
+    to = TestClient(app)
+    assert to.post("/api/session/login", json={"email": "positive-to@example.test", "password": "positive-password"}).status_code == 200
+    assert to.post("/api/active-matches/role-match/call").status_code == 200
+
+    stream = TestClient(app)
+    assert stream.post("/api/session/login", json={"email": "positive-stream@example.test", "password": "positive-password"}).status_code == 200
+    assert stream.post("/api/active-matches/role-match/toggle-stream", json={"is_stream_match": True}).status_code == 200
+    assert stream.post("/api/active-matches/role-match/send").status_code == 403
+
+
 def test_email_verification_token_is_hashed_expiring_and_one_use(isolated_workspace_db):
     from backend.core.workspace_auth import create_email_verification, consume_email_verification
     async def verify():
