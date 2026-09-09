@@ -37,6 +37,8 @@ services:
       # in PostgreSQL or returned by the API.
       AITOB_INTEGRATION_MASTER_KEY: ${AITOB_INTEGRATION_MASTER_KEY:?Set AITOB_INTEGRATION_MASTER_KEY}
       AITOB_AI_SERVICE_MASTER_KEY: ${AITOB_AI_SERVICE_MASTER_KEY:?Set AITOB_AI_SERVICE_MASTER_KEY}
+      # Cutover/recovery can pause all API-owned workers before resuming them.
+      AITOB_DISABLE_BACKGROUND_WORKERS: ${AITOB_DISABLE_BACKGROUND_WORKERS:-false}
     volumes:
       # Persist player avatars and static uploads using a named volume
       - static_data:/app/backend/api/static
@@ -65,6 +67,7 @@ services:
       DATABASE_URL: postgresql://aitob:${POSTGRES_PASSWORD}@postgres:5432/${AITOB_POSTGRES_DB:-aitob}
       AITOB_INTEGRATION_MASTER_KEY: ${AITOB_INTEGRATION_MASTER_KEY:?Set AITOB_INTEGRATION_MASTER_KEY}
       AITOB_AI_SERVICE_MASTER_KEY: ${AITOB_AI_SERVICE_MASTER_KEY:?Set AITOB_AI_SERVICE_MASTER_KEY}
+      AITOB_DISABLE_BACKGROUND_WORKERS: ${AITOB_DISABLE_BACKGROUND_WORKERS:-false}
     volumes:
       # Share only filesystem assets with the API. Runtime state is PostgreSQL;
       # no SQLite volume is mounted into a service container.
