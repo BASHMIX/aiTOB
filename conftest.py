@@ -58,6 +58,10 @@ if os.environ["AITOB_ALLOW_LIVE_TESTS"].lower() != "true":
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "live_external: requires an explicitly enabled real external service")
+    config.addinivalue_line(
+        "markers",
+        "sqlite_source_migration: migration test whose source is intentionally SQLite; target acceptance is tested separately",
+    )
 
 
 def pytest_collection_modifyitems(config, items):
@@ -68,6 +72,8 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if item.get_closest_marker("live_external"):
             item.add_marker(skip)
+        if config.getoption("--postgres", default=False) and item.get_closest_marker("sqlite_source_migration"):
+            item.add_marker(pytest.mark.skip(reason="SQLite source migration test; PostgreSQL target acceptance runs in test_postgres_migration.py"))
 
 
 @atexit.register

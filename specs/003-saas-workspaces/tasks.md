@@ -146,10 +146,12 @@ operational check; a rehearsal is never a cutover.
   cases; the pre-V2 SQLite migration fixture remains intentionally scoped to
   SQLite because it exercises source-file upgrade semantics.
   A broad `--postgres` sweep exposed 36 legacy fixture/harness incompatibilities
-  (427 passed, 26 failed, 10 errors, 2 skipped); these are not suppressed.
-  Focused runtime groups were repaired and pass, while the remaining pre-V2
-  migration harness and any direct-file fixtures are explicit T004/T052 closure
-  work before a final PostgreSQL gate.
+  during the first run; these were not suppressed. After the targeted fixes and
+  explicit SQLite-source marker, the complete PostgreSQL-targeted regression
+  passes 460/460 with five intentional skips (three source-migration cases,
+  the disabled AI Referee benchmark, and one live-network test). The remaining
+  T004 work is limited to documented compatibility contexts, not runtime
+  SQLite fallback or unscoped transactions.
   Error telemetry redaction and Challonge repair acceptance add 4/4 passing PG
   cases; no external effects are used by these tests.
   Discord thread delivery/restart-view acceptance adds 3/3 passing PG cases

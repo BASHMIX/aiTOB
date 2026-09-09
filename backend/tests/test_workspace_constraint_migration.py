@@ -8,6 +8,8 @@ import pytest
 
 from backend.core.schema_migrations import apply_sqlite_workspace_constraints
 
+pytestmark = pytest.mark.sqlite_source_migration
+
 
 @pytest.mark.asyncio
 async def test_legacy_link_and_overlay_keys_upgrade_without_losing_urls(tmp_path):

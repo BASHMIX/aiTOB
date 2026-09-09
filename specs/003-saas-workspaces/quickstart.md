@@ -205,6 +205,11 @@ checks (7/7); all are passing against disposable databases. SQLite-only
 migration-fixture tests remain intentionally separate from this runtime proof.
 The post-fix local regression was rerun on 2026-09-10: 444 passed / 21
 intentionally skipped, with no hanging subprocesses or unhandled task errors.
+The complete PostgreSQL-targeted regression was then rerun with the explicit
+DSN: 460 passed / 5 skipped. The five skips are intentional and named: three
+SQLite-source migration cases (the PostgreSQL-target migration test remains
+active), the disabled legacy AI Referee benchmark, and one live-network test
+protected unless `AITOB_ALLOW_LIVE_TESTS=true` is explicitly set.
 Action proposals, Organizer Console, manual entitlements, and workspace
 session/role acceptance add 43/43 passing PostgreSQL cases in the latest
 isolated run; no external provider or Discord side effect was enabled.

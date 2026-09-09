@@ -8,6 +8,8 @@ import pytest
 
 from backend.core import database
 
+pytestmark = pytest.mark.sqlite_source_migration
+
 
 def _create_pre_v2_database(path: str) -> None:
     """Create the relevant shape from a persisted legacy Start.gg installation."""
@@ -83,4 +85,3 @@ async def test_v2_migration_adds_storage_without_reinterpreting_legacy_startgg_r
         "provider_command_ledger", "workflow_outbox", "provider_reconciliation_audit",
         "provider_identity_links", "provider_api_budgets", "provider_snapshot_cache",
     }.issubset(tables)
-
