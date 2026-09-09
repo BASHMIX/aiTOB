@@ -350,12 +350,11 @@ operational check; a rehearsal is never a cutover.
   for API and bot containers; isolated API/bot import checks confirmed both
   values load without exposing them. The containers remain stopped for the
   candidate until provider-contact and pending-effect gates are cleared.
-  The candidate Discord credential decrypts correctly. The locally available
-  replacement was rotated into the account-scoped encrypted row and audited,
-  but Discord still returned HTTP 401, so bot connectivity/worker resumption
-  is externally blocked pending entry of a currently valid token through
-  Account Settings; no Discord effect was sent and this does not block
-  database/API validation.
+  The candidate Discord credential decrypts correctly. The newly supplied
+  replacement was rotated into the account-scoped encrypted row and audited;
+  Discord `/users/@me` returned HTTP 200 and a connectivity-only bot process
+  reached the Gateway. Workers remained paused and no Discord effect was sent;
+  resumption still follows the reviewed cutover sequence.
   API startup now supports the explicit `AITOB_DISABLE_BACKGROUND_WORKERS`
   pause switch for cutover review; a regression proves recovery, Live schedule,
   sync and reconciliation workers are not started while the switch is active.

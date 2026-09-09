@@ -256,13 +256,12 @@ players, 2 integration accounts, 8 held Outbox rows, 9 held Hub commands, and
 17 hold audits were preserved. The old runtime database remains untouched.
 
 The candidate's encrypted Discord credential decrypts through the service key.
-The locally supplied replacement was written to that account through the
-account-scoped rotation path (with an audit entry and no plaintext persistence),
-but a direct Discord `/users/@me` probe still returned HTTP 401. The bot was
-not resumed and no Discord effect was sent. This is an external dependency
-limited to bot connectivity: enter a currently valid Discord Bot Token in
-Account Settings, then rerun the connectivity-only startup before enabling
-workers. It does not invalidate PostgreSQL/API or queue-hold checks.
+The newly supplied token was written through the account-scoped rotation path
+(with an audit entry and no plaintext persistence); a direct Discord
+`/users/@me` probe returned HTTP 200 and a bot connectivity-only process
+connected to the Gateway. Workers remained paused, so no Discord effect was
+sent. The token is no longer a connectivity blocker; worker resumption still
+requires the reviewed cutover sequence.
 
 For a cutover review window, set `AITOB_DISABLE_BACKGROUND_WORKERS=true` before
 starting the API. It initializes the database and accepts read-only checks but
