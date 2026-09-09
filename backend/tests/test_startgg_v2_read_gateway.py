@@ -160,3 +160,23 @@ async def test_enabled_v2_reads_fail_closed_for_unbound_tournament_before_provid
     with pytest.raises(ValueError, match="tournament-bound integration account"):
         await ProviderSyncManager().sync_bracket("owned", workspace_id="ws-a")
     provider_lookup.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_v2_tenant_import_requires_explicit_startgg_account(monkeypatch):
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+    from backend.api.routers import tournaments as router
+    from backend.api.schemas import AddTournamentRequest
+
+    monkeypatch.setattr(router, "get_tournament", AsyncMock(return_value=None))
+    monkeypatch.setattr(router, "require_workspace_capacity", AsyncMock())
+    monkeypatch.setattr(
+        router, "get_provider_feature_flags",
+        lambda: ProviderFeatureFlags(provider_v2_contracts_enabled=True, provider_coordinator_enabled=True),
+    )
+    with pytest.raises(HTTPException, match="Start.gg integration account"):
+        await router.api_add_tournament(
+            AddTournamentRequest(identifier="tournament/example"),
+            SimpleNamespace(workspace_id="workspace-a"),
+        )

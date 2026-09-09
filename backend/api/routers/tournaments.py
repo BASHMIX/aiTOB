@@ -211,6 +211,22 @@ async def api_add_tournament(body: AddTournamentRequest, principal: SessionPrinc
         except Exception as exc:
             raise HTTPException(status_code=502, detail="Challonge identity import failed.") from exc
     else:
+        flags = get_provider_feature_flags()
+        if (
+            provider_type == "startgg"
+            and _workspace(principal)
+            and flags.provider_v2_contracts_enabled
+            and flags.provider_coordinator_enabled
+            and not body.provider_account_id
+        ):
+            # Account-bound V2 imports must select an integration explicitly;
+            # never let a tenant-owned tournament silently use the platform
+            # credential bucket.  Legacy flags-off imports retain their
+            # existing compatibility behavior until migration is complete.
+            raise HTTPException(
+                status_code=422,
+                detail="Select a Start.gg integration account before importing.",
+            )
         if "start.gg/" in slug:
             parts = slug.split("start.gg/")[-1].split("/")
             if len(parts) >= 2:

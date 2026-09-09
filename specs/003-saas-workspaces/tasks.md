@@ -226,6 +226,9 @@ operational check; a rehearsal is never a cutover.
   removed. In-process budget/backoff state is account-keyed; durable budget/cache
   schema ownership and the legacy bot service contexts remain open for the
   repository parity pass.
+  Tournament snapshot/status and refresh/stream lookup now carry the trusted
+  workspace; the new regression proves cross-workspace snapshot reads/writes
+  are denied. The remaining gap is the legacy unowned worker/service context.
 
 ## D. Integrations, assets and overlays
 
@@ -234,6 +237,9 @@ operational check; a rehearsal is never a cutover.
   permits account-scoped Start.gg identities alongside Discord/Challonge; the
   legacy shared Start.gg editor remains visible only as a migration bridge and
   is not used by account-bound clients unless the explicit fallback flag is on.
+  With both V2 contract/coordinator flags enabled, tenant-owned Start.gg import
+  now rejects a missing `provider_account_id` before provider resolution;
+  `test_v2_tenant_import_requires_explicit_startgg_account` covers this gate.
 - [~] **T031 / FR-007** New Discord registration and participant avatar uploads
   use `image_store` with MIME/decodability, byte/dimension bounds and safe PNG
   transforms. Managed deployments now fail closed without Cloudinary, while
