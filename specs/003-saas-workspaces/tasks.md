@@ -166,8 +166,11 @@ operational check; a rehearsal is never a cutover.
   The role matrix now has an explicit forbidden-action parameterized regression
   for TO, Stream operator, Moderator and Viewer
   (`test_every_non_owner_role_denies_mutating_actions`); remaining acceptance
-  is limited to exercising every protected HTTP action against each role in a
-  live multi-membership session.
+  now includes an HTTP positive/negative regression
+  (`test_roles_are_positive_and_negative_over_http`): TO can Call, Stream
+  operator can toggle stream state, and the latter cannot report a result.
+  Full protected-action coverage against every role in a live multi-membership
+  session remains the final acceptance item.
 - [~] **T013 / FR-003–005** Owner-only invite creation, token acceptance, role
   change and membership disable are implemented with last-Owner protection;
   tests cover invitation replay and role/removal safety. Account Settings now
