@@ -79,6 +79,14 @@ async def on_ready():
     global _hub_listener_task
     await init_db()
     print(ready_message())
+
+    # Cutover/recovery starts the bot in a connectivity-only mode first.  Do
+    # not attach listeners, drain queues, restore Discord views, or sync slash
+    # commands until the operator explicitly resumes workers.  Login itself is
+    # still allowed so the selected account can be health-checked.
+    if os.getenv("AITOB_DISABLE_BACKGROUND_WORKERS", "").strip().lower() in {"1", "true", "yes", "on"}:
+        print("[BOT] Background workers paused by AITOB_DISABLE_BACKGROUND_WORKERS")
+        return
     
     # Start background WebSocket listener for real-time Hub commands & log streaming
     if _hub_listener_task is None or _hub_listener_task.done():
