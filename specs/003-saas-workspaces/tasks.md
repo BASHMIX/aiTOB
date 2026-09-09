@@ -145,6 +145,11 @@ operational check; a rehearsal is never a cutover.
   V2 provider command/outbox lease repositories add 4/4 passing PostgreSQL
   cases; the pre-V2 SQLite migration fixture remains intentionally scoped to
   SQLite because it exercises source-file upgrade semantics.
+  A broad `--postgres` sweep exposed 36 legacy fixture/harness incompatibilities
+  (427 passed, 26 failed, 10 errors, 2 skipped); these are not suppressed.
+  Focused runtime groups were repaired and pass, while the remaining pre-V2
+  migration harness and any direct-file fixtures are explicit T004/T052 closure
+  work before a final PostgreSQL gate.
 - [~] **T006 / FR-011** `WorkflowOutboxWorker` now marks an explicitly
   ambiguous external outcome `needs_review` and does not retry it; PG acceptance
   also proves cancellation after delivery and before completion persistence

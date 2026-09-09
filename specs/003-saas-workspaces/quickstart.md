@@ -212,6 +212,17 @@ The V2 provider lease/outbox repositories now also pass 4/4 on PostgreSQL;
 the migration-fixture test remains SQLite-only by design because it validates
 upgrading a pre-V2 file rather than runtime PostgreSQL behavior.
 
+The broad `pytest backend/tests --postgres` sweep on 2026-09-10 was not used as
+an acceptance gate: it reported 427 passed, 26 failures, 10 errors, and 2
+skips because several legacy migration/security fixtures intentionally opened
+their own SQLite files while the PostgreSQL override was active, and exposed
+additional PG type assertions. The runtime failures found in identity,
+Dispatcher, local Challonge workflow, SQL-safety, tournament removal, and V2
+leases were fixed and rerun as the focused passing groups above. The remaining
+SQLite migration fixture and any unconverted legacy test harnesses must stay
+out of a final PostgreSQL gate until explicitly ported; this is tracked in
+T004/T052 rather than hidden by marking them skipped.
+
 The post-acceptance additions include two redacted error-telemetry tests,
 seven backup-manifest restore-safety tests and the selector-loop regression;
 they are included in the 444-pass count above.
