@@ -1,10 +1,10 @@
 """Dark storage tests: claiming records must never execute an external effect."""
 from __future__ import annotations
 
-import aiosqlite
 import pytest
 
 from backend.core import database
+from backend.core.storage import dbapi as aiosqlite, is_postgres
 
 
 @pytest.fixture
@@ -12,7 +12,7 @@ async def v2_database(tmp_path, monkeypatch):
     db_path = tmp_path / "provider-v2.sqlite"
     monkeypatch.setattr(database, "DB_PATH", str(db_path))
     await database.init_db()
-    return db_path
+    return database.DB_PATH
 
 
 @pytest.mark.asyncio
@@ -36,7 +36,11 @@ async def test_provider_command_lease_is_idempotent_and_does_not_execute_remote_
     assert len(claimed) == 1
     assert claimed[0]["state"] == "sending"
     assert claimed[0]["attempt_count"] == 1
-    assert claimed[0]["lease_until"] == "2099-01-01T00:05:00Z"
+    lease_until = claimed[0]["lease_until"]
+    if is_postgres():
+        assert lease_until.isoformat() == "2099-01-01T00:05:00"
+    else:
+        assert lease_until == "2099-01-01T00:05:00Z"
     assert reclaimed[0]["attempt_count"] == 2
 
 
@@ -85,7 +89,11 @@ async def test_future_hub_workflow_and_outbox_share_one_transaction_without_touc
         async with db.execute(
             "SELECT status, hub_status FROM active_matches WHERE set_id = 'match-atomic'"
         ) as cursor:
-            status, hub_status = await cursor.fetchone()
+            row = await cursor.fetchone()
+            status, hub_status = (
+                (row["status"], row["hub_status"]) if isinstance(row, dict)
+                else tuple(row)
+            )
         async with db.execute("SELECT COUNT(*) FROM workflow_outbox") as cursor:
             outbox_count = (await cursor.fetchone())[0]
 

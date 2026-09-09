@@ -206,6 +206,9 @@ migration-fixture tests remain intentionally separate from this runtime proof.
 Action proposals, Organizer Console, manual entitlements, and workspace
 session/role acceptance add 43/43 passing PostgreSQL cases in the latest
 isolated run; no external provider or Discord side effect was enabled.
+The V2 provider lease/outbox repositories now also pass 4/4 on PostgreSQL;
+the migration-fixture test remains SQLite-only by design because it validates
+upgrading a pre-V2 file rather than runtime PostgreSQL behavior.
 
 The post-acceptance additions include two redacted error-telemetry tests,
 seven backup-manifest restore-safety tests and the selector-loop regression;

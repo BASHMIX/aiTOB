@@ -143,6 +143,9 @@ operational check; a rehearsal is never a cutover.
   Proposal/console/entitlement/session role acceptance contributes a further
   43/43 passing PostgreSQL cases (2026-09-10); live external receipt
   reconciliation and cutover remain outside this isolated proof.
+  V2 provider command/outbox lease repositories add 4/4 passing PostgreSQL
+  cases; the pre-V2 SQLite migration fixture remains intentionally scoped to
+  SQLite because it exercises source-file upgrade semantics.
 - [~] **T006 / FR-011** `WorkflowOutboxWorker` now marks an explicitly
   ambiguous external outcome `needs_review` and does not retry it; PG acceptance
   also proves cancellation after delivery and before completion persistence
