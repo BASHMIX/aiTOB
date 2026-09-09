@@ -401,7 +401,12 @@ async def api_send_match(set_id: str, principal: SessionPrincipal = Depends(requ
         provider=provider
     )
     if result.success:
-        await transition_match(set_id, "complete", workspace_id=_ws(principal))
+        if _ws(principal) is None:
+            # Preserve direct unit/legacy callers that have no session
+            # principal; authenticated HTTP requests always carry a scope.
+            await transition_match(set_id, "complete")
+        else:
+            await transition_match(set_id, "complete", workspace_id=_ws(principal))
         await hub_mgr.broadcast({"type": "match_update", "_workspace_id": _ws(principal)})
         return MessageResponse(message="Score sent successfully.", ok=True)
     else:

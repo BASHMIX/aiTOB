@@ -80,12 +80,12 @@ claims, and unique command keys. No global compatibility lock serializes
 unrelated Workspaces; bootstrap and other critical paths use scoped locks.
 Two independent membership transactions cannot remove both last Owners.
 
-The local complete suite completed without hanging (403 passed / 20 skipped),
+The local complete suite completed without hanging (412 passed / 21 skipped),
 but exposed a thread-cleanup warning. The focused recovery/budget/coordinator
 group reproduced it with warnings treated as errors. Scheduler `close()` now
 awaits stopped tasks, and the explicit test-only SQLite connector drains opening
 and closing work on cancellation. The focused group then passed all 17 tests.
-The full post-fix rerun completed at 403 passed / 20 skipped (2026-09-09).
+The full post-fix rerun completed at 412 passed / 21 skipped (2026-09-09).
 
 The official local backend command is:
 
@@ -93,8 +93,9 @@ The official local backend command is:
 .\.venv\Scripts\python.exe -m pytest backend/tests -q
 ```
 
-The 20 skips are intentional and named: the 18 functions in
-`backend/tests/test_postgres_storage.py` (the PostgreSQL-only suite),
+The 21 skips are intentional and named: the PostgreSQL-only functions in
+`backend/tests/test_postgres_storage.py` (19 PostgreSQL-only functions,
+including the concurrent rate-window case),
 `test_readonly_sqlite_migration_preserves_workspace_ownership_and_assets`
 (`test_postgres_migration.py`, PostgreSQL-only), and
 `test_referee_accuracy_benchmark` (`test_referee_accuracy.py`, legacy AI result
@@ -140,9 +141,9 @@ SQLite reads were removed and guarded by
 and platform-admin API modules are additionally guarded by
 `test_workspace_api_paths_use_repository_boundary`.
 
-The latest PostgreSQL acceptance rerun completed 21/21 tests on disposable
+The latest PostgreSQL acceptance rerun completed 25/25 tests on disposable
 databases after the workspace feed/station changes. The local backend suite is
-403 passed / 20 skipped; skipped cases remain the explicitly PostgreSQL-only
+412 passed / 21 skipped; skipped cases remain the explicitly PostgreSQL-only
 cases when no `AITOB_PG_TEST_URL` is supplied to the local command.
 
 On 2026-09-09 a consistent read-only backup of the current SQLite fixture was

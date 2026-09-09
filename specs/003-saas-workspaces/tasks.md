@@ -32,15 +32,15 @@ operational check; a rehearsal is never a cutover.
   bootstrap, approvals, reservations, claims and ledger operations, avoiding
   serialization of unrelated organizations. Full local regression after the
   identity-link, overlay-isolation, retention, worker-scope and WebSocket
-  authorization fixes: 403 passed, 20 skipped (2026-09-09; fifteen acceptance
+  authorization fixes: 412 passed, 21 skipped (2026-09-09; twenty-four acceptance
   assertions were added after the earlier 388-pass run). The two bot SQLite
   reads were replaced with
   repository calls and are guarded by `test_runtime_bot_paths_do_not_open_sqlite_directly`.
   Player listing and platform-admin checks now use repository functions and are
   guarded by `test_workspace_api_paths_use_repository_boundary`.
   Latest disposable PostgreSQL acceptance (storage, migration and station-overlay
-  isolation) is 21/21 passing on 2026-09-09; the current official local backend result is 403
-  passed / 20 intentionally skipped. Current focused sync/authorization runs
+  isolation) is 25/25 passing on 2026-09-09; the current official local backend result is 412
+  passed / 21 intentionally skipped. Current focused sync/authorization runs
   also pass (40 tests), including tenant-qualified scheduler keys and revocable
   Hub/Overlay WebSocket access.
   ProviderSyncManager now carries the trusted tournament workspace through
@@ -88,11 +88,17 @@ operational check; a rehearsal is never a cutover.
   active_matches, settings and connections remain compatibility callers;
   acceptance is a repository import scan plus PostgreSQL concurrency tests,
   not merely a successful SQL connection.
+  Additional regressions now scope HTTP active-match mutations, Discord
+  Ready/timeout transitions, action-proposal execution, and Dispatcher
+  rechecks with the trusted workspace. Audit redaction covers credential
+  aliases and embedded bearer/query secrets without hiding safe identifiers.
 - [~] **T005 / FR-009–011** PostgreSQL acceptance now proves concurrent
   provider-ledger idempotency/lease ownership as well as approval, Outbox and
-  station and hub-command claims (`test_postgres_storage.py`: 18 passing PG
-  cases). Full runtime worker acceptance and restart/retry coverage remain
-  required before this task can close. Latest isolated runs: 18/18 PG storage
+  station and hub-command claims (`test_postgres_storage.py`: 19 passing PG
+  cases). A concurrent PostgreSQL rate-window test also proves one accepted
+  request and seven rejected requests at limit one. Full runtime worker
+  acceptance and restart/retry coverage remain
+  required before this task can close. Latest isolated runs: 19/19 PG storage
   cases and 17/17 PG workspace/session cases passed (2026-09-09), including
   competing approval, reservation, Outbox, ledger and bootstrap paths.
   The post-recovery workspace-scope and provider-recovery run passes 28/28 on
@@ -242,9 +248,10 @@ operational check; a rehearsal is never a cutover.
   uploads, API and AI, (c) secret/content redaction assertions, and (d)
   readiness/error-tracking checks that expose no credentials or local paths.
 - [~] **T041 / FR-014–015** Workspace free/non-billed entitlements and limits
-  are persisted and projected safely from the session profile; no payment
-  gateway is configured, so paid checkout is not active. Enforcement and
-  retention acceptance remain.
+  are persisted and projected safely from the session profile; free-plan
+  limits are enforced per workspace for tournaments, stations, integrations,
+  invitations, provider usage, and AI usage. No payment gateway is configured,
+  so paid checkout is not active. Retention acceptance remains.
 - [ ] **T042 / FR-014** If and only if a named payment gateway + merchant
   sandbox are configured, implement signed idempotent checkout/webhooks and
   sandbox acceptance. Otherwise record the external dependency as blocking
@@ -255,7 +262,10 @@ operational check; a rehearsal is never a cutover.
   housekeeping for aged authentication artifacts (expired/used reset and
   verification tokens, invitations, MFA setup, sessions and limiter buckets);
   `test_retention.py` proves fresh rows and workspace data are preserved.
-  Workspace disable/deletion policy, encryption-key recovery and external
+  Workspace lifecycle now exposes safe disable-readiness and refuses disable
+  while pending Outbox, provider-ledger, Hub-command, or active workflow work
+  exists; orphaned-effect and asset-retention regressions pass. Encryption-key
+  recovery and external
   Discord/provider reconciliation acceptance remain. The acceptance must
   separately prove backup integrity, restore to a new target, key recovery,
   retention behavior, safe Workspace disable/deletion, and reconciliation of
