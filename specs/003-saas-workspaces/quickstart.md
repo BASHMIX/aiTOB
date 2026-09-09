@@ -212,6 +212,10 @@ DSN: 460 passed / 5 skipped. The five skips are intentional and named: three
 SQLite-source migration cases (the PostgreSQL-target migration test remains
 active), the disabled legacy AI Referee benchmark, and one live-network test
 protected unless `AITOB_ALLOW_LIVE_TESTS=true` is explicitly set.
+The runtime boundary guard itself is 8/8 passing, and the deterministic Outbox
+contract is 6/6 on PostgreSQL plus 2/2 queue-hold tests locally; T004 and T006
+are therefore closed in `tasks.md`. The remaining live receipt and final
+cutover evidence is tracked separately under T043/T052/T053.
 Action proposals, Organizer Console, manual entitlements, and workspace
 session/role acceptance add 43/43 passing PostgreSQL cases in the latest
 isolated run; no external provider or Discord side effect was enabled.
