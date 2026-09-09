@@ -20,6 +20,7 @@ describe('TopNavigation Component', () => {
   const mockSetMatches = vi.fn();
   const mockSetEvents = vi.fn();
   const mockSetCurrentEventId = vi.fn();
+  const mockRemovePinnedTournament = vi.fn();
   const mockLogout = vi.fn();
 
   const baseStoreState = {
@@ -32,6 +33,7 @@ describe('TopNavigation Component', () => {
     currentEventId: null,
     setTournaments: mockSetTournaments,
     setCurrentSlug: mockSetCurrentSlug,
+    removePinnedTournament: mockRemovePinnedTournament,
     setEvents: mockSetEvents,
     setCurrentEventId: mockSetCurrentEventId,
     setMatches: mockSetMatches,
@@ -81,6 +83,27 @@ describe('TopNavigation Component', () => {
     // WS is true -> bg-statusGreen
     const wsDot = screen.getByText('WS').previousSibling;
     expect(wsDot).toHaveClass('bg-statusGreen');
+  });
+
+  it('uses a one-bracket Challonge scope and does not request Start.gg events', async () => {
+    const challongeState = {
+      ...baseStoreState,
+      tournaments: [{ slug: 'challonge-test', name: 'Challonge test', provider_type: 'challonge', provider_sync_status: 'ready' }],
+      currentSlug: 'challonge-test',
+      events: [],
+    };
+    vi.mocked(useHubStore).mockImplementation((selector: any) => (
+      typeof selector === 'function' ? selector(challongeState) : challongeState
+    ));
+
+    render(<TopNavigation />);
+
+    expect(screen.getByText('Scope:')).toBeInTheDocument();
+    expect(screen.getByText('Bracket')).toBeInTheDocument();
+    expect(screen.getByText('Challonge')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(mockedAxios.get.mock.calls.some(([url]) => String(url).includes('/events'))).toBe(false);
+    });
   });
 
   it('calls logout when Logout button is clicked', async () => {

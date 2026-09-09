@@ -6,12 +6,14 @@ import aiosqlite
 from backend.core.database import init_db, save_overlay, get_overlays, delete_overlay, DB_PATH
 from backend.api.schemas import SaveOverlayRequest
 
-TEST_DB_PATH = "backend/core/test_database.sqlite"
+TEST_DB_PATH = ""
 
 @pytest.fixture
-async def setup_test_db():
+async def setup_test_db(tmp_path):
     import backend.core.database
     
+    global TEST_DB_PATH
+    TEST_DB_PATH = str(tmp_path / "editor-dragging.sqlite")
     orig_db_path = backend.core.database.DB_PATH
     backend.core.database.DB_PATH = TEST_DB_PATH
     
@@ -20,13 +22,6 @@ async def setup_test_db():
     
     yield
     
-    # Clean up test database
-    if os.path.exists(TEST_DB_PATH):
-        try:
-            os.remove(TEST_DB_PATH)
-        except Exception:
-            pass
-            
     # Restore original paths
     backend.core.database.DB_PATH = orig_db_path
 
@@ -125,3 +120,13 @@ async def test_save_and_retrieve_overlay_coordinates(setup_test_db):
     await delete_overlay(overlay_name)
     overlays_after_delete = await get_overlays()
     assert not any(o["name"] == overlay_name for o in overlays_after_delete)
+
+
+@pytest.mark.asyncio
+async def test_overlay_cannot_be_overwritten_across_workspaces(setup_test_db):
+    await save_overlay("shared-name", json.dumps({"owner": "workspace-a"}), "workspace-a")
+    with pytest.raises(PermissionError, match="another workspace"):
+        await save_overlay("shared-name", json.dumps({"owner": "workspace-b"}), "workspace-b")
+    rows = await get_overlays("workspace-a")
+    assert json.loads(rows[0]["config"])["owner"] == "workspace-a"
+    assert await get_overlays("workspace-b") == []

@@ -1,0 +1,1 @@
+"""Challonge provider test package."""

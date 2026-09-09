@@ -18,7 +18,7 @@ from backend.core.database import (
     resolve_dispatch_budget,
 )
 
-TEST_DB_PATH = "backend/core/test_dispatch_event_scoping.sqlite"
+TEST_DB_PATH = ""
 
 EVENT_T8 = "100"
 EVENT_SF6 = "200"
@@ -26,20 +26,17 @@ SLUG = "major/x"
 
 
 @pytest.fixture
-async def setup_test_db():
+async def setup_test_db(tmp_path):
     import backend.core.database
     import backend.core.match_state
 
+    global TEST_DB_PATH
+    TEST_DB_PATH = str(tmp_path / "dispatch-event-scoping.sqlite")
     orig = backend.core.database.DB_PATH
     backend.core.database.DB_PATH = TEST_DB_PATH
     backend.core.match_state.DB_PATH = TEST_DB_PATH
     await init_db()
     yield
-    if os.path.exists(TEST_DB_PATH):
-        try:
-            os.remove(TEST_DB_PATH)
-        except Exception:
-            pass
     backend.core.database.DB_PATH = orig
     backend.core.match_state.DB_PATH = orig
 
@@ -172,6 +169,18 @@ async def test_disarmed_tournament_not_eligible(setup_test_db):
     await upsert_tournament(SLUG, "Major X", "", "", "", "{}")
     await _seed_candidate("t8_1", EVENT_T8, "Tekken 8")
     assert await get_dispatch_eligible_events() == []
+
+
+@pytest.mark.asyncio
+async def test_eligible_events_can_be_restricted_to_one_workspace(setup_test_db):
+    await upsert_tournament("tenant-a", "Tenant A", "", "", "", "{}", workspace_id="ws-a")
+    await upsert_tournament("tenant-b", "Tenant B", "", "", "", "{}", workspace_id="ws-b")
+    async with aiosqlite.connect(TEST_DB_PATH) as db:
+        await db.execute("UPDATE tournaments SET auto_dispatch_enabled=1 WHERE workspace_id IN ('ws-a','ws-b')")
+        await db.commit()
+    await upsert_active_match("a-1", workspace_id="ws-a", tournament_slug="tenant-a", event_id="e", p1_name="A", p2_name="B", p1_entrant_id="a", p2_entrant_id="b", status="not_started")
+    await upsert_active_match("b-1", workspace_id="ws-b", tournament_slug="tenant-b", event_id="e", p1_name="C", p2_name="D", p1_entrant_id="c", p2_entrant_id="d", status="not_started")
+    assert {row["workspace_id"] for row in await get_dispatch_eligible_events("ws-a")} == {"ws-a"}
 
 
 # ── Stream station routing (green room) ───────────────────────────────────

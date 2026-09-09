@@ -24,8 +24,8 @@ vi.mock('../components/MatchDashboard', () => ({
 vi.mock('../components/Conflicts', () => ({
   Conflicts: () => <div data-testid="conflicts">Conflicts</div>
 }));
-vi.mock('../components/BotFeed', () => ({
-  BotFeed: () => <div data-testid="bot-feed">BotFeed</div>
+vi.mock('../components/OrganizerConsole', () => ({
+  OrganizerConsole: () => <div data-testid="organizer-console">OrganizerConsole</div>
 }));
 vi.mock('../components/GeneralSettings', () => ({
   GeneralSettings: () => <div data-testid="general-settings">GeneralSettings</div>
@@ -149,10 +149,11 @@ describe('HubDashboard Integration', () => {
     expect(screen.queryByTestId('active-match-status')).not.toBeInTheDocument();
     expect(screen.getByTestId('tournament-settings')).toBeInTheDocument();
 
-    // Switch to System
-    await user.click(screen.getByRole('button', { name: 'SYSTEM' }));
+    // Open the reorganized Settings workspace, then switch its System section.
+    await user.click(screen.getByRole('button', { name: 'SETTINGS' }));
+    await user.click(await screen.findByRole('button', { name: /system/i }));
     expect(screen.queryByTestId('tournament-settings')).not.toBeInTheDocument();
-    expect(screen.getByTestId('general-settings')).toBeInTheDocument();
+    expect(screen.getByText('System', { selector: 'h1' })).toBeInTheDocument();
   });
 
   it('allows manual refresh via Match Dashboard button', async () => {

@@ -2,6 +2,10 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 
+const apiPort = process.env.AITOB_API_PORT || '8000'
+const apiTarget = `http://127.0.0.1:${apiPort}`
+const wsTarget = `ws://127.0.0.1:${apiPort}`
+
 export default defineConfig({
   plugins: [react()],
   resolve: {
@@ -15,19 +19,19 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8000',
+        target: apiTarget,
         changeOrigin: true,
       },
       '/static': {
-        target: 'http://127.0.0.1:8000',
+        target: apiTarget,
         changeOrigin: true,
       },
       '/assets': {
-        target: 'http://127.0.0.1:8000',
+        target: apiTarget,
         changeOrigin: true,
       },
       '/ws': {
-        target: 'ws://127.0.0.1:8000',
+        target: wsTarget,
         ws: true,
       }
     }

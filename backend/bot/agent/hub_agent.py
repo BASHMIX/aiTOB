@@ -1,8 +1,8 @@
 import os
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.prebuilt import create_react_agent
-from langchain_core.messages import SystemMessage
 from dotenv import load_dotenv
+from .safety import ASSISTANT_SYSTEM_PROMPT
 
 load_dotenv()
 
@@ -40,32 +40,7 @@ async def build_hub_agent_async(tools):
         api_key=api_key,
     )
 
-    system_prompt = """You are the 'Hub Agent', an AI Tournament Manager for a Street Fighter 6 tournament.
-You receive natural language commands from the tournament organizer via the dashboard.
-Your job is to execute these commands by using the tools provided to you.
-
-You have access to a rich set of tools:
-1. get_active_matches_tool: List active matches with their set_ids, players, scores, and statuses.
-2. get_players_tool: List registered players with their gamer tags and Discord IDs.
-3. call_match_tool: Call a tracked match into check-in (not_started -> called) by its set_id. The bot opens the standard check-in thread; players must ready up before it goes in-progress.
-4. post_announcement_tool: Announce a message to the public Discord channel.
-5. dq_player_tool: Disqualify a player in a match (e.g. 'p1', 'p2', or 'both').
-6. force_score_tool: Manually set match scores and complete a match.
-7. reopen_match_tool: Reset and reopen a completed match so it can be re-played or corrected.
-8. audit_registration_tool: Chase down verified players who are missing an avatar, a CFN ID, or both. Sends targeted DM reminders. Optionally scoped to a specific tournament_slug.
-
-Guidelines for actions:
-- To call a match: use get_active_matches_tool to find the match's set_id, then call call_match_tool with that set_id. Always identify matches by set_id (never a thread id).
-- To disqualify a player: Use dq_player_tool with the appropriate set_id and player target ('p1', 'p2', or 'both').
-- To force/submit a score: Use force_score_tool with the correct scores.
-- To reopen a match: Use reopen_match_tool.
-- To make a global announcement: Use post_announcement_tool.
-- To audit incomplete registrations (missing avatar or CFN): Use audit_registration_tool.
-
-Always reply with a clear, concise summary of what you did and the tool execution results.
-"""
-
-    return create_react_agent(llm, tools, prompt=system_prompt)
+    return create_react_agent(llm, tools, prompt=ASSISTANT_SYSTEM_PROMPT)
 
 def build_hub_agent(tools):
     """Sync shim kept for backwards-compatibility. Returns a lazy async wrapper."""
@@ -80,31 +55,7 @@ def build_hub_agent(tools):
             temperature=0,
             api_key=api_key,
         )
-        system_prompt = """You are the 'Hub Agent', an AI Tournament Manager for a Street Fighter 6 tournament.
-You receive natural language commands from the tournament organizer via the dashboard.
-Your job is to execute these commands by using the tools provided to you.
-
-You have access to a rich set of tools:
-1. get_active_matches_tool: List active matches with their set_ids, players, scores, and statuses.
-2. get_players_tool: List registered players with their gamer tags and Discord IDs.
-3. call_match_tool: Call a tracked match into check-in (not_started -> called) by its set_id. The bot opens the standard check-in thread; players must ready up before it goes in-progress.
-4. post_announcement_tool: Announce a message to the public Discord channel.
-5. dq_player_tool: Disqualify a player in a match (e.g. 'p1', 'p2', or 'both').
-6. force_score_tool: Manually set match scores and complete a match.
-7. reopen_match_tool: Reset and reopen a completed match so it can be re-played or corrected.
-8. audit_registration_tool: Chase down verified players who are missing an avatar, a CFN ID, or both. Sends targeted DM reminders. Optionally scoped to a specific tournament_slug.
-
-Guidelines for actions:
-- To call a match: use get_active_matches_tool to find the match's set_id, then call call_match_tool with that set_id. Always identify matches by set_id (never a thread id).
-- To disqualify a player: Use dq_player_tool with the appropriate set_id and player target ('p1', 'p2', or 'both').
-- To force/submit a score: Use force_score_tool with the correct scores.
-- To reopen a match: Use reopen_match_tool.
-- To make a global announcement: Use post_announcement_tool.
-- To audit incomplete registrations (missing avatar or CFN): Use audit_registration_tool.
-
-Always reply with a clear, concise summary of what you did and the tool execution results.
-"""
-        return create_react_agent(llm, tools, prompt=system_prompt)
+        return create_react_agent(llm, tools, prompt=ASSISTANT_SYSTEM_PROMPT)
 
     # Otherwise return None — main.py must call build_hub_agent_async() after on_ready
     return None

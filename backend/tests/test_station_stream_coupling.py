@@ -20,7 +20,7 @@ import backend.core.database as db
 import backend.core.match_state as ms
 from backend.api.main import app
 
-TEST_DB = "backend/core/test_station_stream_coupling.sqlite"
+TEST_DB = ""
 AUTH = {"X-Hub-Password": "admin"}
 SLUG = "major/x"
 EVENT = "100"
@@ -33,17 +33,18 @@ def run(coro):
 
 
 @pytest.fixture(autouse=True)
-def patch_db():
+def patch_db(tmp_path):
+    global TEST_DB
+    TEST_DB = str(tmp_path / "station-stream-coupling.sqlite")
     orig = db.DB_PATH
     db.DB_PATH = TEST_DB
     ms.DB_PATH = TEST_DB
+    os.environ["AITOB_BOOTSTRAP_OWNER_EMAIL"] = "station-test@example.test"
+    os.environ["AITOB_BOOTSTRAP_OWNER_PASSWORD"] = "station-test-password"
+    os.environ["AITOB_LEGACY_HUB_PASSWORD_COMPAT"] = "true"
     run(db.init_db())
+    run(db.set_setting("HUB_PASSWORD", "admin"))
     yield
-    if os.path.exists(TEST_DB):
-        try:
-            os.remove(TEST_DB)
-        except Exception:
-            pass
     db.DB_PATH = orig
     ms.DB_PATH = orig
 
@@ -72,10 +73,14 @@ def _planned(set_id):
 def test_patch_null_station_clears_assignment():
     run(_seed_station("s_plain", "Setup 1", stream=False))
     run(_seed_match("m1", status="in_progress", station_id="s_plain"))
+    # A physical station also owns its active-match pointer.  Clearing only
+    # the match row leaves a ghost occupant that blocks the next assignment.
+    run(db.update_station("s_plain", active_match_id="m1"))
 
     resp = client.patch("/api/active-matches/m1", json={"station_id": None}, headers=AUTH)
     assert resp.status_code == 200
     assert _match("m1")["station_id"] in (None, "")
+    assert run(db.get_station("s_plain"))["active_match_id"] is None
 
 
 def test_patch_omitting_station_leaves_it_untouched():

@@ -1,9 +1,13 @@
 from __future__ import annotations
+from datetime import UTC, datetime
 from typing import Optional, List
 from backend.core.contracts import (
-    ITournamentProvider,
+    ITournamentProvider, ITournamentProviderV2,
     ProviderTournament, ProviderSet, ProviderSetState, ProviderSetResult,
     ProviderStream,
+    ProviderActionKind, ProviderCapabilitiesV2, ProviderCapability,
+    ProviderCommandResultV2, ProviderCommandState, ProviderCommandV2,
+    ProviderSnapshotRequestV2, ProviderSnapshotV2, SnapshotScope,
 )
 from backend.core.providers.startgg import queries
 from backend.core.providers.startgg.mapper import map_tournament, map_set, map_stream
@@ -11,19 +15,127 @@ from backend.core.providers.startgg.state_map import SGG_STATE_MAP, is_active_st
 from backend.core.providers.startgg.client import StartGGClient
 
 
-class StartGGProvider(ITournamentProvider):
+class StartGGProvider(ITournamentProvider, ITournamentProviderV2):
     """start.gg bracket provider.
     
     Wraps the existing StartGGClient and translates all responses
     through the mapper layer into unified contracts.
     """
 
-    def __init__(self, client: Optional[StartGGClient] = None):
-        self._client = client or StartGGClient()
+    def __init__(self, client: Optional[StartGGClient] = None, *, provider_account_id: str | None = None):
+        self._client = client or StartGGClient(provider_account_id=provider_account_id)
 
     @property
     def provider_name(self) -> str:
         return "start.gg"
+
+    @property
+    def provider_type(self) -> str:
+        return "startgg"
+
+    @property
+    def capabilities_v2(self) -> ProviderCapabilitiesV2:
+        """Declare upstream capabilities without enabling V2 mutation execution.
+
+        The legacy paths remain the only mutation paths in Phase 3.  This avoids
+        post-mutation fallback and gives a later Command Service an explicit
+        capability map to evaluate before it owns remote writes.
+        """
+        remote = ProviderCapability(ProviderActionKind.REMOTE)
+        return ProviderCapabilitiesV2(
+            actions={
+                "report_score": remote,
+                "report_forfeit": remote,
+                "reset_match": remote,
+                "reopen_match": remote,
+                "mark_called": remote,
+                "mark_in_progress": remote,
+                "assign_stream": remote,
+                "remove_stream": ProviderCapability(
+                    ProviderActionKind.LOCAL,
+                    "Start.gg has no removeStream mutation; legacy behavior is a local no-op.",
+                ),
+            },
+            supports_targeted_match_fetch=True,
+            supports_remote_revision=False,
+            supports_idempotency=False,
+        )
+
+    async def fetch_snapshot_v2(
+        self, request: ProviderSnapshotRequestV2
+    ) -> ProviderSnapshotV2:
+        """Read through existing legacy methods, preserving their GraphQL behavior."""
+        if request.provider_type != self.provider_type:
+            raise ValueError(f"Start.gg cannot satisfy provider type {request.provider_type!r}")
+
+        observed_at = datetime.now(UTC).isoformat()
+        if request.scope is SnapshotScope.SINGLE_MATCH:
+            if len(request.entity_ids) != 1:
+                raise ValueError("A Start.gg single-match snapshot requires exactly one set ID.")
+            set_id = next(iter(request.entity_ids))
+            state = await self.fetch_set_state(set_id)
+            entrant_ids = await self.fetch_set_entrant_order(set_id)
+            return ProviderSnapshotV2(
+                request=request,
+                payload={"set_id": set_id, "state": int(state) if state is not None else None, "entrant_ids": entrant_ids},
+                observed_at=observed_at,
+                covered_scopes=frozenset({SnapshotScope.SINGLE_MATCH}),
+                covered_entity_ids=frozenset({set_id}),
+            )
+
+        if request.scope in {
+            SnapshotScope.ACTIVE_MATCHES,
+            SnapshotScope.BRACKET_STRUCTURE,
+            SnapshotScope.ADVANCEMENT_NEIGHBORHOOD,
+        }:
+            sets = await self.fetch_sets(
+                request.tournament_id,
+                ignore_activity_guard=bool(request.options.get("ignore_activity_guard")),
+            )
+            return ProviderSnapshotV2(
+                request=request,
+                payload={"sets": sets},
+                observed_at=observed_at,
+                covered_scopes=frozenset({request.scope}),
+            )
+
+        if request.scope is SnapshotScope.FULL_SNAPSHOT:
+            tournament = await self.fetch_tournament(request.tournament_id)
+            sets = await self.fetch_sets(
+                request.tournament_id,
+                ignore_activity_guard=bool(request.options.get("ignore_activity_guard")),
+            )
+            return ProviderSnapshotV2(
+                request=request,
+                payload={"tournament": tournament, "sets": sets},
+                observed_at=observed_at,
+                covered_scopes=frozenset({
+                    SnapshotScope.TOURNAMENT_METADATA,
+                    SnapshotScope.PARTICIPANTS,
+                    SnapshotScope.BRACKET_STRUCTURE,
+                    SnapshotScope.ACTIVE_MATCHES,
+                    SnapshotScope.FULL_SNAPSHOT,
+                }),
+            )
+
+        tournament = await self.fetch_tournament(request.tournament_id)
+        return ProviderSnapshotV2(
+            request=request,
+            payload={"tournament": tournament},
+            observed_at=observed_at,
+            covered_scopes=frozenset({request.scope}),
+        )
+
+    async def execute_remote_command_v2(
+        self, command: ProviderCommandV2
+    ) -> ProviderCommandResultV2:
+        """Refuse V2 writes until the command service is introduced in a later phase."""
+        return ProviderCommandResultV2(
+            command_id=command.command_id,
+            state=ProviderCommandState.NEEDS_REVIEW,
+            acknowledged=False,
+            error_message="Start.gg V2 remote commands are disabled in Phase 3; use the legacy path.",
+        )
 
     async def fetch_tournament(self, slug_or_id: str) -> Optional[ProviderTournament]:
         data = await self._client.query(queries.TOURNAMENT_INFO, {"slug": slug_or_id})

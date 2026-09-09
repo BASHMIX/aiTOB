@@ -1,10 +1,28 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from typing import Dict, Any
-from backend.core.database import get_all_settings, set_setting, get_all_connections, set_connection
+from backend.core.database import (
+    delete_connections, get_all_settings, set_setting, get_all_connections,
+    get_connection, set_connection,
+)
 from backend.api.auth import verify_hub_password
 from backend.api.schemas import PatchSettingsRequest, PatchEnvRequest, MessageResponse, ErrorResponse
 
 router = APIRouter(tags=["settings"])
+
+_SECRET_KEYS = {
+    "STARTGG_API_TOKEN", "STARTGG_CLIENT_SECRET", "CHALLONGE_API_KEY",
+    "CHALLONGE_OAUTH_CLIENT_SECRET", "CHALLONGE_OAUTH_ACCESS_TOKEN",
+    "CHALLONGE_OAUTH_REFRESH_TOKEN", "DISCORD_BOT_TOKEN", "GEMINI_API_KEY",
+    "GOOGLE_API_KEY", "CLOUDINARY_URL",
+    "HUB_PASSWORD", "hub_password",
+}
+
+_MIGRATED_INTEGRATION_KEYS = {
+    "DISCORD_BOT_TOKEN", "MATCH_CALL_CHANNEL_ID", "CHALLONGE_API_KEY",
+    "CHALLONGE_OAUTH_CLIENT_ID", "CHALLONGE_OAUTH_CLIENT_SECRET",
+    "CHALLONGE_OAUTH_REDIRECT_URI", "CHALLONGE_OAUTH_ACCESS_TOKEN",
+    "CHALLONGE_OAUTH_REFRESH_TOKEN", "CHALLONGE_OAUTH_EXPIRES_AT",
+}
 
 
 @router.get(
@@ -17,7 +35,7 @@ router = APIRouter(tags=["settings"])
 )
 async def api_get_settings():
     """Return all persisted global settings. Requires admin password authentication."""
-    return {"settings": await get_all_settings()}
+    return {"settings": {key: value for key, value in (await get_all_settings()).items() if key not in _SECRET_KEYS}}
 
 
 @router.patch(
@@ -58,7 +76,21 @@ async def api_patch_settings(body: PatchSettingsRequest):
 )
 async def api_get_env():
     """Return all configured connection tokens and external credentials. Requires admin password authentication."""
-    return await get_all_connections()
+    values = await get_all_connections()
+    # The UI needs only a configured/not-configured indicator for provider keys.
+    # Never return a Challonge key back to the browser after it has been saved.
+    for key in (
+        "STARTGG_API_TOKEN",
+        "STARTGG_CLIENT_SECRET",
+        "CHALLONGE_API_KEY",
+        "CHALLONGE_OAUTH_CLIENT_SECRET",
+        "CHALLONGE_OAUTH_ACCESS_TOKEN",
+        "CHALLONGE_OAUTH_REFRESH_TOKEN", "DISCORD_BOT_TOKEN", "GEMINI_API_KEY",
+        "GOOGLE_API_KEY", "CLOUDINARY_URL",
+    ):
+        if values.get(key):
+            values[key] = "configured"
+    return values
 
 
 @router.patch(
@@ -72,9 +104,32 @@ async def api_get_env():
 async def api_patch_env(body: PatchEnvRequest):
     """Update environment secrets (tokens, public channel targets). Requires admin password authentication."""
     d = body.model_dump(exclude_none=True)
+    attempted_legacy = sorted(key for key in d if key in _MIGRATED_INTEGRATION_KEYS)
+    if attempted_legacy:
+        raise HTTPException(409, "Provider and Discord credentials are account-scoped. Use Integration Accounts.")
+    secret_keys = {
+        "STARTGG_API_TOKEN", "STARTGG_CLIENT_SECRET", "CHALLONGE_API_KEY",
+        "CHALLONGE_OAUTH_CLIENT_SECRET", "CHALLONGE_OAUTH_ACCESS_TOKEN",
+        "CHALLONGE_OAUTH_REFRESH_TOKEN",
+    }
+    oauth_config_keys = {
+        "CHALLONGE_OAUTH_CLIENT_ID", "CHALLONGE_OAUTH_CLIENT_SECRET", "CHALLONGE_OAUTH_REDIRECT_URI",
+    }
+    oauth_changed = False
     for k, v in d.items():
-        if v:
+        # Redacted values returned by GET /env must never overwrite a real
+        # credential when the user saves an unrelated connection setting.
+        if v and not (k in secret_keys and v == "configured"):
+            if k in oauth_config_keys and await get_connection(k) != str(v):
+                oauth_changed = True
             await set_connection(k, str(v))
+    # An authorization is issued for one client configuration. If the client,
+    # secret, or callback changes, never present a token from the previous app
+    # as a successful connection.
+    if oauth_changed:
+        await delete_connections([
+            "CHALLONGE_OAUTH_ACCESS_TOKEN", "CHALLONGE_OAUTH_REFRESH_TOKEN", "CHALLONGE_OAUTH_EXPIRES_AT",
+        ])
     if "STARTGG_API_TOKEN" in d:
         import asyncio
         from backend.core.providers.startgg.client import get_client

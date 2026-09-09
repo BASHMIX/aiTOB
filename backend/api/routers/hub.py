@@ -6,6 +6,7 @@ from backend.core.database import (
 )
 from backend.api.ws_manager import manager as hub_mgr
 from backend.api.auth import verify_hub_password
+from backend.core.workspace_auth import SessionPrincipal
 from backend.api.schemas import (
     BotCommandRequest, MessageResponse, ErrorResponse, BotFeedResponse,
     DispatcherMasterRequest,
@@ -37,10 +38,11 @@ async def api_verify_auth(password: str = Depends(verify_hub_password)):
 )
 async def api_get_feed(
     limit: int = Query(default=50, ge=1, le=200, description="Maximum number of log feed entries to fetch"),
-    offset: int = Query(default=0, ge=0, description="Number of log feed entries to skip for pagination")
+    offset: int = Query(default=0, ge=0, description="Number of log feed entries to skip for pagination"),
+    principal: SessionPrincipal | None = Depends(verify_hub_password),
 ):
     """Retrieve recently logged discord bot activities and execution events. Requires admin password authentication."""
-    return BotFeedResponse(feed=await get_bot_feed(limit, offset))
+    return BotFeedResponse(feed=await get_bot_feed(limit, offset, getattr(principal, "workspace_id", None)))
 
 
 @router.delete(
@@ -51,9 +53,9 @@ async def api_get_feed(
     responses={401: {"model": ErrorResponse}},
     operation_id="clearBotFeed"
 )
-async def api_clear_feed():
+async def api_clear_feed(principal: SessionPrincipal | None = Depends(verify_hub_password)):
     """Wipe all history entries from the internal discord bot feed database. Requires admin password authentication."""
-    await clear_bot_feed()
+    await clear_bot_feed(getattr(principal, "workspace_id", None))
     return MessageResponse(message="Feed cleared", ok=True)
 
 
@@ -65,13 +67,14 @@ async def api_clear_feed():
     responses={401: {"model": ErrorResponse}},
     operation_id="queueBotCommand"
 )
-async def api_bot_command(body: BotCommandRequest):
+async def api_bot_command(body: BotCommandRequest, principal: SessionPrincipal | None = Depends(verify_hub_password)):
     """Enqueue a text command to be processed by the background Discord bot client. Requires admin password authentication."""
     cmd = body.command
     if cmd:
         import datetime
         import json
-        await add_bot_feed(f"Admin command: {cmd}", "info")
+        workspace_id = getattr(principal, "workspace_id", None)
+        await add_bot_feed(f"Admin command: {cmd}", "info", workspace_id)
         await hub_mgr.broadcast({"type": "bot_feed_update", "log": {
             "message": f"Admin command: {cmd}",
             "level": "info",
@@ -86,7 +89,7 @@ async def api_bot_command(body: BotCommandRequest):
                 return MessageResponse(message="Command sent to bot", ok=True)
             except Exception as e:
                 print(f"Error sending command to bot WS: {e}")
-        await add_hub_command(cmd)
+        await add_hub_command(cmd, workspace_id=workspace_id)
     return MessageResponse(message="Command queued (Bot offline)", ok=True)
 
 
@@ -99,31 +102,23 @@ async def api_bot_command(body: BotCommandRequest):
     operation_id="executeHubCommand"
 )
 async def api_hub_command(body: BotCommandRequest):
-    """Execute an administrative command via natural language or structured commands.
-    
-    Routes the command to the bot WebSocket, which processes it asynchronously.
+    """Legacy shim to the API-owned Assistant, never to the Discord bot.
+
+    New clients use ``/ai/assistant/{tournament_slug}``.  Keeping this narrow
+    compatibility path avoids a second Assistant execution route while making
+    the tournament scope explicit.
     """
-    cmd = body.command
-    if cmd:
-        import datetime
-        import json
-        await add_bot_feed(f"Admin command: {cmd}", "info")
-        await hub_mgr.broadcast({"type": "bot_feed_update", "log": {
-            "message": f"Admin command: {cmd}",
-            "level": "info",
-            "timestamp": datetime.datetime.now().isoformat()
-        }})
-        if hub_mgr.bot_connection:
-            try:
-                await hub_mgr.bot_connection.send_text(json.dumps({
-                    "type": "command",
-                    "command": cmd
-                }))
-                return MessageResponse(message="Command sent to bot", ok=True)
-            except Exception as e:
-                print(f"Error sending command to bot WS: {e}")
-        await add_hub_command(cmd)
-    return MessageResponse(message="Command queued (Bot offline)", ok=True)
+    import re
+    from backend.core.ai_service import AIService, AIServiceError
+
+    match = re.match(r"^\[Tournament:\s*([^\]]+)\]\s*(.+)$", body.command.strip(), re.S)
+    if not match:
+        raise HTTPException(400, "Use the tournament-scoped Organizer Assistant endpoint.")
+    try:
+        result = await AIService().answer(tournament_slug=match.group(1).strip(), question=match.group(2).strip())
+    except AIServiceError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return MessageResponse(message=result["answer"], ok=True)
 
 
 
@@ -227,6 +222,14 @@ async def api_set_dispatcher_master(body: DispatcherMasterRequest):
     if body.enabled:
         from backend.core.database import clear_settings_prefix
         await clear_settings_prefix("_dispatcher_stop_signaled_")
+    else:
+        from backend.core.database import cancel_pending_dispatcher_work
+        cancelled = await cancel_pending_dispatcher_work()
+        if cancelled:
+            await add_bot_feed(
+                f"🤖 Auto-dispatcher cancelled {cancelled} pending automatic item(s).",
+                "warn",
+            )
     await add_bot_feed(
         f"🤖 Auto-dispatcher master switch: {new_state.upper()}",
         "warn" if not body.enabled else "info"

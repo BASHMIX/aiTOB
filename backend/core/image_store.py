@@ -1,10 +1,10 @@
-"""Avatar storage abstraction: Cloudinary when configured, local-disk fallback.
+"""Avatar storage abstraction: Cloudinary in managed deployments, local only in dev.
 
 store_avatar() normalizes an uploaded image to a square broadcast-quality PNG
 (via image_utils.crop_resize_to_png_bytes) and then either:
   • uploads it to Cloudinary and returns the public https URL, or
-  • saves it under the API static dir and returns a /static-relative URL the
-    Hub dashboard and OBS overlay can render directly.
+  • saves it under the API static dir only when the explicit local development
+    mode is selected.
 
 PNG is used so transparent (RGBA) avatars are preserved without alpha-channel loss.
 Cloudinary credentials are resolved from Hub settings/connections first, then
@@ -14,7 +14,7 @@ the local fallback so the flow never breaks.
 import os
 import asyncio
 
-from backend.core.image_utils import crop_resize_to_png_bytes, save_png_bytes, AVATAR_OUTPUT_SIZE
+from backend.core.image_utils import crop_resize_to_png_bytes, save_png_bytes, AVATAR_OUTPUT_SIZE, validate_avatar_quality
 
 
 async def _resolve_cloudinary_url() -> str | None:
@@ -59,13 +59,30 @@ def _save_local(png_bytes: bytes, public_id: str) -> str:
 async def store_avatar(image_bytes: bytes, public_id: str) -> str:
     """Normalize + store an avatar. Returns a renderable URL (Cloudinary) or
     a /static-relative path (local fallback)."""
+    valid, reason = validate_avatar_quality(image_bytes)
+    if not valid:
+        raise ValueError(reason)
+    # Do not permit caller-controlled path components in a local fallback.
+    safe_public_id = "".join(char for char in str(public_id) if char.isalnum() or char in ("-", "_"))[:120]
+    if not safe_public_id:
+        raise ValueError("A safe image identifier is required.")
     png = crop_resize_to_png_bytes(image_bytes, AVATAR_OUTPUT_SIZE)
 
     cloudinary_url = await _resolve_cloudinary_url()
+    storage_mode = os.getenv(
+        "AITOB_IMAGE_STORAGE_MODE",
+        "managed" if os.getenv("AITOB_ENV", "development").lower() == "production" else "local",
+    ).lower()
+    if storage_mode not in {"managed", "local"}:
+        raise RuntimeError("AITOB_IMAGE_STORAGE_MODE must be 'managed' or 'local'.")
+    if storage_mode == "managed" and not cloudinary_url:
+        raise RuntimeError("Managed image storage is not configured.")
     if cloudinary_url:
         try:
-            return await asyncio.to_thread(_upload_to_cloudinary, png, public_id, cloudinary_url)
-        except Exception as e:
-            print(f"[IMG] Cloudinary upload failed ({e}); falling back to local save.")
+            return await asyncio.to_thread(_upload_to_cloudinary, png, safe_public_id, cloudinary_url)
+        except Exception as exc:
+            if storage_mode != "local":
+                raise RuntimeError("Managed image storage is unavailable.") from exc
+            print("[IMG] Managed image upload failed; using the explicit local development store.")
 
-    return _save_local(png, public_id)
+    return _save_local(png, safe_public_id)

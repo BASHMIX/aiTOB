@@ -51,6 +51,10 @@ def kill_port(port: int):
 
     for proc in psutil.process_iter(['pid', 'name']):
         try:
+            # PID 0 is Windows' System Idle Process. It can appear in a socket
+            # scan but is not a process we can or should terminate.
+            if proc.pid == 0:
+                continue
             # psutil 6.0 renamed Process.connections() -> Process.net_connections().
             # Try the new name first, fall back to the old one for older psutil.
             try:
@@ -140,14 +144,29 @@ signal.signal(signal.SIGTERM, signal_handler)
 
 # ── Main ──────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    # Validate the source of truth before starting any child. The API, bot and
+    # workers must fail together rather than one silently opening SQLite.
+    try:
+        from backend.core.storage import require_runtime_database
+        require_runtime_database()
+    except RuntimeError as exc:
+        cprint(RED, "SYS", str(exc))
+        sys.exit(2)
     # Lightweight flag parsing — keep the script dependency-free.
     no_frontend = "--no-frontend" in sys.argv
+    detached = "--detached" in sys.argv
+    # Normal developer runs retain the documented :8000 API. The detached
+    # launcher uses :8001 so an abandoned reload worker on :8000 cannot serve
+    # stale code behind an otherwise healthy Vite page.
+    api_port = 8001 if detached else 8000
 
     cprint(GREEN, "SYS", "Starting AI Tournament Organizer…")
     cprint(GREEN, "SYS", f"Python: {PYTHON}")
     cprint(GREEN, "SYS", f"Root:   {ROOT}")
     if no_frontend:
         cprint(YELLOW, "SYS", "Frontend (VITE) disabled via --no-frontend")
+    if detached:
+        cprint(YELLOW, "SYS", "Detached mode: services will keep running after this launcher exits")
     print()
 
     # Select services (optionally skipping the React dev server).
@@ -162,24 +181,46 @@ if __name__ == "__main__":
     threads = []
 
     for svc in services:
-        cprint(svc["color"], svc["name"], f"Starting: {' '.join(svc['cmd'][-2:])}")
+        cmd = svc["cmd"]
+        # Uvicorn's Windows reload supervisor creates a second process which
+        # can outlive a detached launcher. Background desktop runs value a
+        # stable lifecycle over hot reload; keep reload for normal `run.py`.
+        if detached and svc["name"] == "API":
+            cmd = [part for part in cmd if part != "--reload"]
+            cmd[cmd.index("--port") + 1] = str(api_port)
+        cprint(svc["color"], svc["name"], f"Starting: {' '.join(cmd[-2:])}")
         try:
-            proc = subprocess.Popen(
-                svc["cmd"],
-                cwd=svc.get("cwd", ROOT),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                env={**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
-            )
+            popen_args = {
+                "cwd": svc.get("cwd", ROOT),
+                "env": {
+                    **os.environ,
+                    "PYTHONUNBUFFERED": "1",
+                    "PYTHONIOENCODING": "utf-8",
+                    "AITOB_API_PORT": str(api_port),
+                },
+            }
+            if detached:
+                # A child writing into the launcher's PIPE dies when the temporary
+                # terminal closes. Give it its own process group and discard logs
+                # so a local desktop launch remains alive after Codex returns.
+                popen_args.update({
+                    "stdout": subprocess.DEVNULL,
+                    "stderr": subprocess.STDOUT,
+                    "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
+                })
+            else:
+                popen_args.update({"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT})
+            proc = subprocess.Popen(cmd, **popen_args)
             processes.append(proc)
             pids[svc["name"]] = proc.pid
-            t = threading.Thread(
-                target=stream_output,
-                args=(proc, svc["name"], svc["color"]),
-                daemon=True
-            )
-            t.start()
-            threads.append(t)
+            if not detached:
+                t = threading.Thread(
+                    target=stream_output,
+                    args=(proc, svc["name"], svc["color"]),
+                    daemon=True
+                )
+                t.start()
+                threads.append(t)
         except FileNotFoundError as e:
             cprint(RED, svc["name"], f"Failed to start: {e}")
 
@@ -188,11 +229,16 @@ if __name__ == "__main__":
         json.dump(pids, f)
 
     cprint(GREEN, "SYS", "All services started. PIDs saved to .pids.json")
-    cprint(GREEN, "SYS", "Admin Hub  -> http://localhost:8000/admin/hub")
-    cprint(GREEN, "SYS", "Editor     -> http://localhost:8000/admin/editor")
-    cprint(GREEN, "SYS", "OBS        -> http://localhost:8000/obs")
+    cprint(GREEN, "SYS", f"API        -> http://localhost:{api_port}")
+    cprint(GREEN, "SYS", "Admin Hub  -> http://localhost:5173/admin/hub")
+    cprint(GREEN, "SYS", "Editor     -> http://localhost:5173/admin/editor")
+    cprint(GREEN, "SYS", "OBS        -> http://localhost:5173/obs")
     cprint(YELLOW, "SYS", "Press Ctrl+C to stop all services.")
     print()
+
+    if detached:
+        cprint(GREEN, "SYS", "Detached launcher complete. Use `python stop.py` to stop services.")
+        sys.exit(0)
 
     # Wait for all processes to finish (keeps main thread alive)
     for proc in processes:

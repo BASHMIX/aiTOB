@@ -1,21 +1,56 @@
 from fastapi import APIRouter, Request, HTTPException, Depends, status
 import json
+from datetime import UTC, datetime
 from typing import Dict, Any, List, Optional
 from backend.core.database import (
-    upsert_tournament, get_tournaments, get_tournament, delete_tournament,
+    upsert_tournament, get_tournaments, get_tournament, delete_tournament, TournamentRemovalBlocked,
     update_tournament_settings, delete_tournament_active_matches, sync_active_matches,
     get_all_player_overrides, set_tournament_streams, get_tournament_streams,
-    get_stations,
+    get_stations, set_tournament_sync_status, get_bracket_snapshot,
+    get_live_sync_state_v2, get_setting, cancel_pending_dispatcher_work,
 )
 from backend.core.providers.registry import get_provider, get_provider_for_tournament
 from backend.core.contracts.tournament_types import ProviderSet, ProviderTournament
+from backend.core.provider_sync_manager import sync_manager
+from backend.core.provider_projection import tournament_provider_projection
+from backend.core.challonge_resolution import resolution_service
+from backend.core.provider_feature_flags import get_provider_feature_flags
+from backend.core.providers.challonge.client import ChallongeError, ChallongeRateLimitError
+from backend.core.database import persist_challonge_identity
 from backend.api.ws_manager import manager as hub_mgr
-from backend.api.auth import verify_hub_password
+from backend.api.auth import verify_hub_password, require_permission
+from backend.core.workspace_auth import SessionPrincipal
 from backend.api.schemas import (
-    AddTournamentRequest, PatchTournamentSettingsRequest, MessageResponse, ErrorResponse, TournamentsResponse
+    AddTournamentRequest, PatchTournamentSettingsRequest, MessageResponse, ErrorResponse, TournamentsResponse,
+    ProviderCapabilityProfileResponse,
+    ChallongeStateRepairDryRunRequest,
 )
 
 router = APIRouter(tags=["tournaments"])
+
+
+def _workspace(principal: SessionPrincipal | object) -> str | None:
+    """FastlóAPI always supplies a principal; direct legacy unit calls do not."""
+    return getattr(principal, "workspace_id", None)
+
+
+def _dispatcher_service_alive(value: str | None) -> bool:
+    """A heartbeat is advisory only; it never arms or starts the Dispatcher."""
+    if not value:
+        return False
+    try:
+        seen = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if seen.tzinfo is None:
+            seen = seen.replace(tzinfo=UTC)
+        return (datetime.now(UTC) - seen.astimezone(UTC)).total_seconds() <= 45
+    except (TypeError, ValueError):
+        return False
+
+def provider_reference(tournament: dict) -> str:
+    """Keep the durable numeric ID in DB but carry optional community scope upstream."""
+    remote_id = str(tournament.get("provider_tournament_id") or tournament.get("slug"))
+    community = tournament.get("provider_subdomain")
+    return f"{remote_id}@{community}" if tournament.get("provider_type") == "challonge" and community else remote_id
 
 
 def serialize_provider_set_for_frontend(ps: ProviderSet) -> dict:
@@ -45,6 +80,9 @@ def serialize_tournament_for_frontend(info: ProviderTournament) -> dict:
     return {
         "id": info.id,
         "name": info.name,
+        "starts_at": info.starts_at,
+        "provider_state": info.state,
+        "group_stage_enabled": info.group_stage_enabled,
         "events": [
             {
                 "id": ev.id,
@@ -55,6 +93,7 @@ def serialize_tournament_for_frontend(info: ProviderTournament) -> dict:
                         {
                             "id": entrant.id,
                             "name": entrant.name,
+                            "provider_user_id": entrant.user_id,
                             "participants": [
                                 {
                                     "user": {
@@ -81,35 +120,98 @@ def serialize_tournament_for_frontend(info: ProviderTournament) -> dict:
     response_model=TournamentsResponse,
     operation_id="listTournaments"
 )
-async def api_list_tournaments():
+async def api_list_tournaments(principal: SessionPrincipal = Depends(require_permission("workspace.read"))):
     """Return all configured tournaments tracked in FNC database."""
-    return TournamentsResponse(tournaments=await get_tournaments())
+    return TournamentsResponse(tournaments=await get_tournaments(_workspace(principal)))
+
+
+@router.get(
+    "/{slug:path}/provider-profile",
+    response_model=ProviderCapabilityProfileResponse,
+    responses={404: {"model": ErrorResponse}},
+    summary="Get saved provider identity and local capability projection",
+)
+async def api_provider_profile(slug: str, principal: SessionPrincipal = Depends(require_permission("workspace.read"))):
+    """Return local configuration only; this endpoint does not fetch a bracket."""
+    tournament = await get_tournament(slug, _workspace(principal))
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    provider = await get_provider_for_tournament(slug, _workspace(principal))
+    return tournament_provider_projection(tournament, provider)
+
+
+@router.get("/{slug:path}/dispatcher-status", summary="Get actual dispatcher status for one tournament")
+async def api_dispatcher_status(slug: str, principal: SessionPrincipal = Depends(require_permission("workspace.read"))):
+    """Return persisted intent separately from whether the bot service is alive."""
+    tournament = await get_tournament(slug, _workspace(principal))
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    master_enabled = (await get_setting("auto_dispatch_master_switch", "off") or "off").lower() == "on"
+    heartbeat = await get_setting("auto_dispatcher_last_seen", None)
+    configured = bool(tournament.get("auto_dispatch_enabled"))
+    service_alive = _dispatcher_service_alive(heartbeat)
+    if not configured:
+        state, explanation = "paused_tournament", "Disabled for this tournament. Manual Calls remain available."
+    elif not master_enabled:
+        state, explanation = "paused_global", "Paused by the global Kill Switch. Manual Calls remain available."
+    elif not service_alive:
+        state, explanation = "service_offline", "Configured, but the Dispatcher service has not reported a recent heartbeat."
+    else:
+        state, explanation = "running", "The Dispatcher can evaluate fresh, eligible local matches for this tournament."
+    return {
+        "state": state,
+        "configured": configured,
+        "global_kill_switch_enabled": master_enabled,
+        "service_alive": service_alive,
+        "last_heartbeat_at": heartbeat,
+        "explanation": explanation,
+    }
 
 
 @router.post(
     "",
-    dependencies=[Depends(verify_hub_password)],
     summary="Add a new tournament",
     status_code=status.HTTP_201_CREATED,
     response_model=MessageResponse,
     responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
     operation_id="addTournament"
 )
-async def api_add_tournament(body: AddTournamentRequest):
-    """Add a tournament by slug. Fetches info from Start.gg automatically. Requires admin password auth."""
-    slug = body.slug.strip()
-    if not slug:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Slug required")
+async def api_add_tournament(body: AddTournamentRequest, principal: SessionPrincipal = Depends(require_permission("tournament.manage"))):
+    """Add a tournament through its selected provider; persisted ownership is durable."""
+    provider_type = body.provider_type or "startgg"
+    slug = (body.identifier or body.slug or "").strip()
+    if not slug: raise HTTPException(status_code=400, detail="Tournament identifier is required")
 
-    if "start.gg/" in slug:
-        parts = slug.split("start.gg/")[-1].split("/")
-        if len(parts) >= 2:
-            slug = f"{parts[0]}/{parts[1]}"
+    if provider_type == "challonge":
+        if not get_provider_feature_flags().challonge_read_enabled:
+            raise HTTPException(status_code=409, detail="Challonge read support is not enabled for this Hub.")
+        try:
+            if not body.provider_account_id:
+                raise HTTPException(status_code=422, detail="Select a Challonge integration account before importing.")
+            resolved = await resolution_service.resolve(body.provider_account_id, slug, body.subdomain)
+            stored = await persist_challonge_identity(
+                resolved, locator_key=resolved["locator_key"], workspace_id=_workspace(principal)
+            )
+            return MessageResponse(message=f"Tournament {stored['name']} imported for identity preview only.", ok=True)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ChallongeRateLimitError as exc:
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        except ChallongeError as exc:
+            raise HTTPException(status_code=422, detail="Challonge request could not be completed.") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="Challonge identity import failed.") from exc
+    else:
+        if "start.gg/" in slug:
+            parts = slug.split("start.gg/")[-1].split("/")
+            if len(parts) >= 2:
+                slug = f"{parts[0]}/{parts[1]}"
+        provider_id, provider_subdomain = slug, None
 
-    provider = get_provider()
-    info = await provider.fetch_tournament(slug)
+    provider = get_provider(provider_type)
+    info = await provider.fetch_tournament(f"{provider_id}@{provider_subdomain}" if provider_type == "challonge" and provider_subdomain else provider_id)
     if not info:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Could not find tournament on Start.gg: {slug}")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Could not find tournament on {provider.provider_name}: {slug}")
 
     event = info.events[0] if info.events else None
     compatible_raw = serialize_tournament_for_frontend(info)
@@ -120,13 +222,20 @@ async def api_add_tournament(body: AddTournamentRequest):
         event_name=event.name if event else None,
         event_id=str(event.id) if event else None,
         game=event.game if event else None,
-        raw_data=json.dumps(compatible_raw)
+        raw_data=json.dumps(compatible_raw), provider_type=provider_type,
+        provider_tournament_id=str(provider_id), provider_subdomain=provider_subdomain,
+        provider_account_id=body.provider_account_id, workspace_id=_workspace(principal),
     )
     # Cache the start.gg stream list so station settings can map to it later.
     await set_tournament_streams(slug, [
         {"id": s.id, "name": s.name, "source": s.source, "game": s.game}
         for s in info.streams
-    ])
+    ], _workspace(principal))
+    try:
+        await sync_manager.sync_bracket(slug, reason="initial-import")
+    except Exception as exc:
+        await set_tournament_sync_status(slug, False, str(exc))
+        raise HTTPException(status_code=502, detail=f"Tournament saved but first sync failed: {exc}")
     return MessageResponse(message=f"Tournament {info.name} added successfully.", ok=True)
 
 
@@ -136,25 +245,89 @@ async def api_add_tournament(body: AddTournamentRequest):
     responses={502: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
     operation_id="fetchTournamentSets"
 )
-async def api_get_sets(slug: str):
-    """Fetch all bracket sets from provider and sync local active matches database."""
-    t = await get_tournament(slug)
+async def api_get_sets(slug: str, principal: SessionPrincipal = Depends(require_permission("workspace.read"))):
+    """Read SQLite cache; at most one stale-on-open refresh may run in background."""
+    t = await get_tournament(slug, _workspace(principal))
     if not t:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tournament not found")
+    scheduled = await sync_manager.maybe_sync_on_stale_open(slug)
+    snapshot = await get_bracket_snapshot(slug)
+    return {
+        **snapshot,
+        "last_provider_sync": t.get("provider_last_synced_at"),
+        "sync_status": t.get("provider_sync_status") or "stale",
+        "stale_refresh_scheduled": scheduled,
+        "economy_sync_on_stale_open": bool(t.get("economy_sync_on_stale_open", 1)),
+    }
 
-    provider = await get_provider_for_tournament(slug)
-    # Honor the TO's per-tournament override of the activity guard (default off).
-    ignore_guard = bool(t.get("ignore_activity_guard"))
+
+@router.post(
+    "/{slug:path}/sync/bracket",
+    summary="Explicitly synchronize a provider bracket",
+    response_model=MessageResponse,
+)
+async def api_sync_bracket(slug: str, principal: SessionPrincipal = Depends(require_permission("tournament.manage"))):
+    """One rate-aware external refresh, initiated by the T.O. from the Hub."""
+    tournament = await get_tournament(slug, _workspace(principal))
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    if tournament.get("provider_type") == "challonge" and not get_provider_feature_flags().challonge_read_enabled:
+        raise HTTPException(
+            status_code=409,
+            detail="Challonge read support is not enabled for this Hub.",
+        )
     try:
-        provider_sets = await provider.fetch_sets(slug, ignore_activity_guard=ignore_guard)
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Provider error: {e}")
-    
-    if provider_sets:
-        await sync_active_matches(slug, provider_sets)
+        await sync_manager.sync_bracket(slug, reason="manual")
+        await hub_mgr.broadcast({"type": "match_update", "_workspace_id": _workspace(principal)})
+        return MessageResponse(message="Bracket synchronized.", ok=True)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
 
-    serialized_sets = [serialize_provider_set_for_frontend(ps) for ps in provider_sets]
-    return {"sets": serialized_sets}
+
+@router.get(
+    "/{slug:path}/sync-status",
+    summary="Read local provider freshness and recovery status",
+)
+async def api_tournament_sync_status(slug: str, principal: SessionPrincipal = Depends(require_permission("workspace.read"))):
+    """SQLite-only organizer diagnostics; this endpoint never polls a provider."""
+    tournament = await get_tournament(slug, _workspace(principal))
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    state = await get_live_sync_state_v2(slug)
+    return {
+        "provider_type": tournament.get("provider_type") or "startgg",
+        "last_provider_sync": tournament.get("provider_last_synced_at"),
+        "sync_status": tournament.get("provider_sync_status") or "stale",
+        "sync_error": tournament.get("provider_sync_error"),
+        "mode": tournament.get("challonge_sync_mode") or "economy",
+        "live_state": state or {},
+        "provider_backed_actions_enabled": not bool(tournament.get("provider_sync_error")),
+        "economy_message": "Remote changes appear on Sync now or a stale-open refresh." if (state or {}).get("mode") != "live" else None,
+    }
+
+
+@router.post(
+    "/state-repair/challonge/dry-run",
+    summary="Create a non-mutating Challonge false-live repair report",
+)
+async def api_challonge_state_repair_dry_run(body: ChallongeStateRepairDryRunRequest):
+    """Consumes reviewed snapshot evidence only; never calls Challonge or applies a repair."""
+    from backend.core.challonge_state_repair import dry_run
+    try:
+        report = await dry_run(
+            snapshot_id=body.snapshot_id,
+            snapshot_observed_at=body.snapshot_observed_at,
+            provider_states=body.provider_states,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        "report_id": report.report_id, "snapshot_id": report.snapshot_id,
+        "snapshot_observed_at": report.snapshot_observed_at, "fingerprint": report.fingerprint,
+        "rows": report.rows,
+        "apply_available": False,
+        "message": "Dry run only. Review the exact rows and approve a later apply explicitly.",
+    }
 
 
 @router.delete(
@@ -165,39 +338,51 @@ async def api_get_sets(slug: str):
     responses={401: {"model": ErrorResponse}},
     operation_id="resetTournamentHub"
 )
-async def api_reset_tournament_hub(slug: str):
+async def api_reset_tournament_hub(slug: str, principal: SessionPrincipal = Depends(require_permission("tournament.manage"))):
     """Delete all active matches for the given tournament slug from local tracking. Requires admin password auth."""
+    if not await get_tournament(slug, _workspace(principal)):
+        raise HTTPException(status_code=404, detail="Tournament not found")
     await delete_tournament_active_matches(slug)
-    await hub_mgr.broadcast({"type": "match_update"})
+    await hub_mgr.broadcast({"type": "match_update", "_workspace_id": _workspace(principal)})
     return MessageResponse(message="Hub matches reset", ok=True)
 
 
 @router.delete(
     "/{slug:path}",
-    dependencies=[Depends(verify_hub_password)],
     summary="Delete a tournament",
     response_model=MessageResponse,
     responses={401: {"model": ErrorResponse}},
     operation_id="deleteTournament"
 )
-async def api_delete_tournament(slug: str):
+async def api_delete_tournament(slug: str, principal: SessionPrincipal = Depends(require_permission("tournament.manage"))):
     """Remove tournament configuration and associated data from database. Requires admin password auth."""
-    await delete_tournament(slug)
+    try:
+        if not await get_tournament(slug, _workspace(principal)):
+            raise HTTPException(status_code=404, detail="Tournament not found")
+        await delete_tournament(slug, _workspace(principal))
+    except TournamentRemovalBlocked as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    await hub_mgr.broadcast({"type": "match_update", "_workspace_id": _workspace(principal)})
     return MessageResponse(message="Deleted", ok=True)
 
 
 @router.post(
     "/{slug:path}/refresh",
-    dependencies=[Depends(verify_hub_password)],
     summary="Refresh tournament data from Start.gg",
     response_model=MessageResponse,
     responses={401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
     operation_id="refreshTournament"
 )
-async def api_refresh_tournament(slug: str):
+async def api_refresh_tournament(slug: str, principal: SessionPrincipal = Depends(require_permission("tournament.manage"))):
     """Re-fetch tournament metadata from start.gg and update local settings. Requires admin password auth."""
+    t = await get_tournament(slug, _workspace(principal))
+    if t and t.get("provider_type") == "challonge":
+        raise HTTPException(
+            status_code=409,
+            detail="Challonge identity imports do not refresh bracket or metadata in Phase 4.",
+        )
     provider = await get_provider_for_tournament(slug)
-    info = await provider.fetch_tournament(slug)
+    info = await provider.fetch_tournament(provider_reference(t or {"slug": slug}))
     if not info:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Could not find tournament: {slug}")
 
@@ -210,13 +395,32 @@ async def api_refresh_tournament(slug: str):
         event_name=event.name if event else None,
         event_id=str(event.id) if event else None,
         game=event.game if event else None,
-        raw_data=json.dumps(compatible_raw)
+        raw_data=json.dumps(compatible_raw), provider_type=(t or {}).get("provider_type") or "startgg",
+        provider_tournament_id=(t or {}).get("provider_tournament_id") or slug,
+        provider_subdomain=(t or {}).get("provider_subdomain"),
+        provider_account_id=(t or {}).get("provider_account_id"),
+        workspace_id=_workspace(principal),
     )
     await set_tournament_streams(slug, [
         {"id": s.id, "name": s.name, "source": s.source, "game": s.game}
         for s in info.streams
-    ])
+    ], _workspace(principal))
     return MessageResponse(message="Tournament data refreshed.", ok=True)
+
+
+@router.post(
+    "/{slug:path}/start",
+    summary="Start a Challonge tournament",
+    response_model=MessageResponse,
+)
+async def api_start_tournament(slug: str, principal: SessionPrincipal = Depends(require_permission("tournament.manage"))):
+    """Explicit organizer action. No automatic remote tournament state changes."""
+    tournament = await get_tournament(slug, _workspace(principal))
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    if tournament.get("provider_type") != "challonge":
+        raise HTTPException(status_code=400, detail="Starting from Hub is currently available for Challonge tournaments only.")
+    raise HTTPException(status_code=409, detail="Challonge lifecycle actions are not enabled in Phase 4.")
 
 
 @router.get(
@@ -225,14 +429,14 @@ async def api_refresh_tournament(slug: str):
     responses={404: {"model": ErrorResponse}},
     operation_id="listTournamentEvents"
 )
-async def api_list_tournament_events(slug: str):
+async def api_list_tournament_events(slug: str, principal: SessionPrincipal = Depends(require_permission("workspace.read"))):
     """Return the events under a tournament so the hub can populate the Event
     dropdown. Each event is a separate game/bracket (e.g. Tekken 8, SF6).
 
     The frontend uses this to scope attendees/matches by event and avoid
     cross-game contamination. Auto-select when there is exactly one event.
     """
-    t = await get_tournament(slug)
+    t = await get_tournament(slug, _workspace(principal))
     if not t:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tournament not found")
     try:
@@ -257,16 +461,16 @@ async def api_list_tournament_events(slug: str):
     responses={404: {"model": ErrorResponse}},
     operation_id="listTournamentStreams"
 )
-async def api_list_tournament_streams(slug: str):
+async def api_list_tournament_streams(slug: str, principal: SessionPrincipal = Depends(require_permission("workspace.read"))):
     """Return the cached list of start.gg streams for this tournament.
 
     Used by station settings to populate the stream-mapping dropdown.
     Refresh the tournament if you've added new streams in start.gg admin.
     """
-    t = await get_tournament(slug)
+    t = await get_tournament(slug, _workspace(principal))
     if not t:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tournament not found")
-    return {"streams": await get_tournament_streams(slug)}
+    return {"streams": await get_tournament_streams(slug, _workspace(principal))}
 
 
 @router.get(
@@ -275,7 +479,7 @@ async def api_list_tournament_streams(slug: str):
     responses={404: {"model": ErrorResponse}, 502: {"model": ErrorResponse}},
     operation_id="verifyTournamentStream",
 )
-async def api_verify_tournament_stream(slug: str):
+async def api_verify_tournament_stream(slug: str, principal: SessionPrincipal = Depends(require_permission("tournament.manage"))):
     """Live-check that each local stream station maps to a stream that still
     exists on start.gg, so the TO learns *before* a live wave whether the public
     📺 icon will actually render.
@@ -294,7 +498,7 @@ async def api_verify_tournament_stream(slug: str):
     block streaming. Local stream stations carry OBS overlays, lobby creds, and
     routing that work WITHOUT a start.gg stream — only the public 📺 is affected.
     """
-    t = await get_tournament(slug)
+    t = await get_tournament(slug, _workspace(principal))
     if not t:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tournament not found")
 
@@ -307,14 +511,14 @@ async def api_verify_tournament_stream(slug: str):
 
     live_streams = [{"id": str(s.id), "name": s.name, "source": s.source, "game": s.game} for s in live]
     # Refresh the cache so the station-mapping dropdown sees the same fresh list.
-    await set_tournament_streams(slug, live_streams)
+    await set_tournament_streams(slug, live_streams, _workspace(principal))
 
     live_by_id = {s["id"]: s for s in live_streams}
     # Advisory name-fallback only (names drift, IDs don't) — never auto-binds.
     live_by_name = {(s["name"] or "").strip().lower(): s for s in live_streams}
 
     stream_stations = [
-        s for s in await get_stations()
+        s for s in await get_stations(_workspace(principal))
         if s.get("is_stream_station") and not s.get("hidden")
     ]
 
@@ -376,13 +580,12 @@ async def api_verify_tournament_stream(slug: str):
 
 @router.patch(
     "/{slug:path}/settings",
-    dependencies=[Depends(verify_hub_password)],
     summary="Update tournament settings",
     response_model=MessageResponse,
     responses={401: {"model": ErrorResponse}},
     operation_id="updateTournamentSettings"
 )
-async def api_update_tournament_settings(slug: str, body: PatchTournamentSettingsRequest):
+async def api_update_tournament_settings(slug: str, body: PatchTournamentSettingsRequest, principal: SessionPrincipal = Depends(require_permission("tournament.manage"))):
     """Update auto-checkin timers and AI bot coordination limits. Requires admin password auth."""
     # exclude_unset (not exclude_none): persist exactly the fields the client sent,
     # and nothing else. Zeros/false already round-trip under either flag, but
@@ -391,7 +594,13 @@ async def api_update_tournament_settings(slug: str, body: PatchTournamentSetting
     # future "send null to clear" can't be quietly swallowed. Unsent fields are
     # left untouched.
     d = body.model_dump(exclude_unset=True)
-    await update_tournament_settings(slug, **d)
+    if not await get_tournament(slug, _workspace(principal)):
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    await update_tournament_settings(slug, _workspace(principal), **d)
+    if d.get("auto_dispatch_enabled") is False:
+        await cancel_pending_dispatcher_work(tournament_slug=slug)
+    if "challonge_sync_mode" in d:
+        await sync_manager.configure_live_schedule(slug, workspace_id=_workspace(principal))
     return MessageResponse(message="Updated", ok=True)
 
 

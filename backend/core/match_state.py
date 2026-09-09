@@ -4,6 +4,7 @@ import datetime
 from backend.core.providers.registry import get_provider_for_tournament
 from backend.core.database import get_active_match, upsert_active_match, update_active_match, add_bot_feed
 from backend.api.ws_manager import manager as hub_mgr
+from backend.core.provider_feature_flags import get_provider_feature_flags
 
 import json
 import os
@@ -103,7 +104,7 @@ async def _realize_in_progress_overlays(match: dict, update_kwargs: dict) -> Non
             continue
         if name == "on_stream" and not match.get("station_id"):
             from backend.core.database import get_available_stream_station
-            station = await get_available_stream_station(match.get("event_id") or "")
+            station = await get_available_stream_station(match.get("event_id") or "", match.get("workspace_id"))
             if station:
                 update_kwargs["station_id"] = station["id"]
                 await add_bot_feed(
@@ -120,7 +121,7 @@ async def _realize_in_progress_overlays(match: dict, update_kwargs: dict) -> Non
 def generate_lobby_password() -> str:
     return str(random.randint(1000, 9999))
 
-async def call_match_core(set_id: str) -> dict:
+async def call_match_core(set_id: str, *, source: str = "manual") -> dict:
     """The single 'Call Match' path shared by the Hub button AND the AI agent.
 
     Moves the set not_started → called THROUGH the state machine (validated by
@@ -134,10 +135,20 @@ async def call_match_core(set_id: str) -> dict:
     match = await get_active_match(set_id)
     if not match:
         return {"error": "Match not found"}
+    from backend.core.database import get_tournament
+    tournament = await get_tournament(match.get("tournament_slug") or "", match.get("workspace_id"))
+    if tournament and tournament.get("provider_type") == "challonge" and get_provider_feature_flags().challonge_local_workflow_enabled:
+        from backend.core.match_commands import MatchCommandError, MatchCommandService
+        try:
+            result = await MatchCommandService().call(set_id)
+        except MatchCommandError as exc:
+            return {"error": str(exc)}
+        local = result["match"]
+        return {"ok": True, "set_id": set_id, "p1_name": local.get("p1_name"), "p2_name": local.get("p2_name"), "outcome": "local_only"}
     result = await transition_match(set_id, "called")
     if result.get("error"):
         return result
-    await add_hub_command(f"call_match {set_id}")
+    await add_hub_command(f"call_match {set_id}", source=source, workspace_id=match.get("workspace_id"))
     await _feed(f"Players called for match: {match.get('p1_name')} vs {match.get('p2_name')}")
     return {
         "ok": True,
@@ -150,6 +161,23 @@ async def transition_match(set_id: str, to_status: str, **kwargs) -> dict:
     match = await get_active_match(set_id)
     if not match:
         return {"error": "Match not found"}
+
+    # Challonge has no equivalent lifecycle endpoint.  When Phase 7A is
+    # explicitly enabled, route only its local lifecycle through the durable
+    # workflow/outbox service. Start.gg (and all flags-off paths) retain the
+    # exact legacy transition behavior below.
+    from backend.core.database import get_tournament
+    tournament = await get_tournament(match.get("tournament_slug") or "", match.get("workspace_id"))
+    if tournament and tournament.get("provider_type") == "challonge" and get_provider_feature_flags().challonge_local_workflow_enabled:
+        from backend.core.match_commands import MatchCommandError, MatchCommandService
+        service = MatchCommandService()
+        try:
+            if to_status == "called":
+                return {"ok": True, "status": "called", **await service.call(set_id)}
+            if to_status == "in_progress":
+                return {"ok": True, "status": "in_progress", **await service.start(set_id)}
+        except MatchCommandError as exc:
+            return {"error": str(exc)}
 
     current = match.get("status", "not_started")
     if not validate_transition(current, to_status):
@@ -167,13 +195,13 @@ async def transition_match(set_id: str, to_status: str, **kwargs) -> dict:
         update_kwargs["started_at"] = datetime.datetime.utcnow().isoformat()
         if match.get("bot_enabled", True):
             from backend.core.database import add_hub_command
-            await add_hub_command(f"dm_score_request {set_id}")
+            await add_hub_command(f"dm_score_request {set_id}", workspace_id=match.get("workspace_id"))
         # Push state to provider so start.gg viewers see "currently playing"
         # instead of staying in CALLED until the score report lands. Best-effort
         # — failures here are non-critical (the score report will mark in_progress
         # again as a pre-step) but logged so divergence is visible.
         try:
-            provider = await get_provider_for_tournament(match.get("tournament_slug") or "")
+            provider = await get_provider_for_tournament(match.get("tournament_slug") or "", match.get("workspace_id"))
             result = await provider.mark_in_progress(set_id)
             if not result.success:
                 await add_bot_feed(
@@ -201,14 +229,20 @@ async def transition_match(set_id: str, to_status: str, **kwargs) -> dict:
         update_kwargs["dq_player"] = None
         update_kwargs["lobby_password"] = None
 
-    await upsert_active_match(set_id, **update_kwargs)
-    await hub_mgr.broadcast({"type": "match_update"})
+    await upsert_active_match(set_id, workspace_id=match.get("workspace_id"), **update_kwargs)
+    await hub_mgr.broadcast({"type": "match_update", "_workspace_id": match.get("workspace_id")})
     return {"ok": True, "status": to_status}
 
 async def auto_dq_match(set_id: str) -> dict:
     match = await get_active_match(set_id)
     if not match:
         return {"error": "Match not found"}
+
+    from backend.core.database import get_tournament
+    tournament = await get_tournament(match.get("tournament_slug") or "", match.get("workspace_id"))
+    if tournament and tournament.get("provider_type") == "challonge":
+        # DQ is deliberately unavailable until the later sandbox policy gate.
+        return {"ok": False, "skipped": "challonge_dq_unavailable"}
 
     # Hard guard: if a TO/player flipped the disarm flag (partial-reach matches,
     # off-Discord coordination) we must NOT issue a DQ regardless of who pressed Ready.
@@ -218,7 +252,7 @@ async def auto_dq_match(set_id: str) -> dict:
         )
         return {"ok": False, "skipped": "disarmed"}
 
-    provider = await get_provider_for_tournament(match.get("tournament_slug") or "")
+    provider = await get_provider_for_tournament(match.get("tournament_slug") or "", match.get("workspace_id"))
 
     # Race guard: if start.gg already shows COMPLETED (players self-reported on the
     # web UI while we were waiting), do NOT call mark_dq — it would overwrite a real
@@ -235,7 +269,7 @@ async def auto_dq_match(set_id: str) -> dict:
             "info"
         )
         await update_active_match(set_id, status="complete", dq_player=None, station_id=None)
-        await hub_mgr.broadcast({"type": "match_update"})
+        await hub_mgr.broadcast({"type": "match_update", "_workspace_id": match.get("workspace_id")})
         return {"ok": True, "synced_from_provider": True}
 
     p1_ready = match.get("p1_ready")
@@ -285,7 +319,7 @@ async def auto_dq_match(set_id: str) -> dict:
             return {"error": True, "dq_player": dq_eid, "message": str(e)}
 
     await update_active_match(set_id, status="complete", dq_player=dq_eid, station_id=None)
-    await hub_mgr.broadcast({"type": "match_update"})
+    await hub_mgr.broadcast({"type": "match_update", "_workspace_id": match.get("workspace_id")})
     return {"ok": True, "dq_player": dq_eid}
 
 async def start_call_timer(set_id: str, timeout_seconds: int = 600):

@@ -34,6 +34,60 @@ query TournamentInfo($slug: String!) {
 }
 """
 
+# Retained legacy-client queries. They remain distinct from the adapter queries
+# above because their selected fields are part of old API behavior.
+LEGACY_TOURNAMENT_INFO = """
+query TournamentInfo($slug: String!) {
+  tournament(slug: $slug) {
+    id
+    name
+    events {
+      id
+      name
+      videogame { name }
+      entrants(query: {page: 1, perPage: 250}) {
+        nodes {
+          id
+          name
+          participants { user { images { url type } } }
+        }
+      }
+    }
+  }
+}
+"""
+
+LEGACY_TOURNAMENT_SETS = """
+query TournamentSets($slug: String!) {
+  tournament(slug: $slug) {
+    events {
+      sets(page: 1, perPage: 500) {
+        nodes {
+          id
+          state
+          fullRoundText
+          identifier
+          phaseGroup { displayIdentifier }
+          slots {
+            entrant {
+              id
+              name
+              participants { user { images { url type } } }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+LEGACY_REPORT_SET_SCORE = """
+mutation ReportBracketSet($setId: ID!, $winnerId: ID!, $gameData: [BracketSetGameDataInput]) {
+  reportBracketSet(setId: $setId, winnerId: $winnerId, gameData: $gameData) { id state }
+}
+"""
+
 # Standalone stream-only query — cheaper to call on refresh than full TOURNAMENT_INFO.
 TOURNAMENT_STREAMS = """
 query TournamentStreams($slug: String!) {
@@ -174,7 +228,7 @@ mutation ReportBracketSet($setId: ID!, $winnerId: ID!, $gameData: [BracketSetGam
 
 REPORT_WINNER_ONLY = """
 mutation SimpleReport($setId: ID!, $winnerId: ID!) {
-  reportBracketSet(setId: $setId, winnerId: $winnerId) { id state winnerId }
+  reportBracketSet(setId: $setId, winnerId: $winnerId) { id state }
 }
 """
 
@@ -229,5 +283,17 @@ query EntrantConnectedAccounts($slug: String!) {
       }
     }
   }
+}
+"""
+
+CURRENT_USER = """
+query {
+  currentUser { id name }
+}
+"""
+
+PROBE_WRITE_SCOPE = """
+mutation ProbeWriteScope {
+  markSetInProgress(setId: "9999999999") { id }
 }
 """

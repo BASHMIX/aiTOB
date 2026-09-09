@@ -1,17 +1,26 @@
 import { Navigate, useLocation } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import axios from 'axios';
 import { useHubStore } from '@/store/useHubStore';
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
-  const hubPassword = useHubStore(state => state.hubPassword);
+  const session = useHubStore(state => state.session);
+  const setSession = useHubStore(state => state.setSession);
+  const logout = useHubStore(state => state.logout);
   const location = useLocation();
+  const [checked, setChecked] = useState(false);
 
-  // If no password is set, or it's 'admin' but you want to force a first-time login
-  // Actually, let's check if it's truthy. If the default is 'admin', it will pass.
-  // BUT we want to ensure the user at least sees the login once if they aren't authenticated.
-  
-  // For now, let's keep it simple: if hubPassword is set, they are "authed".
-  // The LoginPage will ensure they entered the RIGHT password.
-  if (!hubPassword) {
+  useEffect(() => {
+    let active = true;
+    axios.get('/api/session')
+      .then((response) => { if (active) setSession(response.data); })
+      .catch(() => { if (active) logout(); })
+      .finally(() => { if (active) setChecked(true); });
+    return () => { active = false; };
+  }, [setSession, logout]);
+
+  if (!checked) return <div className="min-h-screen bg-appDark" aria-label="Checking session" />;
+  if (!session) {
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
 

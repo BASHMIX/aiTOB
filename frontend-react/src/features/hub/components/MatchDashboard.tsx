@@ -3,7 +3,6 @@ import { useHubStore } from '@/store/useHubStore';
 import { useHubSocket } from '@/hooks/useHubSocket';
 import axios from 'axios';
 import { MatchesList } from './MatchesList';
-import { MatchSettingsModal } from './MatchSettingsModal';
 import type { MatchData, MatchStatus } from './MatchCard';
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -61,11 +60,15 @@ export function MatchDashboard() {
   const [sets, setSets] = useState<any[]>([]);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
 
-  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
-
   // ── Filter state ──
   const [hideTBD, setHideTBD] = useState(true);
   const [selectedPhaseGroup, setSelectedPhaseGroup] = useState<string>('__all__');
+  const [selectedBracketRound, setSelectedBracketRound] = useState<string>('__all__');
+  const currentTournament = useMemo(
+    () => tournaments.find((tournament) => tournament.slug === currentSlug),
+    [tournaments, currentSlug],
+  );
+  const isChallonge = currentTournament?.provider_type === 'challonge';
 
   const showToast = (msg: unknown, ok = true) => {
     const text = typeof msg === 'string' ? msg : JSON.stringify(msg);
@@ -87,11 +90,15 @@ export function MatchDashboard() {
 
   const loadSets = useCallback(async () => {
     if (!currentSlug) { setSets([]); return; }
+    // Challonge's SQLite projection is already represented by active matches.
+    // Fetching the legacy set endpoint here adds no value and revives Start.gg
+    // terminology/filters in a one-bracket tournament.
+    if (isChallonge) { setSets([]); return; }
     try {
       const res = await axios.get(`/api/tournaments/${currentSlug}/sets`);
       setSets(res.data.sets ?? []);
     } catch (e) { console.error('load sets', e); }
-  }, [currentSlug]);
+  }, [currentSlug, isChallonge]);
 
   const loadPlanned = useCallback(async () => {
     if (!currentSlug) { setPlannedStreamIds([]); return; }
@@ -108,6 +115,9 @@ export function MatchDashboard() {
   // when the TO edits start.gg admin, and the 75/min budget is shared with sync.
   const verifyStream = useCallback(async () => {
     if (!currentSlug) { setStreamGate(null); return; }
+    // A Challonge station is Hub-owned. It has no public Start.gg stream queue
+    // and therefore must never trigger this Start.gg preflight request.
+    if (isChallonge) { setStreamGate(null); return; }
     try {
       const res = await axios.get(`/api/tournaments/${currentSlug}/verify-stream`);
       setStreamGate(res.data);
@@ -115,7 +125,7 @@ export function MatchDashboard() {
       console.error('verify stream', e);
       setStreamGate(null); // unknown → don't show a (possibly wrong) warning
     }
-  }, [currentSlug, setStreamGate]);
+  }, [currentSlug, isChallonge, setStreamGate]);
 
   useEffect(() => { verifyStream(); }, [verifyStream]);
 
@@ -150,6 +160,11 @@ export function MatchDashboard() {
   const mappedMatches: MatchData[] = useMemo(() => {
     const result: MatchData[] = [];
     const localMatchIds = new Set((matches ?? []).map(m => safe(m?.set_id)));
+    const unavailableChallongeActions = isChallonge ? {
+      report_score: { kind: 'unavailable' as const, enabled: false, reason: 'Result reporting is not enabled for this Challonge workflow.' },
+      dq: { kind: 'unavailable' as const, enabled: false, reason: 'Challonge DQ is unavailable.' },
+      reset: { kind: 'unavailable' as const, enabled: false, reason: 'Challonge reset/reopen is not supported.' },
+    } : null;
 
   // Local matches first
   (matches ?? []).forEach(m => {
@@ -164,7 +179,11 @@ export function MatchDashboard() {
       id: safe(m.match_number) || shortId(m.set_id),
       pool: safe(m.phase_group),
       round: safe(m.round_name),
-      status: mapLocalState(m.status),
+      // A verified single-player Challonge forfeit is terminal like a normal
+      // result, but it must remain visibly distinct for the organizer and
+      // spectators reading the Hub.  Do not infer this from score values;
+      // only the persisted, verified result kind is authoritative.
+      status: m.result_kind === 'dq' ? 'dq' : mapLocalState(m.status),
       isLocal: true,
       isStreamMatch: plannedStreamIds.includes(m.set_id) || !!m.is_stream_match,
       eventId: safe(m.event_id),
@@ -172,6 +191,13 @@ export function MatchDashboard() {
       startedAt: m.started_at,
       calledAt: m.called_at,
       autoDqDisarmed: !!m.auto_dq_disarmed,
+      stateAxes: m.state_axes,
+      discordWorkflow: m.discord,
+      eligibility: m.eligibility ?? undefined,
+      // Old server processes can briefly return a Challonge row without the
+      // additive action projection during a rolling reload. Fail closed rather
+      // than surfacing legacy Start.gg mutation buttons in that interval.
+      providerActions: m.actions ?? unavailableChallongeActions,
       players: [
         {
           name: safe(m.p1_name) || 'Unknown',
@@ -190,6 +216,7 @@ export function MatchDashboard() {
       ],
       raw: m,
       stationId: m.station_id,
+      providerType: m.provider_type ?? (isChallonge ? 'challonge' : undefined),
     });
   });
 
@@ -217,11 +244,20 @@ export function MatchDashboard() {
         { name: safe(s.p2) || 'TBD', avatar: s.p2_avatar, score: undefined, isTBD: isTBD(safe(s.p2)) }
       ],
       raw: s,
+      providerType: 'startgg',
     });
   });
 
     return result;
-  }, [matches, sets, currentSlug, currentEventId, plannedStreamIds]);
+  }, [matches, sets, currentSlug, currentEventId, plannedStreamIds, isChallonge]);
+
+  // Challonge sends a signed bracket round: positive values for winners and
+  // negative values for losers. Keep the provider's exact display string and
+  // insertion order instead of parsing or re-numbering it; this also supports
+  // named rounds such as "Semi Finals" and future bracket formats.
+  const challongeRounds = useMemo(() => Array.from(new Set(
+    mappedMatches.map((match) => match.round).filter(Boolean),
+  )), [mappedMatches]);
 
   // ── Action handlers ────────────────────────────────────────────────
   const handleAction = async (action: string, row: any, data?: any) => {
@@ -252,7 +288,12 @@ export function MatchDashboard() {
       else if (action === 'sendScore') {
         const res = await axios.post(`/api/active-matches/${setId}/send`);
         if (res.data.error) showToast(res.data.message, false);
-        else { showToast('Score reported to Start.gg ✓'); reload(); }
+        else {
+          showToast(row.providerActions?.report_score?.kind === 'remote'
+            ? 'Result submitted — awaiting provider verification'
+            : 'Score reported to Start.gg ✓');
+          reload();
+        }
       }
       else if (action === 'callMatch') {
         if (!setId) { showToast('Cannot call match: missing set ID', false); return; }
@@ -279,7 +320,7 @@ export function MatchDashboard() {
         reload();
       }
       else if (action === 'resetMatch') {
-        if (!confirm(`Reset match on Start.gg and locally?`)) return;
+        if (!confirm('Reset this match with its provider and locally?')) return;
         const res = await axios.post(`/api/active-matches/${setId}/reset`);
         showToast(res.data.message || 'Reset OK');
         reload();
@@ -369,8 +410,11 @@ export function MatchDashboard() {
 
   // ── Main Render ───────────────────────────────────────────────────────
   const filtered = hideTBD ? mappedMatches.filter(m => m.players.every(p => !p.isTBD)) : mappedMatches;
-  const finalFiltered = selectedPhaseGroup !== '__all__' ? filtered.filter(r => (r.pool || '') === selectedPhaseGroup) : filtered;
+  const finalFiltered = isChallonge
+    ? (selectedBracketRound !== '__all__' ? filtered.filter((row) => row.round === selectedBracketRound) : filtered)
+    : (selectedPhaseGroup !== '__all__' ? filtered.filter((row) => (row.pool || '') === selectedPhaseGroup) : filtered);
   const sorted = sortTBDLast(finalFiltered);
+  const allHiddenByTBD = hideTBD && mappedMatches.length > 0 && filtered.length === 0;
 
   return (
     <div className="flex flex-col gap-4 relative p-1 flex-1 h-full overflow-hidden">
@@ -384,7 +428,7 @@ export function MatchDashboard() {
 
       {/* ── Stream preflight banner ── warn-but-allow: streaming still works
            locally; only the public start.gg 📺 won't render until linked. */}
-      {streamGate && !streamGate.ok && streamGate.warning && (
+      {!isChallonge && streamGate && !streamGate.ok && streamGate.warning && (
         <div className="flex items-center gap-2.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
           <span className="text-base leading-none">📺</span>
           <span className="font-semibold flex-1">{streamGate.warning}</span>
@@ -413,8 +457,8 @@ export function MatchDashboard() {
 
         <div className="w-px h-5 bg-white/10" />
 
-        {/* Event Filter — scopes the match view to one game in a multi-event tournament */}
-        {events.length > 0 && (
+        {/* Event Filter — scopes a Start.gg multi-game tournament. */}
+        {!isChallonge && events.length > 0 && (
           <>
             <div className="flex items-center gap-2">
               <span className="text-textDim">Event:</span>
@@ -433,33 +477,50 @@ export function MatchDashboard() {
           </>
         )}
 
-        {/* PhaseGroup Filter */}
-        <div className="flex items-center gap-2">
-          <span className="text-textDim">Pool:</span>
-          <select
-            value={selectedPhaseGroup}
-            onChange={e => setSelectedPhaseGroup(e.target.value)}
-            className="bg-transparent border border-white/10 rounded px-2 py-1 text-xs text-textLight focus:outline-none focus:border-accentYellow/50"
-          >
-            <option value="__all__" className="text-black">All Pools</option>
-            {phaseGroups.map(pg => (
-              <option key={pg} value={pg} className="text-black">{pg}</option>
-            ))}
-          </select>
-        </div>
+        {isChallonge ? (
+          <div className="flex items-center gap-2">
+            <span className="text-textDim">Bracket round:</span>
+            <select
+              value={selectedBracketRound}
+              onChange={e => setSelectedBracketRound(e.target.value)}
+              className="bg-transparent border border-white/10 rounded px-2 py-1 text-xs text-textLight focus:outline-none focus:border-accentYellow/50"
+            >
+              <option value="__all__" className="text-black">All bracket rounds</option>
+              {challongeRounds.map((round) => (
+                <option key={round} value={round} className="text-black">{round}</option>
+              ))}
+            </select>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <span className="text-textDim">Pool:</span>
+            <select
+              value={selectedPhaseGroup}
+              onChange={e => setSelectedPhaseGroup(e.target.value)}
+              className="bg-transparent border border-white/10 rounded px-2 py-1 text-xs text-textLight focus:outline-none focus:border-accentYellow/50"
+            >
+              <option value="__all__" className="text-black">All Pools</option>
+              {phaseGroups.map(pg => (
+                <option key={pg} value={pg} className="text-black">{pg}</option>
+              ))}
+            </select>
+          </div>
+        )}
 
-        {/* Match Settings (Gear Icon) */}
-        <button
-          onClick={() => setSettingsModalOpen(true)}
-          title="Match Settings"
-          className="ml-auto flex items-center justify-center p-1.5 rounded-md hover:bg-white/10 text-textDim hover:text-white transition-colors"
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
-            <circle cx="12" cy="12" r="3"></circle>
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-          </svg>
-        </button>
       </div>
+
+      {allHiddenByTBD && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+          <span>{mappedMatches.length} matches are hidden because both players are still TBD.</span>
+          <button
+            type="button"
+            onClick={() => setHideTBD(false)}
+            className="shrink-0 rounded border border-amber-300/50 px-2 py-1 font-bold text-amber-100 hover:bg-amber-300/15"
+          >
+            Show TBD matches
+          </button>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto custom-scrollbar pr-1">
         <MatchesList
@@ -473,25 +534,6 @@ export function MatchDashboard() {
         />
       </div>
 
-      {settingsModalOpen && (
-        <MatchSettingsModal
-          currentSlug={currentSlug || ''}
-          initialAutoDqEnabled={autoDqEnabled}
-          initialDqTimerSeconds={dqTimerSeconds}
-          initialBotManageLimit={actualTourney?.bot_manage_limit}
-          initialBotManageFinish={actualTourney?.bot_manage_finish}
-          initialAutoDispatchEnabled={!!(actualTourney as any)?.auto_dispatch_enabled}
-          initialAutoDispatchConcurrency={Number((actualTourney as any)?.auto_dispatch_concurrency ?? 1)}
-          initialAutoDispatchStopAt={Number((actualTourney as any)?.auto_dispatch_stop_at ?? 8)}
-          initialIgnoreActivityGuard={!!(actualTourney as any)?.ignore_activity_guard}
-          initialCheckInSource={(actualTourney as any)?.check_in_source || 'discord'}
-          phaseGroups={phaseGroups}
-          onClose={() => setSettingsModalOpen(false)}
-          onSave={() => {
-            axios.get('/api/tournaments').then(r => useHubStore.getState().setTournaments(r.data.tournaments || []));
-          }}
-        />
-      )}
     </div>
   );
 }

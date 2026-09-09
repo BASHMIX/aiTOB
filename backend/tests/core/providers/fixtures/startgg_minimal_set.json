@@ -1,0 +1,9 @@
+{
+  "id": "fixture-set-1",
+  "state": "READY",
+  "identifier": "A1",
+  "slots": [
+    {"entrant": {"id": "entrant-1", "name": "Player One"}},
+    {"entrant": {"id": "entrant-2", "name": "Player Two"}}
+  ]
+}

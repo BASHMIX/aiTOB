@@ -3,7 +3,7 @@ import os
 import re
 from typing import List, Dict, Any, Optional
 from backend.bot.agent.schemas import MatchResultExtraction
-from backend.bot.agent.graph import evaluate_chat, MatchState
+from backend.bot.agent.graph import AI_REFEREE_RESULT_INFERENCE_ENABLED, evaluate_chat, MatchState
 
 # ── 105 EVALUATION SCENARIOS DATASET ───────────────────────────────────────
 SCENARIOS: List[Dict[str, Any]] = [
@@ -257,6 +257,8 @@ def rule_based_extract(chat: List[str]) -> MatchResultExtraction:
 @pytest.mark.asyncio
 async def test_referee_accuracy_benchmark():
     """AI Referee Accuracy Evaluation Harness validating >95% accuracy over 100+ scenarios."""
+    if not AI_REFEREE_RESULT_INFERENCE_ENABLED:
+        pytest.skip("Legacy AI Referee result inference is disabled pending Result Claims.")
     has_api_key = bool(os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY"))
     
     correct_count = 0

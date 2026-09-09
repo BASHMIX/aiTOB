@@ -1,15 +1,18 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
-import { useHubStore } from '@/store/useHubStore';
+import { IntegrationAccounts } from './IntegrationAccounts';
 
-export function GeneralSettings() {
+type GeneralSettingsSection = 'all' | 'connections' | 'bot' | 'system';
+
+export function GeneralSettings({ section = 'all', embedded = false }: { section?: GeneralSettingsSection; embedded?: boolean }) {
   const [env, setEnv] = useState<any>({});
   const [settings, setSettings] = useState<any>({});
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null);
+  const [challongeOAuth, setChallongeOAuth] = useState<{ client_configured: boolean; redirect_configured: boolean; connected: boolean; callback_url: string | null } | null>(null);
+  const [oauthError, setOauthError] = useState<string | null>(null);
+  const [oauthBusy, setOauthBusy] = useState(false);
 
-  const hubPassword = useHubStore(state => state.hubPassword);
-  const setHubPassword = useHubStore(state => state.setHubPassword);
 
   useEffect(() => {
     loadData();
@@ -19,13 +22,46 @@ export function GeneralSettings() {
     try {
       const [envRes, settingsRes] = await Promise.all([
         axios.get('/api/env'),
-        axios.get('/api/settings')
+        axios.get('/api/settings'),
       ]);
       setEnv(envRes.data);
       setSettings(settingsRes.data.settings);
     } catch (e) {
       console.error('Failed to load settings', e);
     }
+    // OAuth status is helpful UI state, but a temporary status failure must
+    // never hide already-saved connection settings from the administrator.
+    try {
+      const challongeOAuthRes = await axios.get('/api/auth/challonge/status');
+      setChallongeOAuth(challongeOAuthRes.data);
+    } catch (e) {
+      console.error('Failed to load Challonge OAuth status', e);
+      setChallongeOAuth(null);
+    }
+  };
+
+  const loadChallongeOAuthStatus = async () => {
+    try {
+      const res = await axios.get('/api/auth/challonge/status');
+      setChallongeOAuth(res.data);
+      return res.data;
+    } catch (e) {
+      setChallongeOAuth(null);
+      return null;
+    }
+  };
+
+  const oauthConnectionPayload = () => {
+    const payload: Record<string, string> = {};
+    for (const key of [
+      'CHALLONGE_OAUTH_CLIENT_ID',
+      'CHALLONGE_OAUTH_CLIENT_SECRET',
+      'CHALLONGE_OAUTH_REDIRECT_URI',
+    ]) {
+      const value = env[key];
+      if (value && value !== 'configured') payload[key] = value;
+    }
+    return payload;
   };
 
   const showMsg = (text: string, ok = true) => {
@@ -38,9 +74,12 @@ export function GeneralSettings() {
     try {
       // We only send back the values that are editable
       const res = await axios.patch('/api/env', env);
-      showMsg(res.data.message);
-    } catch (e) {
-      showMsg('Failed to update connections', false);
+      const envRes = await axios.get('/api/env');
+      setEnv(envRes.data);
+      await loadChallongeOAuthStatus();
+      showMsg(res.data.message || 'Connections saved.');
+    } catch (e: any) {
+      showMsg(e.response?.data?.message || 'Failed to update connections. Check the Hub password and API connection.', false);
     } finally {
       setIsSaving(false);
     }
@@ -80,10 +119,61 @@ export function GeneralSettings() {
     setEnv({ ...env, [key]: val });
   };
 
+  const connectChallongeOAuth = async () => {
+    setOauthError(null);
+    const callback = String(env.CHALLONGE_OAUTH_REDIRECT_URI || challongeOAuth?.callback_url || '').trim();
+    const clientId = String(env.CHALLONGE_OAUTH_CLIENT_ID || '').trim();
+    const clientSecret = String(env.CHALLONGE_OAUTH_CLIENT_SECRET || '');
+    if (!callback.startsWith('https://')) {
+      setOauthError('Enter the exact HTTPS callback URL from Challonge Connect.');
+      return;
+    }
+    if (!clientId && !challongeOAuth?.client_configured) {
+      setOauthError('Enter the Challonge Client ID first.');
+      return;
+    }
+    if (clientId && !clientSecret && !challongeOAuth?.client_configured) {
+      setOauthError('Enter the Client Secret first. It is saved server-side and is never shown again.');
+      return;
+    }
+    setOauthBusy(true);
+    try {
+      // A Connect click is explicit intent to save the OAuth form. This avoids
+      // forcing the organizer through a separate Save → refresh → Connect loop.
+      const payload = oauthConnectionPayload();
+      if (Object.keys(payload).length) {
+        await axios.patch('/api/env', payload);
+        const envRes = await axios.get('/api/env');
+        setEnv(envRes.data);
+      }
+      // The backend owns validation because it has the authoritative stored
+      // connection values. Do not block a valid Connect action on a stale or
+      // transient status request in the browser.
+      await loadChallongeOAuthStatus();
+      const res = await axios.post('/api/auth/challonge/connect');
+      window.location.assign(res.data.authorization_url);
+    } catch (e: any) {
+      setOauthError(e.response?.data?.message || 'Could not start the Challonge connection. Your settings were not lost.');
+    } finally {
+      setOauthBusy(false);
+    }
+  };
+
+  const oauthDraftReady = Boolean(
+    env.CHALLONGE_OAUTH_CLIENT_ID &&
+    env.CHALLONGE_OAUTH_CLIENT_SECRET &&
+    String(env.CHALLONGE_OAUTH_REDIRECT_URI || '').startsWith('https://'),
+  );
+  const oauthSavedReady = Boolean(challongeOAuth?.client_configured && challongeOAuth?.redirect_configured);
+  const showConnections = section === 'all' || section === 'connections';
+  const showSystem = section === 'all' || section === 'system';
+  const showBot = section === 'all' || section === 'bot';
+
   return (
-    <div className="flex flex-col gap-6 animate-fadeIn pb-10">
+      <div className="flex flex-col gap-6 animate-fadeIn pb-10">
+      {section === 'all' && <IntegrationAccounts />}
       {/* Header */}
-      <div className="flex justify-between items-center border-b border-white/10 pb-4">
+      {!embedded && <div className="flex justify-between items-center border-b border-white/10 pb-4">
         <h1 className="text-2xl font-bold text-white tracking-tight flex items-center gap-2">
           <span className="text-accentYellow">⚙️</span> System Settings
         </h1>
@@ -92,32 +182,70 @@ export function GeneralSettings() {
             {message.text}
           </div>
         )}
-      </div>
+      </div>}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+      {message && embedded && (
+        <div className={`px-4 py-2 rounded text-sm font-medium animate-slideDown ${message.ok ? 'bg-statusGreen/20 text-statusGreen border border-statusGreen/30' : 'bg-statusRed/20 text-statusRed border border-statusRed/30'}`}>
+          {message.text}
+        </div>
+      )}
+
+      <div className={`grid grid-cols-1 gap-8 ${showConnections && showBot ? 'lg:grid-cols-2' : ''}`}>
         
-        {/* Connection Settings (.env) */}
-        <section className="bg-cardDark rounded-xl p-6 shadow-xl border border-white/5 flex flex-col gap-5">
+        {/* Runtime-only settings. Provider credentials are configured in the
+            dedicated provider cards above, not duplicated here. */}
+        {showConnections && <section className="bg-cardDark rounded-xl p-6 shadow-xl border border-white/10 flex flex-col gap-5">
           <div className="flex items-center gap-3 mb-2">
             <div className="w-10 h-10 rounded-lg bg-accentYellow/10 flex items-center justify-center text-accentYellow">
               🔌
             </div>
             <div>
-              <h2 className="text-lg font-bold text-white">Connections</h2>
-              <p className="text-xs text-textDim italic">Modify environment variables (.env)</p>
+              <h2 className="text-lg font-bold text-white">Connection support</h2>
+              <p className="text-xs text-textDim italic">OAuth callback and local Hub settings that support the account connections above.</p>
             </div>
           </div>
 
           <div className="space-y-4">
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-mono text-gray-400 uppercase tracking-widest">Start.gg API Token</label>
-              <input 
-                className="bg-appDark border border-white/10 rounded-md px-4 py-2 text-sm text-white focus:border-accentYellow outline-none transition-all"
-                type="password"
-                placeholder={env.STARTGG_API_TOKEN ? '••••••••••••••••' : 'Keep empty to leave unchanged'}
-                onChange={e => updateEnv('STARTGG_API_TOKEN', e.target.value)}
-              />
-              <p className="text-[10px] text-gray-500 italic">Current: {env.STARTGG_API_TOKEN ? '••••••••' : 'Not set'}</p>
+              <label className="text-xs font-mono text-gray-400 uppercase tracking-widest">Challonge API Key</label>
+              <input className="bg-appDark border border-white/10 rounded-md px-4 py-2 text-sm text-white focus:border-accentYellow outline-none" type="password"
+                placeholder={env.CHALLONGE_API_KEY ? '••••••••••••••••' : 'Keep empty to leave unchanged'} onChange={e => updateEnv('CHALLONGE_API_KEY', e.target.value)} />
+              <p className="text-[10px] text-gray-500 italic">Stored server-side only. Supports direct tournaments and optional communities.</p>
+            </div>
+
+            <div className="rounded-md border border-blue-400/20 bg-blue-400/5 p-4 flex flex-col gap-3" aria-labelledby="challonge-oauth-title">
+              <div>
+                <p id="challonge-oauth-title" className="text-xs font-mono text-blue-200 uppercase tracking-widest">Challonge OAuth</p>
+                <p className="text-[11px] text-gray-400 mt-1">Paste the exact HTTPS callback URL in Challonge Connect. Connect saves this form automatically; no page refresh is needed.</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs text-gray-400">Client ID</label>
+                  <input className="bg-appDark border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-accentYellow outline-none"
+                    autoComplete="off" spellCheck={false} value={env.CHALLONGE_OAUTH_CLIENT_ID || ''} onChange={e => updateEnv('CHALLONGE_OAUTH_CLIENT_ID', e.target.value)} />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs text-gray-400">Client Secret</label>
+                  <input className="bg-appDark border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-accentYellow outline-none" type="password"
+                    autoComplete="new-password" placeholder={env.CHALLONGE_OAUTH_CLIENT_SECRET ? 'Saved securely — enter only to replace' : 'Paste the client secret'} onChange={e => updateEnv('CHALLONGE_OAUTH_CLIENT_SECRET', e.target.value)} />
+                </div>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs text-gray-400">OAuth Callback URL</label>
+                <input className="bg-appDark border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-accentYellow outline-none"
+                  placeholder="https://your-public-host/api/auth/challonge/callback"
+                  type="url" inputMode="url" autoComplete="url" spellCheck={false} value={env.CHALLONGE_OAUTH_REDIRECT_URI || ''} onChange={e => updateEnv('CHALLONGE_OAUTH_REDIRECT_URI', e.target.value)} />
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className={`text-[11px] ${challongeOAuth?.connected ? 'text-statusGreen' : 'text-gray-400'}`} aria-live="polite">
+                  {challongeOAuth?.connected ? '● Connected with OAuth' : oauthSavedReady ? '○ Ready to connect' : '○ Configuration required'}
+                </span>
+                <button onClick={connectChallongeOAuth} disabled={oauthBusy || (!oauthDraftReady && !oauthSavedReady)}
+                  className="px-3 py-1.5 rounded bg-blue-600 text-white text-xs font-bold disabled:opacity-40">
+                  {oauthBusy ? 'Opening Challonge…' : challongeOAuth?.connected ? 'Reconnect Challonge' : 'Connect Challonge'}
+                </button>
+              </div>
+              {oauthError && <p className="text-xs text-statusRed" role="alert">{oauthError}</p>}
             </div>
 
             <div className="flex flex-col gap-1.5">
@@ -127,28 +255,6 @@ export function GeneralSettings() {
                 value={env.MATCH_CALL_CHANNEL_ID || ''}
                 onChange={e => updateEnv('MATCH_CALL_CHANNEL_ID', e.target.value)}
               />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-mono text-gray-400 uppercase tracking-widest">Start.gg Client ID</label>
-                <input
-                  className="bg-appDark border border-white/10 rounded-md px-4 py-2 text-sm text-white focus:border-accentYellow outline-none"
-                  value={env.STARTGG_CLIENT_ID || ''}
-                  onChange={e => updateEnv('STARTGG_CLIENT_ID', e.target.value)}
-                  placeholder="OAuth app client_id"
-                />
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-mono text-gray-400 uppercase tracking-widest">Start.gg Client Secret</label>
-                <input
-                  className="bg-appDark border border-white/10 rounded-md px-4 py-2 text-sm text-white focus:border-accentYellow outline-none"
-                  type="password"
-                  placeholder="Keep empty to leave unchanged"
-                  onChange={e => updateEnv('STARTGG_CLIENT_SECRET', e.target.value)}
-                />
-                <p className="text-[10px] text-gray-500 italic">Current: {env.STARTGG_CLIENT_SECRET ? '••••••••' : 'Not set'}</p>
-              </div>
             </div>
 
             <div className="flex flex-col gap-1.5">
@@ -173,17 +279,6 @@ export function GeneralSettings() {
               <p className="text-[10px] text-gray-500 italic">Used to build the OAuth callback link the bot sends to players.</p>
             </div>
 
-            <div className="flex flex-col gap-1.5 pt-4 border-t border-white/5">
-              <label className="text-xs font-mono text-gray-400 uppercase tracking-widest">Local Hub Password (UI Access)</label>
-              <input 
-                className="bg-appDark border border-white/10 rounded-md px-4 py-2 text-sm text-white focus:border-accentYellow outline-none"
-                type="password"
-                value={hubPassword}
-                onChange={e => setHubPassword(e.target.value)}
-                placeholder="Enter password to authenticate with API"
-              />
-              <p className="text-[10px] text-gray-500 italic">This must match the HUB_PASSWORD in your .env file.</p>
-            </div>
           </div>
 
           <div className="flex gap-3 mt-4">
@@ -202,17 +297,17 @@ export function GeneralSettings() {
               Reconnect
             </button>
           </div>
-        </section>
+        </section>}
 
         {/* Bot Customization Section */}
-        <section className="bg-cardDark rounded-xl p-6 shadow-xl border border-white/5 flex flex-col gap-5">
+        {showBot && <section className="bg-cardDark rounded-xl p-6 shadow-xl border border-white/5 flex flex-col gap-5">
           <div className="flex items-center gap-3 mb-2">
             <div className="w-10 h-10 rounded-lg bg-blue-500/10 flex items-center justify-center text-blue-400">
               🤖
             </div>
             <div>
               <h2 className="text-lg font-bold text-white">Bot Behavior</h2>
-              <p className="text-xs text-textDim italic">Customize AI prompts and responses</p>
+              <p className="text-xs text-textDim italic">Registration messages and Discord workflow wording</p>
             </div>
           </div>
 
@@ -245,40 +340,6 @@ export function GeneralSettings() {
                 <option value="en">English</option>
                 <option value="both">Bilingual</option>
               </select>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-mono text-gray-400 uppercase tracking-widest">AI Provider</label>
-                <select 
-                  className="bg-appDark border border-white/10 rounded-md px-4 py-2 text-sm text-white focus:border-accentYellow outline-none"
-                  value={env.AI_PROVIDER || 'gemini'}
-                  onChange={e => updateEnv('AI_PROVIDER', e.target.value)}
-                >
-                  <option value="gemini">Google Gemini</option>
-                  <option value="openai">OpenAI</option>
-                </select>
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-mono text-gray-400 uppercase tracking-widest">Model Name</label>
-                <input 
-                  className="bg-appDark border border-white/10 rounded-md px-4 py-2 text-sm text-white focus:border-accentYellow outline-none"
-                  value={env.AI_MODEL || 'gemini-2.5-flash'}
-                  onChange={e => updateEnv('AI_MODEL', e.target.value)}
-                  placeholder="e.g. gemini-2.5-flash"
-                />
-              </div>
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-mono text-gray-400 uppercase tracking-widest">AI API Key (Gemini/OpenAI)</label>
-              <input 
-                className="bg-appDark border border-white/10 rounded-md px-4 py-2 text-sm text-white focus:border-accentYellow outline-none"
-                type="password"
-                placeholder={env.GEMINI_API_KEY ? '••••••••••••••••' : 'Keep empty to leave unchanged'}
-                onChange={e => updateEnv('GEMINI_API_KEY', e.target.value)}
-              />
-              <p className="text-[10px] text-gray-500 italic">Current: {env.GEMINI_API_KEY ? '••••••••' : 'Not set'}</p>
             </div>
 
             <div className="flex flex-col gap-1.5">
@@ -332,16 +393,6 @@ export function GeneralSettings() {
               />
             </div>
 
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-mono text-gray-400 uppercase tracking-widest">Hub Agent System Prompt</label>
-              <textarea 
-                rows={6}
-                className="bg-appDark border border-white/10 rounded-md px-4 py-2 text-xs text-gray-300 font-mono focus:border-accentYellow outline-none resize-none"
-                value={settings.bot_system_prompt || ''}
-                placeholder="Describe how the AI should behave..."
-                onChange={e => updateSetting('bot_system_prompt', e.target.value)}
-              />
-            </div>
           </div>
 
           <button
@@ -351,12 +402,12 @@ export function GeneralSettings() {
           >
             Save Bot Settings
           </button>
-        </section>
+        </section>}
 
       </div>
 
       {/* ── Maintenance & Workflows ─────────────────────────────────────── */}
-      <MaintenancePanel onMessage={showMsg} />
+      {showSystem && <MaintenancePanel onMessage={showMsg} />}
     </div>
   );
 }
@@ -391,17 +442,14 @@ function MaintenancePanel({ onMessage }: { onMessage: (text: string, ok?: boolea
   };
 
   return (
-    <section className="bg-cardDark rounded-xl p-6 shadow-xl border border-white/5 flex flex-col gap-4">
-      <div className="flex items-center gap-3 mb-1">
-        <div className="w-10 h-10 rounded-lg bg-purple-500/10 flex items-center justify-center text-purple-300">
-          🛠️
-        </div>
-        <div>
-          <h2 className="text-lg font-bold text-white">Maintenance & Workflows</h2>
-          <p className="text-xs text-textDim italic">Hot-reload config and re-probe credentials without restarting</p>
-        </div>
-      </div>
-
+    <details className="group rounded-xl border border-white/10 bg-cardDark shadow-sm">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-4 text-sm font-bold text-white marker:content-none">
+        <span className="flex items-center gap-3"><span className="flex h-8 w-8 items-center justify-center rounded-lg bg-purple-500/10 text-purple-300">🛠️</span>Advanced maintenance</span>
+        <span className="text-xs font-normal text-textDim group-open:hidden">Show tools</span>
+        <span className="hidden text-xs font-normal text-textDim group-open:inline">Hide tools</span>
+      </summary>
+      <div className="border-t border-white/10 p-5">
+        <p className="mb-4 text-xs leading-relaxed text-textDim">Emergency operator tools only. They reload local workflow configuration or re-check Start.gg permissions; they do not change tournament results.</p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="flex flex-col gap-2 p-4 rounded-lg bg-black/30 border border-white/5">
           <div className="flex items-center justify-between">
@@ -435,6 +483,7 @@ function MaintenancePanel({ onMessage }: { onMessage: (text: string, ok?: boolea
           </p>
         </div>
       </div>
-    </section>
+      </div>
+    </details>
   );
 }

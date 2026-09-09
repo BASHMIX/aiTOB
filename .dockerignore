@@ -19,6 +19,12 @@ frontend-react/build
 Dockerfile
 docker-compose.yml
 .env
+.env.*
+*.sqlite
+*.sqlite-*
+*.db
+.migration-backups/
+.acceptance/
 .env.template
 AGENTS.md
 specs/

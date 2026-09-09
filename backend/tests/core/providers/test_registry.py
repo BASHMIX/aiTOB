@@ -69,6 +69,10 @@ def test_get_provider_returns_same_instance():
 
 @pytest.mark.asyncio
 async def test_get_provider_for_tournament():
+    # The registry reads the local tournament projection even for the legacy
+    # Start.gg fallback. Initialise the explicitly selected test DB first.
+    from backend.core.database import init_db
+    await init_db()
     provider = await get_provider_for_tournament("any_slug")
     assert isinstance(provider, StartGGProvider)
     assert _providers["startgg"] is provider

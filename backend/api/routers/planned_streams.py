@@ -6,7 +6,8 @@ from backend.core.database import (
     get_active_match, upsert_active_match, get_station_by_stream_id,
 )
 from backend.api.ws_manager import manager as hub_mgr
-from backend.api.auth import verify_hub_password
+from backend.api.auth import verify_hub_password, require_permission
+from backend.core.workspace_auth import SessionPrincipal
 from backend.api.schemas import (
     CreatePlannedStreamRequest, PlannedStreamsResponse,
     MessageResponse, ErrorResponse,
@@ -23,12 +24,13 @@ router = APIRouter(tags=["planned-streams"])
 )
 async def api_list_planned_streams(
     tournament_slug: Optional[str] = Query(default=None, description="Optional tournament slug filter"),
+    principal: SessionPrincipal = Depends(require_permission("workspace.read")),
 ):
     """Return all sets flagged for inclusion on stream once they become live.
 
     Used by the bracket view to render the planned-stream star icon state.
     """
-    return PlannedStreamsResponse(planned=await list_planned_streams(tournament_slug))
+    return PlannedStreamsResponse(planned=await list_planned_streams(tournament_slug, principal.workspace_id))
 
 
 @router.post(
@@ -40,25 +42,25 @@ async def api_list_planned_streams(
     responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}},
     operation_id="planStreamSet",
 )
-async def api_add_planned_stream(body: CreatePlannedStreamRequest):
+async def api_add_planned_stream(body: CreatePlannedStreamRequest, principal: SessionPrincipal = Depends(require_permission("stream.manage"))):
     """Flag a set (even a preview set or one not yet in the hub) for stream coverage.
 
     When the set becomes live (synced via /api/tournaments/{slug}/sets), the
     sync engine will mark it is_stream_match=true and, if a stream_id was
     supplied and a station is mapped to it, auto-assign that station.
     """
-    await add_planned_stream(body.set_id, body.tournament_slug, body.stream_id, body.note)
+    await add_planned_stream(body.set_id, body.tournament_slug, body.stream_id, body.note, principal.workspace_id)
 
     # If the set is ALREADY a tracked active match, promote it immediately
     # so the operator sees the change without waiting for the next sync.
-    m = await get_active_match(body.set_id)
+    m = await get_active_match(body.set_id, principal.workspace_id)
     if m:
         fields = {"is_stream_match": True}
         if body.stream_id and not m.get("station_id"):
-            station = await get_station_by_stream_id(body.stream_id)
+            station = await get_station_by_stream_id(body.stream_id, principal.workspace_id)
             if station:
                 fields["station_id"] = station["id"]
-        await upsert_active_match(body.set_id, **fields)
+        await upsert_active_match(body.set_id, workspace_id=principal.workspace_id, **fields)
         await hub_mgr.broadcast({"type": "match_update"})
 
     return MessageResponse(message="Planned for stream", ok=True)
@@ -72,8 +74,8 @@ async def api_add_planned_stream(body: CreatePlannedStreamRequest):
     responses={401: {"model": ErrorResponse}},
     operation_id="unplanStreamSet",
 )
-async def api_remove_planned_stream(set_id: str):
+async def api_remove_planned_stream(set_id: str, principal: SessionPrincipal = Depends(require_permission("stream.manage"))):
     """Unflag a set. Does NOT modify any active match's is_stream_match — toggle
     that separately via /api/active-matches/{set_id}/toggle-stream if needed."""
-    await remove_planned_stream(set_id)
+    await remove_planned_stream(set_id, principal.workspace_id)
     return MessageResponse(message="Unplanned", ok=True)

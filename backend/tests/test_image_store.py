@@ -53,3 +53,15 @@ async def test_store_avatar_falls_back_when_cloudinary_raises():
         url = await image_store.store_avatar(_img_bytes(), "abc")
 
     assert url == "/static/avatars/abc.png"
+
+
+@pytest.mark.asyncio
+async def test_managed_image_mode_fails_closed_instead_of_silently_writing_local(monkeypatch):
+    monkeypatch.setenv("AITOB_IMAGE_STORAGE_MODE", "managed")
+    with patch.object(image_store, "_resolve_cloudinary_url", AsyncMock(return_value="cloudinary://configured")), \
+         patch.object(image_store, "_upload_to_cloudinary", side_effect=RuntimeError("secret provider detail")), \
+         patch.object(image_store, "save_png_bytes") as local_save:
+        with pytest.raises(RuntimeError, match="Managed image storage is unavailable") as exc:
+            await image_store.store_avatar(_img_bytes(), "abc")
+    assert "secret provider detail" not in str(exc.value)
+    local_save.assert_not_called()

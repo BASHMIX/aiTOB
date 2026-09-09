@@ -18,21 +18,18 @@ from backend.core.database import (
 )
 from backend.bot.agent.tool_helpers import project_match_for_agent
 
-TEST_DB = "backend/core/test_call_match_unification.sqlite"
+TEST_DB = ""
 
 
 @pytest.fixture
-async def setup_db():
+async def setup_db(tmp_path):
+    global TEST_DB
+    TEST_DB = str(tmp_path / "call-match-unification.sqlite")
     orig = db.DB_PATH
     db.DB_PATH = TEST_DB
     ms.DB_PATH = TEST_DB
     await init_db()
     yield
-    if os.path.exists(TEST_DB):
-        try:
-            os.remove(TEST_DB)
-        except Exception:
-            pass
     db.DB_PATH = orig
     ms.DB_PATH = orig
 

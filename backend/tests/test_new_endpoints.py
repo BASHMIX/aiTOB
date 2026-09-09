@@ -2,6 +2,8 @@ from fastapi.testclient import TestClient
 from backend.api.main import app
 from backend.core.database import init_db
 import asyncio
+import os
+from backend.core.database import set_setting
 
 client = TestClient(app)
 import pytest
@@ -10,25 +12,27 @@ from backend.api.main import app
 
 @pytest.fixture(autouse=True)
 def setup_db():
+    os.environ["AITOB_BOOTSTRAP_OWNER_EMAIL"] = "new-endpoints@example.test"
+    os.environ["AITOB_BOOTSTRAP_OWNER_PASSWORD"] = "new-endpoints-password"
+    os.environ["AITOB_LEGACY_HUB_PASSWORD_COMPAT"] = "true"
     asyncio.run(init_db())
+    asyncio.run(set_setting("HUB_PASSWORD", "admin"))
 
 def test_hub_command_requires_auth():
     # POST /api/hub/command without password must fail with 401 Unauthorized
     resp = client.post("/api/hub/command", json={"command": "Who is currently playing?"})
     assert resp.status_code == 401
 
-def test_hub_command_executes_authorized():
-    # POST /api/hub/command with password must succeed (returns 200 or maps properly)
-    # The endpoint returns a queued status since the Discord bot client might be offline in pytest environment
+def test_legacy_hub_command_requires_an_explicit_tournament_scope():
+    # Organizer Assistant no longer queues text through Discord.  Old callers
+    # must migrate to /api/ai/assistant/{tournament_slug}.
     resp = client.post(
         "/api/hub/command",
         json={"command": "Who is currently playing?"},
         headers={"X-Hub-Password": "admin"}
     )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data.get("ok") is True
-    assert "Command queued" in data.get("message") or "Command sent" in data.get("message")
+    assert resp.status_code == 400
+    assert "tournament-scoped" in resp.json()["message"]
 
 def test_obs_redirection_is_public():
     # GET /obs/{station_id} must redirect (307) and NOT require authentication
@@ -36,12 +40,10 @@ def test_obs_redirection_is_public():
     assert resp.status_code == 307
     assert resp.headers.get("location") == "/obs?slot=station_1"
 
-def test_obs_telemetry_is_public():
-    # GET /obs/{station_id}/data must return 200 and NOT require authentication
+def test_obs_telemetry_requires_a_revocable_browser_source_token():
+    # The React shell is public, but telemetry is least-privilege and revocable.
     resp = client.get("/obs/station_1/data")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert "station" in data or "active_match" in data
+    assert resp.status_code == 401
 
 def test_force_in_progress_requires_auth():
     # POST /active-matches/{id}/force-in-progress without password must fail with 401

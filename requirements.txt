@@ -13,3 +13,5 @@ websockets
 jinja2
 python-multipart
 psutil
+cryptography
+psycopg[binary]>=3.2

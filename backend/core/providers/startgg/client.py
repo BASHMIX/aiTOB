@@ -4,6 +4,7 @@ import os
 import time
 from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
+from backend.core.providers.startgg import queries
 
 load_dotenv()
 
@@ -21,8 +22,9 @@ def get_client() -> "StartGGClient":
 class StartGGClient:
     MAX_RETRIES = 3
 
-    def __init__(self, token: str = STARTGG_API_TOKEN):
-        self.token = token
+    def __init__(self, token: str | None = None, *, provider_account_id: str | None = None):
+        self.token = token or ""
+        self.provider_account_id = provider_account_id
         self._http_client: Optional[httpx.AsyncClient] = None
         self.last_request_time = 0
         self.request_count = 0
@@ -45,8 +47,13 @@ class StartGGClient:
         """Fetch token from DB if missing, using a 60s TTL cache to prevent DB spam."""
         now = time.time()
         if now - self._token_last_fetched > 60:
-            from backend.core.database import get_setting, get_connection
-            new_token = await get_setting("STARTGG_API_TOKEN") or await get_connection("STARTGG_API_TOKEN")
+            new_token = None
+            if self.provider_account_id:
+                from backend.core.integrations import get_integration_secret
+                new_token = await get_integration_secret(self.provider_account_id, "access_token")
+            elif os.getenv("AITOB_LEGACY_PROVIDER_FALLBACK", "false").lower() == "true":
+                from backend.core.database import get_setting, get_connection
+                new_token = await get_setting("STARTGG_API_TOKEN") or await get_connection("STARTGG_API_TOKEN")
             if new_token:
                 self.token = new_token
             self._token_last_fetched = now
@@ -117,37 +124,8 @@ class StartGGClient:
 
     async def fetch_tournament_info(self, slug: str) -> Optional[Dict[str, Any]]:
         """Fetch basic tournament info and entrants."""
-        query = """
-        query TournamentInfo($slug: String!) {
-          tournament(slug: $slug) {
-            id
-            name
-            events {
-              id
-              name
-              videogame {
-                name
-              }
-              entrants(query: {page: 1, perPage: 250}) {
-                nodes {
-                  id
-                  name
-                  participants {
-                    user {
-                      images {
-                        url
-                        type
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-        """
         try:
-            data = await self.query(query, {"slug": slug})
+            data = await self.query(queries.LEGACY_TOURNAMENT_INFO, {"slug": slug})
             return data.get("tournament")
         except Exception as e:
             print(f"Error fetching tournament info: {e}")
@@ -155,40 +133,7 @@ class StartGGClient:
 
     async def fetch_tournament_sets(self, slug: str) -> List[Dict[str, Any]]:
         """Fetch all sets for a tournament event."""
-        query = """
-        query TournamentSets($slug: String!) {
-          tournament(slug: $slug) {
-            events {
-              sets(page: 1, perPage: 500) {
-                nodes {
-                  id
-                  state
-                  fullRoundText
-                  identifier
-                  phaseGroup {
-                    displayIdentifier
-                  }
-                  slots {
-                    entrant {
-                      id
-                      name
-                      participants {
-                        user {
-                          images {
-                            url
-                            type
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-        """
-        data = await self.query(query, {"slug": slug})
+        data = await self.query(queries.LEGACY_TOURNAMENT_SETS, {"slug": slug})
         sets = []
         if data.get("tournament") and data["tournament"].get("events"):
             for event in data["tournament"]["events"]:
@@ -228,16 +173,8 @@ class StartGGClient:
 
     async def report_set_score(self, set_id: str, winner_id: str, scores: List[Dict[str, Any]]) -> bool:
         """Report match result (winner, scores) via gameData array."""
-        mutation = """
-        mutation ReportBracketSet($setId: ID!, $winnerId: ID!, $gameData: [BracketSetGameDataInput]) {
-          reportBracketSet(setId: $setId, winnerId: $winnerId, gameData: $gameData) {
-            id
-            state
-          }
-        }
-        """
         try:
-            await self.query(mutation, {
+            await self.query(queries.LEGACY_REPORT_SET_SCORE, {
                 "setId": set_id,
                 "winnerId": winner_id,
                 "gameData": scores
@@ -332,8 +269,7 @@ class StartGGClient:
             entrant1_score, entrant2_score
         )
 
-        from backend.core.providers.startgg.queries import REPORT_BRACKET_SET
-        return await self.query(REPORT_BRACKET_SET, {
+        return await self.query(queries.REPORT_BRACKET_SET, {
             "setId": set_id,
             "winnerId": winner_id,
             "gameData": game_data,
@@ -341,23 +277,13 @@ class StartGGClient:
 
     async def report_set_winner_only(self, set_id: str, winner_id: str) -> dict:
         """Report a set with winner only (no scores)."""
-        mutation = """
-        mutation SimpleReport($setId: ID!, $winnerId: ID!) {
-          reportBracketSet(setId: $setId, winnerId: $winnerId) { id state }
-        }
-        """
-        return await self.query(mutation, {"setId": set_id, "winnerId": winner_id})
+        return await self.query(
+            queries.REPORT_WINNER_ONLY, {"setId": set_id, "winnerId": winner_id}
+        )
 
     async def fetch_set_entrant_order(self, set_id: str) -> list:
         """Fetch the slot/entrant ordering for a set from Start.gg."""
-        q = """
-        query SetEntrants($id: ID!) {
-          set(id: $id) {
-            slots { entrant { id } }
-          }
-        }
-        """
-        result = await self.query(q, {"id": set_id})
+        result = await self.query(queries.SET_ENTRANT_ORDER, {"id": set_id})
         slots = result.get("set", {}).get("slots", [])
         return [
             str(slot.get("entrant", {}).get("id"))
@@ -367,12 +293,7 @@ class StartGGClient:
 
     async def fetch_set_state(self, set_id: str) -> int:
         """Fetch the numeric state of a set from Start.gg."""
-        q = """
-        query SetState($id: ID!) {
-          set(id: $id) { state }
-        }
-        """
-        result = await self.query(q, {"id": set_id})
+        result = await self.query(queries.SET_STATE, {"id": set_id})
         return result.get("set", {}).get("state")
 
     async def mark_set_dq(self, set_id: str, winner_id: str) -> bool:
@@ -395,9 +316,8 @@ class StartGGClient:
         except Exception as e:
             print(f"[STARTGG] DQ pre-flight failed for {set_id}: {e}")
 
-        from backend.core.providers.startgg.queries import MARK_SET_DQ
         try:
-            await self.query(MARK_SET_DQ, {"setId": set_id, "winnerId": winner_id})
+            await self.query(queries.MARK_SET_DQ, {"setId": set_id, "winnerId": winner_id})
             return True
         except Exception as e:
             print(f"Failed to mark DQ: {e}")
@@ -424,9 +344,8 @@ class StartGGClient:
         except Exception as e:
             print(f"[STARTGG] double-DQ pre-flight failed for {set_id}: {e}")
 
-        from backend.core.providers.startgg.queries import MARK_SET_DQ
         try:
-            await self.query(MARK_SET_DQ, {"setId": set_id, "winnerId": entrant1_id})
+            await self.query(queries.MARK_SET_DQ, {"setId": set_id, "winnerId": entrant1_id})
             return True
         except Exception as e:
             print(f"Failed to double-DQ: {e}")
@@ -434,16 +353,8 @@ class StartGGClient:
 
     async def reset_set(self, set_id: str) -> bool:
         """Reset/reopen a completed set."""
-        mutation = """
-        mutation ResetSet($setId: ID!) {
-          resetSet(setId: $setId) {
-            id
-            state
-          }
-        }
-        """
         try:
-            await self.query(mutation, {"setId": set_id})
+            await self.query(queries.RESET_SET, {"setId": set_id})
             return True
         except Exception as e:
             print(f"Failed to reset set: {e}")
@@ -451,16 +362,8 @@ class StartGGClient:
 
     async def mark_in_progress(self, set_id: str) -> bool:
         """Mark a set as In Progress on Start.gg."""
-        mutation = """
-        mutation MarkInProgress($setId: ID!) {
-          markSetInProgress(setId: $setId) {
-            id
-            state
-          }
-        }
-        """
         try:
-            await self.query(mutation, {"setId": set_id})
+            await self.query(queries.MARK_IN_PROGRESS, {"setId": set_id})
             return True
         except Exception as e:
             print(f"Failed to mark in progress: {e}")
@@ -475,9 +378,8 @@ class StartGGClient:
         if str(set_id).startswith("preview"):
             print(f"[STARTGG] Cannot call preview set {set_id}")
             return False
-        from backend.core.providers.startgg.queries import MARK_SET_CALLED
         try:
-            await self.query(MARK_SET_CALLED, {"setId": set_id})
+            await self.query(queries.MARK_SET_CALLED, {"setId": set_id})
             return True
         except Exception as e:
             print(f"Failed to mark set called: {e}")
@@ -485,8 +387,7 @@ class StartGGClient:
 
     async def fetch_streams(self, slug: str) -> list:
         """Fetch streams configured on a tournament (raw start.gg shape)."""
-        from backend.core.providers.startgg.queries import TOURNAMENT_STREAMS
-        data = await self.query(TOURNAMENT_STREAMS, {"slug": slug})
+        data = await self.query(queries.TOURNAMENT_STREAMS, {"slug": slug})
         return ((data or {}).get("tournament") or {}).get("streams") or []
 
     async def assign_stream(self, set_id: str, stream_id: str) -> bool:
@@ -494,9 +395,8 @@ class StartGGClient:
         if str(set_id).startswith("preview"):
             print(f"[STARTGG] Cannot assign preview set {set_id} to stream")
             return False
-        from backend.core.providers.startgg.queries import ASSIGN_STREAM
         try:
-            await self.query(ASSIGN_STREAM, {"setId": set_id, "streamId": stream_id})
+            await self.query(queries.ASSIGN_STREAM, {"setId": set_id, "streamId": stream_id})
             return True
         except Exception as e:
             print(f"Failed to assign stream: {e}")
@@ -567,16 +467,8 @@ class StartGGClient:
             }
 
         # 1. Probe basic token validity (currentUser query)
-        current_user_query = """
-        query {
-          currentUser {
-            id
-            name
-          }
-        }
-        """
         try:
-            user_data = await self.query(current_user_query)
+            user_data = await self.query(queries.CURRENT_USER)
             if not user_data or not user_data.get("currentUser"):
                 return {
                     "valid": False,
@@ -597,15 +489,8 @@ class StartGGClient:
         #   start.gg immediately rejects at the authorization layer: "You do not have permission to do that".
         # - If the token owner HAS write scope/TO rights, the auth gate passes, and the mutation
         #   fails at the database level: "Set not found" or "record not found".
-        probe_mutation = """
-        mutation ProbeWriteScope {
-          markSetInProgress(setId: "9999999999") {
-            id
-          }
-        }
-        """
         try:
-            await self.query(probe_mutation)
+            await self.query(queries.PROBE_WRITE_SCOPE)
             # This should raise an error as setId 9999999999 doesn't exist
             # But if it somehow succeeds, it means write scope is present!
             return {

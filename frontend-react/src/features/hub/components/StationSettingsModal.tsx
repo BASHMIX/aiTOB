@@ -30,7 +30,8 @@ function deriveStreamUrl(stream: Stream | undefined): string {
 }
 
 export function StationSettingsModal({ station, onClose, onSaved }: StationSettingsModalProps) {
-  const { currentSlug, events, streamGate, setStreamGate } = useHubStore();
+  const { currentSlug, events, streamGate, setStreamGate, tournaments } = useHubStore();
+  const isStartGgTournament = tournaments.find((tournament) => tournament.slug === currentSlug)?.provider_type !== 'challonge';
 
   const [name, setName] = useState<string>(station.name || "");
   const [hidden, setHidden] = useState<boolean>(!!station.hidden);
@@ -56,7 +57,7 @@ export function StationSettingsModal({ station, onClose, onSaved }: StationSetti
       setLoading(true);
       try {
         const reqs: Promise<any>[] = [axios.get("/api/overlays")];
-        if (currentSlug) reqs.push(axios.get(`/api/tournaments/${currentSlug}/streams`));
+        if (currentSlug && isStartGgTournament) reqs.push(axios.get(`/api/tournaments/${currentSlug}/streams`));
         const [ovRes, strRes] = await Promise.all(reqs);
         if (cancelled) return;
         setOverlays((ovRes.data.overlays || []).map((o: any) => o.name).filter(Boolean));
@@ -69,7 +70,7 @@ export function StationSettingsModal({ station, onClose, onSaved }: StationSetti
     };
     load();
     return () => { cancelled = true; };
-  }, [currentSlug]);
+  }, [currentSlug, isStartGgTournament]);
 
   const selectedStream = useMemo(
     () => streams.find(s => s.id === streamId),
@@ -124,7 +125,7 @@ export function StationSettingsModal({ station, onClose, onSaved }: StationSetti
         name: name.trim() || station.name,
         hidden,
         bot_enabled: botEnabled,
-        startgg_stream_id: streamId || "",      // empty = unmap
+        ...(isStartGgTournament ? { startgg_stream_id: streamId || "" } : {}),
         stream_url: streamUrlOverride || "",    // empty = use derived
         active_overlay: activeOverlay || "",    // empty = clear
         event_id: eventId || "",                // empty = unbind (any event)
@@ -172,8 +173,8 @@ export function StationSettingsModal({ station, onClose, onSaved }: StationSetti
             />
           </label>
 
-          {/* start.gg stream */}
-          <div className="flex flex-col gap-1.5 p-3 rounded-lg bg-black/25 border border-white/5">
+          {/* Provider stream queue exists only for Start.gg. */}
+          {isStartGgTournament ? <div className="flex flex-col gap-1.5 p-3 rounded-lg bg-black/25 border border-white/5">
             <div className="flex items-center justify-between">
               <span className="text-sm font-semibold text-gray-200">Start.gg Stream</span>
               {loading && <span className="text-xs text-textDim">loading…</span>}
@@ -215,7 +216,12 @@ export function StationSettingsModal({ station, onClose, onSaved }: StationSetti
                 No streams configured on this tournament. Add them in start.gg admin → Manage → Streams, then refresh the tournament.
               </span>
             )}
-          </div>
+          </div> : (
+            <div className="rounded-lg border border-white/5 bg-black/25 p-3 text-xs leading-relaxed text-textDim">
+              <span className="font-semibold text-white">Local station & overlay</span><br />
+              This Challonge tournament uses the station, Browser Source, Discord and OBS locally. aiTOB does not create or update a provider stream queue.
+            </div>
+          )}
 
           {/* Channel URL (auto/override) */}
           <label className="flex flex-col gap-1.5 p-3 rounded-lg bg-black/25 border border-white/5">
@@ -228,7 +234,7 @@ export function StationSettingsModal({ station, onClose, onSaved }: StationSetti
               className="bg-black/40 border border-white/10 rounded px-2.5 py-1 text-sm text-white focus:outline-none focus:border-accentYellow/50 placeholder:text-textDim"
             />
             <span className="text-xs text-textDim">
-              Leave blank to auto-derive from the start.gg stream. Override for Kick, restream pages, etc.
+              {isStartGgTournament ? 'Leave blank to auto-derive from the Start.gg stream. Override for Kick, restream pages, etc.' : 'Optional public channel or Browser Source link for this local station.'}
             </span>
           </label>
 

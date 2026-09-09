@@ -16,7 +16,7 @@ from backend.core.database import (
 from backend.api.routers import tournaments as tr
 from backend.core.contracts.tournament_types import ProviderStream
 
-TEST_DB_PATH = "backend/core/test_verify_stream.sqlite"
+TEST_DB_PATH = ""
 SLUG = "tournament/verifystream"
 
 
@@ -29,18 +29,15 @@ class _FakeProvider:
 
 
 @pytest.fixture
-async def setup(monkeypatch):
+async def setup(monkeypatch, tmp_path):
+    global TEST_DB_PATH
+    TEST_DB_PATH = str(tmp_path / "verify-stream.sqlite")
     orig = db.DB_PATH
     db.DB_PATH = TEST_DB_PATH
     match_state.DB_PATH = TEST_DB_PATH
     await init_db()
     await upsert_tournament(SLUG, "Verify Stream", "", "", "", "{}")
     yield
-    if os.path.exists(TEST_DB_PATH):
-        try:
-            os.remove(TEST_DB_PATH)
-        except Exception:
-            pass
     db.DB_PATH = orig
     match_state.DB_PATH = orig
 

@@ -4,6 +4,8 @@ from typing import Optional, List
 from backend.core.contracts.tournament_types import (
     ProviderTournament, ProviderSet, ProviderSetState, ProviderSetResult,
     ProviderStream,
+    ProviderCapabilitiesV2, ProviderCommandResultV2, ProviderCommandV2,
+    ProviderSnapshotRequestV2, ProviderSnapshotV2,
 )
 
 class ITournamentProvider(ABC):
@@ -163,3 +165,38 @@ class ITournamentProvider(ABC):
     async def close(self) -> None:
         """Cleanup resources (HTTP clients, connections). Called on shutdown."""
         pass
+
+
+class ITournamentProviderV2(ABC):
+    """Dark-launch provider contract.
+
+    This intentionally lives alongside ``ITournamentProvider``.  Existing Start.gg
+    consumers remain on the legacy interface until its parity checkpoint passes and a
+    later feature flag explicitly adopts this interface.
+    """
+
+    @property
+    @abstractmethod
+    def provider_type(self) -> str:
+        """Stable machine identifier, such as ``startgg`` or ``challonge``."""
+        ...
+
+    @property
+    @abstractmethod
+    def capabilities_v2(self) -> ProviderCapabilitiesV2:
+        """Static adapter capability declaration; contains no credentials."""
+        ...
+
+    @abstractmethod
+    async def fetch_snapshot_v2(
+        self, request: ProviderSnapshotRequestV2
+    ) -> ProviderSnapshotV2:
+        """Fetch the smallest provider snapshot that satisfies ``request``."""
+        ...
+
+    @abstractmethod
+    async def execute_remote_command_v2(
+        self, command: ProviderCommandV2
+    ) -> ProviderCommandResultV2:
+        """Execute a provider-backed command after the command ledger admits it."""
+        ...

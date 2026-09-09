@@ -42,6 +42,11 @@ describe('ActiveMatchCard', () => {
     (axios.delete as any).mockResolvedValue({ data: {} });
     (axios.patch as any).mockResolvedValue({ data: {} });
     (axios.post as any).mockResolvedValue({ data: {} });
+    // Provider-backed DQ refreshes the authoritative active-match projection
+    // rather than inventing a local terminal state from the HTTP acknowledgement.
+    (axios.get as any).mockResolvedValue({
+      data: { matches: [{ ...defaultMockMatch, status: 'dq' }] },
+    });
 
     vi.useFakeTimers();
   });
@@ -164,7 +169,7 @@ describe('ActiveMatchCard', () => {
       render(<ActiveMatchCard match={defaultMockMatch} />);
 
       // Open DQ menu
-      const dqButton = screen.getByTitle('Force DQ a player');
+      const dqButton = screen.getByTitle('DQ a player');
       fireEvent.click(dqButton);
 
       // Click P1 DQ (using queryAllByText because 'Player 1' appears twice: once in the card, once in the dropdown)
@@ -199,6 +204,53 @@ describe('ActiveMatchCard', () => {
         ]);
       });
       vi.useFakeTimers();
+    });
+
+    it('uses the matching dashboard action projection for a Challonge on-stream card', () => {
+      const challongeMatch = {
+        ...defaultMockMatch,
+        provider_type: 'challonge',
+        tournament_slug: 'challonge-test',
+      };
+      mockStoreState.tournaments = [
+        { slug: 'challonge-test', provider_type: 'challonge', dq_timer_seconds: 600 },
+      ];
+      mockStoreState.currentSlug = 'challonge-test';
+      mockStoreState.matches = [{
+        ...challongeMatch,
+        actions: {
+          report_score: { kind: 'remote', enabled: true, label: 'Submit result for verification' },
+          dq: { kind: 'unavailable', enabled: false },
+        },
+      }];
+
+      render(<ActiveMatchCard match={challongeMatch} />);
+
+      expect(screen.getByTitle('Submit result for provider verification')).toBeInTheDocument();
+      expect(screen.queryByTitle('DQ a player')).not.toBeInTheDocument();
+    });
+
+    it('uses the same single-player DQ picker for a Challonge on-stream match', () => {
+      const challongeMatch = {
+        ...defaultMockMatch,
+        provider_type: 'challonge',
+        tournament_slug: 'challonge-test',
+      };
+      mockStoreState.tournaments = [
+        { slug: 'challonge-test', provider_type: 'challonge', dq_timer_seconds: 600 },
+      ];
+      mockStoreState.currentSlug = 'challonge-test';
+      mockStoreState.matches = [{
+        ...challongeMatch,
+        actions: { dq: { kind: 'remote', enabled: true } },
+      }];
+
+      render(<ActiveMatchCard match={challongeMatch} />);
+      fireEvent.click(screen.getByTitle('DQ a player'));
+
+      expect(screen.getByText('DQ who?')).toBeInTheDocument();
+      expect(screen.queryByText('Both Players')).not.toBeInTheDocument();
+      expect(screen.queryByText(/Challonge requires one advancing player/i)).not.toBeInTheDocument();
     });
 
     it('assigns a station', async () => {

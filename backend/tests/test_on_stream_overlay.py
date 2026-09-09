@@ -15,7 +15,7 @@ from backend.core.match_state import (
     transition_match, validate_transition, VALID_TRANSITIONS, WORKFLOW_OVERLAYS,
 )
 
-TEST_DB = "backend/core/test_on_stream_overlay.sqlite"
+TEST_DB = ""
 EVENT = "100"
 SLUG = "major/x"
 
@@ -35,7 +35,9 @@ async def _dummy_get_provider(slug):
 
 
 @pytest.fixture
-async def setup_db(monkeypatch):
+async def setup_db(monkeypatch, tmp_path):
+    global TEST_DB
+    TEST_DB = str(tmp_path / "on-stream-overlay.sqlite")
     orig = db.DB_PATH
     db.DB_PATH = TEST_DB
     ms.DB_PATH = TEST_DB
@@ -43,11 +45,6 @@ async def setup_db(monkeypatch):
     monkeypatch.setattr(ms, "get_provider_for_tournament", _dummy_get_provider)
     await db.init_db()
     yield
-    if os.path.exists(TEST_DB):
-        try:
-            os.remove(TEST_DB)
-        except Exception:
-            pass
     db.DB_PATH = orig
     ms.DB_PATH = orig
 

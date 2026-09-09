@@ -8,6 +8,8 @@ import google.generativeai as genai
 # smaller, which is exactly why we collect our own).
 MIN_AVATAR_DIM = 500
 MAX_AVATAR_BYTES = 5 * 1024 * 1024
+MAX_IMAGE_DIM = 8192
+MAX_IMAGE_PIXELS = 32_000_000
 MAX_ASPECT_RATIO = 3.0
 AVATAR_OUTPUT_SIZE = 512
 
@@ -18,20 +20,26 @@ def validate_avatar_quality(image_bytes: bytes) -> tuple[bool, str]:
     Each failure path returns a precise, user-facing explanation of EXACTLY
     why the image was rejected — never a silent/generic failure.
     """
+    if len(image_bytes) > MAX_AVATAR_BYTES:
+        return False, "File size is too large (max 5MB). Please upload a smaller file."
     try:
-        img = Image.open(BytesIO(image_bytes))
-        width, height = img.size
-    except Exception as e:
-        return False, f"Invalid image file — I couldn't read that as an image ({e})."
+        with Image.open(BytesIO(image_bytes)) as probe:
+            width, height = probe.size
+            if width > MAX_IMAGE_DIM or height > MAX_IMAGE_DIM or width * height > MAX_IMAGE_PIXELS:
+                return False, "Image dimensions are too large for safe processing."
+            probe.verify()
+        # verify() consumes the decoder; reopen and force decoding so truncated
+        # or malformed payloads never reach storage or Cloudinary.
+        with Image.open(BytesIO(image_bytes)) as decoded:
+            decoded.load()
+    except Exception:
+        return False, "Invalid image file — the file could not be decoded safely."
 
     if width < MIN_AVATAR_DIM or height < MIN_AVATAR_DIM:
         return False, (
             f"Image resolution is too low ({width}x{height}). Broadcast avatars must be at "
             f"least {MIN_AVATAR_DIM}x{MIN_AVATAR_DIM}px — please upload a larger, higher-quality image."
         )
-
-    if len(image_bytes) > MAX_AVATAR_BYTES:
-        return False, "File size is too large (max 5MB). Please upload a smaller file."
 
     ratio = max(width, height) / min(width, height)
     if ratio > MAX_ASPECT_RATIO:

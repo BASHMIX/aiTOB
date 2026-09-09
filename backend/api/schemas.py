@@ -1,5 +1,96 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Any, Optional, Literal, Dict, List
+
+
+class ProviderFeatureFlagsResponse(BaseModel):
+    """Non-secret feature-flag projection for future rollout diagnostics.
+
+    No route consumes this during Phase 1, preserving current API behavior.
+    """
+
+    provider_v2_contracts_enabled: bool = False
+    provider_coordinator_enabled: bool = False
+    challonge_read_enabled: bool = False
+    challonge_local_workflow_enabled: bool = False
+    challonge_score_commands_enabled: bool = False
+    challonge_dq_commands_enabled: bool = False
+
+
+class ProviderStateProjectionV2(BaseModel):
+    """Dark API model only; no Phase 2 route exposes or consumes it."""
+
+    provider_state: Optional[str] = None
+    hub_status: Optional[str] = None
+    sync_status: Optional[str] = None
+    provider_revision: Optional[str] = None
+    observed_at: Optional[str] = None
+
+
+class DiscordWorkflowProjectionV2(BaseModel):
+    call_message_id: Optional[str] = None
+    thread_id: Optional[str] = None
+    called_at: Optional[str] = None
+    player1_ready_at: Optional[str] = None
+    player2_ready_at: Optional[str] = None
+    attendance_deadline: Optional[str] = None
+    last_notification_at: Optional[str] = None
+
+
+class ProviderFreshnessProjectionV2(BaseModel):
+    last_provider_sync: Optional[str] = None
+    data_freshness: Optional[str] = None
+    sync_available: bool = False
+
+
+class ProviderCommandSummaryV2(BaseModel):
+    command_id: str
+    action: str
+    state: str
+    reason: Optional[str] = None
+
+
+class ProviderActionProjectionV2(BaseModel):
+    action: str
+    availability: Literal["remote", "local", "unavailable"]
+    reason: Optional[str] = None
+
+
+class ProviderCapabilityProfileResponse(BaseModel):
+    provider_type: str
+    display_name: str
+    provider_tournament_id: Optional[str] = None
+    provider_subdomain: Optional[str] = None
+    contract_version: Literal["legacy", "v2"]
+    actions: List[ProviderActionProjectionV2] = Field(default_factory=list)
+    supports_incremental_sync: Optional[bool] = None
+    supports_targeted_match_fetch: Optional[bool] = None
+    supports_remote_revision: Optional[bool] = None
+    supports_idempotency: Optional[bool] = None
+
+
+class ChallongeResolveRequest(BaseModel):
+    provider_account_id: str = Field(min_length=1, max_length=100)
+    identifier: str = Field(min_length=1, max_length=500)
+    subdomain: Optional[str] = Field(default=None, max_length=100)
+
+
+class ChallongeResolveResponse(BaseModel):
+    provider_type: Literal["challonge"]
+    provider_account_id: str
+    provider_tournament_id: str
+    name: str
+    subdomain: Optional[str] = None
+    url_slug: Optional[str] = None
+    state: Optional[str] = None
+    format: Optional[str] = None
+    locator_key: str
+    tournament_slug: Optional[str] = None
+    cached: bool = False
+
+
+class ChallongeConnectionStateResponse(BaseModel):
+    enabled: bool
+    connected: bool
 
 
 class CreateActiveMatchRequest(BaseModel):
@@ -68,7 +159,11 @@ class ResolveConflictRequest(BaseModel):
 
 
 class AddTournamentRequest(BaseModel):
-    slug: str = Field(description="Start.gg tournament slug or full event URL", examples=["tournament/fnc-1st-startgg/event/street-fighter-6-singles"])
+    slug: Optional[str] = Field(default=None, description="Start.gg tournament slug or full event URL")
+    provider_type: Literal["startgg", "challonge"] = "startgg"
+    identifier: Optional[str] = Field(default=None, description="Provider tournament ID, slug, or URL")
+    provider_account_id: Optional[str] = Field(default=None, description="Account-scoped provider binding required for Challonge")
+    subdomain: Optional[str] = Field(default=None, description="Optional Challonge community/subdomain")
 
 
 class BotCommandRequest(BaseModel):
@@ -80,6 +175,12 @@ class CreatePlayerRequest(BaseModel):
     name: str = Field(default="", description="Player name override", examples=["AngryBird"])
     cfn: str = Field(default="", description="Player CFN ID", examples=["ANGRY_BIRD"])
     team: str = Field(default="", description="Player team tag", examples=["NASR"])
+
+
+class TournamentPlayerLinkRequest(BaseModel):
+    tournament_slug: str = Field(min_length=1, description="Locally tracked tournament slug")
+    entrant_id: str = Field(min_length=1, description="Provider entrant/participant ID within that tournament")
+    discord_id: str = Field(min_length=1, description="Existing aiTOB player Discord ID")
 
 
 class SaveOverlayRequest(BaseModel):
@@ -168,6 +269,10 @@ class PatchSettingsRequest(BaseModel):
 
 class PatchEnvRequest(BaseModel):
     STARTGG_API_TOKEN: Optional[str] = Field(default=None, description="Start.gg GraphQL API Bearer Token")
+    CHALLONGE_API_KEY: Optional[str] = Field(default=None, description="Challonge v1 API key used with v2.1 headers")
+    CHALLONGE_OAUTH_CLIENT_ID: Optional[str] = Field(default=None, description="Challonge OAuth application client ID")
+    CHALLONGE_OAUTH_CLIENT_SECRET: Optional[str] = Field(default=None, description="Challonge OAuth application client secret")
+    CHALLONGE_OAUTH_REDIRECT_URI: Optional[str] = Field(default=None, description="Exact HTTPS callback URL configured in Challonge")
     MATCH_CALL_CHANNEL_ID: Optional[str] = Field(default=None, description="Discord channel ID for bracket callouts")
     STARTGG_CLIENT_ID: Optional[str] = Field(default=None, description="Start.gg OAuth client identifier")
     STARTGG_CLIENT_SECRET: Optional[str] = Field(default=None, description="Start.gg OAuth client secret (required for the OAuth callback to exchange tokens)")
@@ -177,6 +282,59 @@ class PatchEnvRequest(BaseModel):
     AI_MODEL: Optional[str] = Field(default=None, description="Exact LLM model slug to run")
     GEMINI_API_KEY: Optional[str] = Field(default=None, description="Direct API key override for Google Gemini client")
     CLOUDINARY_URL: Optional[str] = Field(default=None, description="Cloudinary URL (cloudinary://key:secret@cloud) for broadcast avatar hosting. If unset, avatars save locally under /static.")
+
+
+class AIServiceConfigRequest(BaseModel):
+    provider_type: Optional[Literal["gemini", "openai"]] = None
+    model: Optional[str] = Field(default=None, min_length=1, max_length=160)
+    mode: Optional[Literal["disabled", "read_only", "propose_only"]] = None
+    request_limit: Optional[int] = Field(default=None, ge=1, le=10_000)
+    token_limit: Optional[int] = Field(default=None, ge=256, le=20_000_000)
+    context_char_limit: Optional[int] = Field(default=None, ge=512, le=100_000)
+    response_char_limit: Optional[int] = Field(default=None, ge=128, le=20_000)
+    request_timeout_seconds: Optional[int] = Field(default=None, ge=3, le=120)
+    policy_version: Optional[str] = Field(default=None, min_length=1, max_length=120)
+
+
+class AIServiceSecretRequest(BaseModel):
+    api_key: str = Field(min_length=1, max_length=10_000)
+
+
+class AIAssistantRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=2_000)
+
+
+class IntegrationAccountRequest(BaseModel):
+    provider_type: str = Field(pattern="^(discord|challonge)$")
+    external_account_id: str = Field(min_length=1, max_length=200)
+    display_name: str = Field(min_length=1, max_length=200)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class IntegrationCredentialRequest(BaseModel):
+    secret_type: str = Field(pattern="^(bot_token|api_key|access_token|refresh_token)$")
+    secret: str = Field(min_length=1)
+
+
+class IntegrationDestinationRequest(BaseModel):
+    destination_type: str = Field(pattern="^(match_call_channel)$")
+    external_id: str = Field(min_length=1, max_length=200)
+    display_name: str = Field(default="", max_length=200)
+
+
+class IntegrationOAuthApplicationRequest(BaseModel):
+    provider_type: str = Field(pattern="^challonge$")
+    client_id: str = Field(min_length=1, max_length=500)
+    redirect_uri: str = Field(min_length=8, max_length=1000)
+    client_secret: str = Field(min_length=1)
+
+
+class ProviderIdentityLinkRequest(BaseModel):
+    provider_type: str = Field(pattern="^(challonge|startgg)$")
+    tournament_slug: str = Field(min_length=1, max_length=300)
+    provider_participant_id: Optional[str] = Field(default=None, max_length=200)
+    provider_entrant_id: str = Field(min_length=1, max_length=200)
+    discord_user_id: str = Field(min_length=1, max_length=200)
 
 
 class CreatePlannedStreamRequest(BaseModel):
@@ -195,6 +353,12 @@ class PlannedStreamsResponse(BaseModel):
 
 
 class PatchTournamentSettingsRequest(BaseModel):
+    accent_color: Optional[str] = Field(
+        default=None,
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        description="Tournament-scoped Hub accent colour, in #RRGGBB form.",
+        examples=["#60A5FA"],
+    )
     dq_timer_seconds: Optional[int] = Field(default=None, description="Number of seconds players have to check in", examples=[600])
     auto_dq_enabled: Optional[bool] = Field(default=None, description="Whether players are auto-DQ'd if timer expires", examples=[True])
     bot_manage_limit: Optional[str] = Field(default=None, description="Which pools or segments are managed by the AI referee", examples=["top8"])
@@ -214,6 +378,10 @@ class PatchTournamentSettingsRequest(BaseModel):
         description="When uncompleted matches drop to this number or fewer, dispatcher hands off to TO (typically 8 for Top 8).",
         examples=[8],
     )
+    auto_dispatch_on_stream: Optional[bool] = Field(
+        default=None,
+        description="Allow automatic Calls for on-stream matches. Off by default so featured matches stay under TO control.",
+    )
     ignore_activity_guard: Optional[bool] = Field(
         default=None,
         description=(
@@ -231,6 +399,15 @@ class PatchTournamentSettingsRequest(BaseModel):
         ),
         examples=["discord", "startgg"],
     )
+    challonge_sync_mode: Optional[str] = Field(
+        default=None,
+        description="Challonge synchronization policy: economy (manual plus post-score batch) or live (periodic).",
+        examples=["economy", "live"],
+    )
+    economy_sync_on_stale_open: Optional[bool] = Field(
+        default=None,
+        description="In Economy mode, permit one background Challonge refresh when a stale dashboard opens.",
+    )
 
     @field_validator("check_in_source")
     @classmethod
@@ -239,9 +416,36 @@ class PatchTournamentSettingsRequest(BaseModel):
             raise ValueError("check_in_source must be 'discord' or 'startgg'")
         return v
 
+    @field_validator("challonge_sync_mode")
+    @classmethod
+    def _validate_challonge_sync_mode(cls, v):
+        if v is not None and v not in ("economy", "live"):
+            raise ValueError("challonge_sync_mode must be 'economy' or 'live'")
+        return v
+
 
 class DispatcherMasterRequest(BaseModel):
     enabled: bool = Field(description="Flip the GLOBAL kill switch for the auto-dispatcher.")
+
+
+class ChallongeStateRepairDryRunRequest(BaseModel):
+    """Immutable provider evidence supplied by a prior, reviewed snapshot."""
+    snapshot_id: str = Field(min_length=1)
+    snapshot_observed_at: str = Field(min_length=1)
+    provider_states: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+
+
+class CreateActionProposalRequest(BaseModel):
+    tournament_slug: str = Field(min_length=1, max_length=300)
+    action_type: Literal["call", "announcement_draft"]
+    match_id: Optional[str] = Field(default=None, max_length=300)
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    reason: str = Field(min_length=1, max_length=1000)
+    expires_in_seconds: int = Field(default=900, ge=60, le=86_400)
+
+
+class RejectActionProposalRequest(BaseModel):
+    reason: str = Field(default="Rejected by organizer", min_length=1, max_length=1000)
 
 
 # ── Response Schemas ───────────────────────────────────────────────────────
@@ -256,8 +460,53 @@ class ErrorResponse(BaseModel):
     message: str = Field(description="Detailed description of the error", examples=["Authorization header is invalid or expired."])
 
 
+class ProviderStateAxisResponse(BaseModel):
+    """Provider facts, distinct from Hub workflow and synchronization health."""
+
+    raw: Optional[str] = None
+    normalized: Optional[str] = None
+
+
+class MatchStateAxesResponse(BaseModel):
+    provider: ProviderStateAxisResponse
+    hub_status: Optional[str] = None
+    sync_status: Optional[str] = None
+
+
+class DiscordWorkflowDisplayResponse(BaseModel):
+    """Persisted Discord facts only; no inferred delivery status is exposed."""
+
+    call_sent: bool = False
+    call_message_id: Optional[str] = None
+    thread_id: Optional[str] = None
+    called_at: Optional[str] = None
+    player1_ready_at: Optional[str] = None
+    player2_ready_at: Optional[str] = None
+    attendance_deadline: Optional[str] = None
+
+
+class MatchEligibilityResponse(BaseModel):
+    two_sided: bool
+    actionable: bool
+    reason: Optional[str] = None
+
+
+class ActiveMatchDisplayResponse(BaseModel):
+    """Additive display envelope; legacy match fields pass through unchanged."""
+
+    model_config = ConfigDict(extra="allow")
+
+    v2_available: bool = False
+    legacy_status: Optional[str] = None
+    state_axes: Optional[MatchStateAxesResponse] = None
+    discord: Optional[DiscordWorkflowDisplayResponse] = None
+    eligibility: Optional[MatchEligibilityResponse] = None
+    provider_diagnostics: Optional[Dict[str, Any]] = None
+    progression: Optional[Dict[str, Any]] = None
+
+
 class ActiveMatchesResponse(BaseModel):
-    matches: List[Dict[str, Any]] = Field(description="Array of all active matches currently tracked")
+    matches: List[ActiveMatchDisplayResponse] = Field(description="Array of all active matches currently tracked")
 
 
 class ConflictsResponse(BaseModel):
@@ -270,4 +519,3 @@ class TournamentsResponse(BaseModel):
 
 class BotFeedResponse(BaseModel):
     feed: List[Dict[str, Any]] = Field(description="Collection of recently logged bot actions and events")
-

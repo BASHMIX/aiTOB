@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { useHubSocket } from '@/hooks/useHubSocket';
 
+const ORGANIZER_ASSISTANT_HISTORY_KEY = 'organizer_assistant_chat_v2';
+
 export function BotFeed() {
   const [feed, setFeed] = useState<any[]>([]);
   const [cmdInput, setCmdInput] = useState('');
@@ -11,12 +13,12 @@ export function BotFeed() {
 
   // Chat message history loaded from localStorage
   const [chatMessages, setChatMessages] = useState<any[]>(() => {
-    const saved = localStorage.getItem('hub_agent_chat');
+    const saved = localStorage.getItem(ORGANIZER_ASSISTANT_HISTORY_KEY);
     return saved ? JSON.parse(saved) : [
       { 
         id: 'welcome', 
         sender: 'agent', 
-        text: 'Hello! I am your AI Hub Assistant. I can help you coordinate matches, disqualify players, force scores, reopen matches, or make public announcements. What would you like to do?', 
+        text: 'Hello! I am your AI Organizer Assistant. I can explain the current tournament state, identify what needs attention, and suggest the safe next action. I do not execute match, score, DQ, station, or Discord changes.',
         timestamp: new Date().toISOString() 
       }
     ];
@@ -36,7 +38,7 @@ export function BotFeed() {
 
   // Save chat to localStorage whenever it changes
   useEffect(() => {
-    localStorage.setItem('hub_agent_chat', JSON.stringify(chatMessages));
+    localStorage.setItem(ORGANIZER_ASSISTANT_HISTORY_KEY, JSON.stringify(chatMessages));
   }, [chatMessages]);
 
   // Initial load
@@ -138,7 +140,7 @@ export function BotFeed() {
       { 
         id: 'welcome', 
         sender: 'agent', 
-        text: 'Hello! Conversation reset. What would you like to do next?', 
+        text: 'Conversation reset. Ask me about the current tournament state or the next safe action.',
         timestamp: new Date().toISOString() 
       }
     ]);
@@ -298,22 +300,22 @@ export function BotFeed() {
                     🔍 Who is currently playing?
                   </button>
                   <button 
-                    onClick={() => handleQuickCommand('Announce that top 8 begins in 10 minutes')}
+                    onClick={() => handleQuickCommand('What should I check before Top 8 begins?')}
                     className="text-[10px] bg-white/5 border border-white/10 hover:border-accentYellow/30 rounded px-2.5 py-1 text-left text-gray-300 hover:text-white transition-colors"
                   >
-                    📢 Announce top 8 starts in 10m
+                    ✅ Top 8 readiness checklist
                   </button>
                   <button 
-                    onClick={() => handleQuickCommand('reopen match 12345')}
+                    onClick={() => handleQuickCommand('Why is match 12345 not eligible to start?')}
                     className="text-[10px] bg-white/5 border border-white/10 hover:border-accentYellow/30 rounded px-2.5 py-1 text-left text-gray-300 hover:text-white transition-colors"
                   >
-                    ⚙️ Reopen match [ID]
+                    🔎 Why is match [ID] blocked?
                   </button>
                   <button 
-                    onClick={() => handleQuickCommand('disqualify p1 in match 12345')}
+                    onClick={() => handleQuickCommand('What requires my attention right now?')}
                     className="text-[10px] bg-white/5 border border-white/10 hover:border-accentYellow/30 rounded px-2.5 py-1 text-left text-gray-300 hover:text-white transition-colors"
                   >
-                    🚫 Disqualify p1 in match [ID]
+                    ⚠️ What needs attention?
                   </button>
                 </div>
               </div>
@@ -357,7 +359,7 @@ export function BotFeed() {
           className="flex-1 bg-black/45 border border-white/10 rounded px-2.5 py-1.5 text-xs text-white focus:border-accentYellow/50 focus:ring-1 focus:ring-accentYellow/20 outline-none transition-colors" 
           placeholder={
             activeTab === 'chat'
-              ? "Command the AI organizer (e.g. reopen set 123)..."
+              ? "Ask about tournament state or the next safe action..."
               : "Command the bot (e.g. call_match 10299)..."
           }
           value={cmdInput}

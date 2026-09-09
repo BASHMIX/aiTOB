@@ -4,11 +4,13 @@ import axios from 'axios';
 import { useHubStore } from '@/store/useHubStore';
 
 export function LoginPage() {
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [totpCode, setTotpCode] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const navigate = useNavigate();
-  const setHubPassword = useHubStore(state => state.setHubPassword);
+  const setSession = useHubStore(state => state.setSession);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -16,17 +18,11 @@ export function LoginPage() {
     setIsLoading(true);
 
     try {
-      // Test the password against the verify endpoint
-      await axios.post('/api/auth/verify', {}, {
-        headers: { 'Authorization': `Bearer ${password}` }
-      });
-
-      
-      // If success, save to store (which updates localStorage)
-      setHubPassword(password);
+      const response = await axios.post('/api/session/login', { email, password, totp_code: totpCode.trim() || undefined });
+      setSession(response.data);
       navigate('/admin/hub');
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Invalid password. Please try again.');
+      setError(err.response?.data?.message || err.response?.data?.detail || 'Sign-in failed. Check your credentials and authenticator code.');
     } finally {
       setIsLoading(false);
     }
@@ -50,15 +46,29 @@ export function LoginPage() {
               <span className="text-3xl">🛡️</span>
             </div>
             <h1 className="text-2xl font-bold text-white tracking-tight">Tournament Hub</h1>
-            <p className="text-textDim text-sm mt-1 italic">Enter Admin Password</p>
+            <p className="text-textDim text-sm mt-1 italic">Sign in to your workspace</p>
           </div>
 
           <form onSubmit={handleLogin} className="space-y-6">
             <div className="space-y-2">
-              <label className="text-xs font-mono text-gray-400 uppercase tracking-widest ml-1">Password</label>
+              <label htmlFor="login-email" className="text-xs font-mono text-gray-400 uppercase tracking-widest ml-1">Email</label>
               <input
-                type="password"
+                id="login-email"
+                autoComplete="username"
+                type="email"
                 autoFocus
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className={`w-full bg-appDark border ${error ? 'border-statusRed' : 'border-white/10'} rounded-xl px-5 py-3 text-white outline-none focus:border-accentYellow transition-all shadow-inner`}
+                placeholder="owner@example.com"
+              />
+            </div>
+            <div className="space-y-2">
+              <label htmlFor="login-password" className="text-xs font-mono text-gray-400 uppercase tracking-widest ml-1">Password</label>
+              <input
+                id="login-password"
+                autoComplete="current-password"
+                type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className={`w-full bg-appDark border ${error ? 'border-statusRed' : 'border-white/10'} rounded-xl px-5 py-3 text-white outline-none focus:border-accentYellow transition-all shadow-inner`}
@@ -71,9 +81,17 @@ export function LoginPage() {
               )}
             </div>
 
+            <div className="space-y-2">
+              <label htmlFor="login-totp" className="text-xs font-mono text-gray-400 uppercase tracking-widest ml-1">Authenticator or recovery code</label>
+              <input id="login-totp" type="text" autoComplete="one-time-code" maxLength={128}
+                value={totpCode} onChange={e => setTotpCode(e.target.value)}
+                className="w-full bg-appDark border border-white/10 rounded-xl px-5 py-3 text-white outline-none focus:border-accentYellow"
+                placeholder="Required when two-factor authentication is enabled" />
+            </div>
+
             <button
               type="submit"
-              disabled={isLoading || !password}
+              disabled={isLoading || !email || !password}
               className="w-full bg-accentYellow hover:bg-yellow-500 disabled:opacity-50 disabled:cursor-not-allowed text-black font-bold py-3.5 rounded-xl transition-all shadow-lg shadow-accentYellow/20 active:scale-95 flex items-center justify-center gap-2"
             >
               {isLoading ? (
@@ -97,7 +115,7 @@ export function LoginPage() {
         </div>
         
         <p className="text-center text-gray-500 text-[10px] mt-6 px-10 leading-relaxed italic">
-          If you don't know the password, check your <span className="text-accentYellow">.env</span> file for <span className="font-bold">HUB_PASSWORD</span>. Default is <span className="font-bold">admin</span>.
+          Your owner account is initialized by the deployment administrator. There is no public registration.
         </p>
       </div>
     </div>

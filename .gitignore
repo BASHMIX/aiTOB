@@ -113,6 +113,7 @@ celerybeat.pid
 
 # Environments
 .env
+.env.production
 .venv
 env/
 venv/
@@ -161,6 +162,11 @@ frontend-react/node_modules/
 *.db
 backend/core/database.sqlite
 backend/api/tournament.db
+
+# Isolated acceptance runtime (the example template remains tracked).
+.env.acceptance
+.acceptance/
+.migration-backups/
 
 # Logs
 *.log

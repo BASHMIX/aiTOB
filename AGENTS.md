@@ -86,5 +86,5 @@ Project uses [Spec Kit](https://opencode.ai) with git extension:
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the implementation plan:
-`specs/001-define-tournament-bot/plan.md`
+`specs/003-saas-workspaces/plan.md`
 <!-- SPECKIT END -->

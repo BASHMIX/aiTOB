@@ -1,9 +1,15 @@
 import axios from 'axios';
 import { useState } from 'react';
 import { StationSettingsModal } from './StationSettingsModal';
+import { useHubStore } from '@/store/useHubStore';
+import { tournamentAccent, withAccentAlpha } from './tournamentAccent';
 
 export function StationCard({ station, onReload }: { station: any, onReload: () => void }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const { matches, tournaments } = useHubStore();
+  const owningMatch = matches.find((match) => match.station_id === station.id && (match.status === 'called' || match.status === 'in_progress'));
+  const ownerTournament = owningMatch ? tournaments.find((tournament) => tournament.slug === owningMatch.tournament_slug) : undefined;
+  const accent = ownerTournament ? tournamentAccent(ownerTournament) : undefined;
   
   const removeStation = async () => {
     if (!confirm('Remove station?')) return;
@@ -83,17 +89,23 @@ export function StationCard({ station, onReload }: { station: any, onReload: () 
     await axios.patch(`/api/stations/${station.id}`, { name: newName.trim() });
   };
 
-  const copyLink = () => {
-    navigator.clipboard.writeText(`${location.origin}/obs?slot=${station.id}`);
-    alert('OBS link copied!');
+  const copyLink = async () => {
+    try {
+      const response = await axios.post(`/api/stations/${station.id}/overlay-access`);
+      await navigator.clipboard.writeText(`${location.origin}${response.data.url}`);
+      alert('A new revocable OBS link was copied. The previous link is now invalid.');
+    } catch {
+      alert('The OBS link could not be created.');
+    }
   };
 
   return (
-    <div id={`station-${station.id}`} className="border border-white/20 rounded-lg p-3 bg-appDark">
+    <div id={`station-${station.id}`} style={accent ? { borderColor: withAccentAlpha(accent, 0.55) } : undefined} className="border border-white/20 rounded-lg p-3 bg-appDark">
       <div className="flex justify-between items-center mb-3 pb-2 border-b border-white/10">
         <div className="flex items-center gap-2">
           <span className="text-white">📺</span>
           <h3 
+            style={accent ? { color: accent } : undefined}
             className="font-bold text-white focus:outline-none focus:border-b" 
             contentEditable 
             suppressContentEditableWarning

@@ -17,38 +17,72 @@ sys.path.append(os.path.join(root, "backend"))
 from core.database import init_db, create_or_update_player, get_player
 from bot.registration import registration_manager, finalize_verification
 from bot.messages import get_msg
-from bot.agent.graph import app, process_message
-from bot.agent.hub_agent import build_hub_agent, build_hub_agent_async
+from bot.agent.graph import app
+from bot.runtime_logging import console_message, ready_message
 
 load_dotenv()
 
-TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-# Note: Other values will be fetched dynamically from the DB via get_connection or the API_BASE_URL env fallback.
+TOKEN = None
+ACTIVE_DISCORD_ACCOUNT_ID = None
+# Credentials are fetched from the encrypted account store at process startup.
 API_BASE_URL_ENV = os.getenv("API_BASE_URL", "http://localhost:8000")
 
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+from backend.core.runtime_tasks import RuntimeTasks
+_runtime_tasks = RuntimeTasks()
+_hub_listener_task = None
+
+
+class TournamentBot(commands.Bot):
+    async def close(self):
+        from core.database import set_hub_command_listener
+        set_hub_command_listener(None)
+        loops = (auto_dispatch_pool_matches, drain_hub_commands, drain_workflow_outbox)
+        pending = [loop.get_task() for loop in loops if loop.get_task() is not None]
+        for loop in loops:
+            loop.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        await _runtime_tasks.close()
+        await super().close()
+
+
+bot = TournamentBot(command_prefix="!", intents=intents)
+
+# Result Claims are not available yet. A Discord message may never be treated as
+# an authoritative score, regardless of whether it contains a strict command or
+# an LLM can parse it. The organizer's authenticated Hub controls remain the
+# only supported result entry path until that durable review workflow exists.
+PLAYER_RESULT_ORGANIZER_MESSAGE = (
+    "Match results are confirmed by the tournament organizer in aiTOB. "
+    "Please contact the organizer with the score; this message does not submit or save a result."
+)
+AI_RESULT_MUTATION_BLOCKED_MESSAGE = (
+    "AI cannot submit or complete match results. Use the authorized organizer controls in aiTOB."
+)
+AI_DQ_MUTATION_BLOCKED_MESSAGE = (
+    "AI cannot disqualify players. Use the authorized organizer DQ control for one player."
+)
+AI_ANNOUNCEMENT_MUTATION_BLOCKED_MESSAGE = (
+    "AI cannot send announcements. Create an organizer-approved announcement proposal instead."
+)
+AI_REOPEN_MUTATION_BLOCKED_MESSAGE = (
+    "AI cannot reopen matches. Use the authorized organizer controls in aiTOB."
+)
 
 @bot.event
 async def on_ready():
-    global hub_agent
+    global _hub_listener_task
     await init_db()
-    print(f"\u2705 Bot is online and connected to Discord as {bot.user}")
+    print(ready_message())
     
     # Start background WebSocket listener for real-time Hub commands & log streaming
-    asyncio.create_task(bot_ws_listener())
+    if _hub_listener_task is None or _hub_listener_task.done():
+        _hub_listener_task = _runtime_tasks.start(bot_ws_listener())
     
-    # If hub_agent wasn't built at import time (no env key), build it now from DB
-    if hub_agent is None:
-        try:
-            hub_agent = await build_hub_agent_async(hub_tools)
-            print("[BOT] Hub agent initialized from DB API key")
-        except Exception as e:
-            print(f"[BOT] Warning: Hub agent could not be initialized: {e}")
-            
     if not auto_dispatch_pool_matches.is_running():
         auto_dispatch_pool_matches.start()
 
@@ -59,8 +93,18 @@ async def on_ready():
     set_hub_command_listener(_on_hub_command_enqueued)
     if not drain_hub_commands.is_running():
         drain_hub_commands.start()
+    # Phase 7A: the durable local-effect dispatcher is deliberately opt-in.
+    # With its flag disabled the legacy Start.gg bot path remains untouched.
+    from backend.core.provider_feature_flags import get_provider_feature_flags
+    if get_provider_feature_flags().challonge_local_workflow_enabled and not drain_workflow_outbox.is_running():
+        drain_workflow_outbox.start()
+    if get_provider_feature_flags().challonge_local_workflow_enabled:
+        from backend.bot.match_threads import restore_ready_check_views
+        restored_ready_views = await restore_ready_check_views(bot)
+        if restored_ready_views:
+            await ws_add_bot_feed(f"Restored {restored_ready_views} persisted Challonge Ready view(s)", "info")
     # Drain anything queued before the bot came online.
-    asyncio.create_task(run_drain())
+    _runtime_tasks.start(run_drain())
 
     # Sync the slash command tree. Per-guild sync propagates instantly;
     # global sync can take up to an hour. We sync to every guild the bot is
@@ -775,47 +819,12 @@ async def _llm_rank_entrants(discord_user: discord.User | discord.Member,
 
 
 async def _verify_with_disambiguation(interaction: discord.Interaction):
-    """No-arg /verify path: LLM picks top-3 likely entrants, presents buttons."""
-    candidates = await _collect_candidate_entrants_async()
-    if not candidates:
-        await interaction.response.send_message(
-            "I don't see any tournaments with entrants tracked yet. Please run "
-            "`/verify profile:<your start.gg URL>` to link manually.",
-            ephemeral=True,
-        )
-        return
-
-    # Defer — the LLM call can take a couple seconds.
-    await interaction.response.defer(ephemeral=True, thinking=True)
-    top = await _llm_rank_entrants(interaction.user, candidates)
-
-    if not top:
-        await interaction.followup.send(
-            "I couldn't find a likely match for your Discord identity in the entrant list. "
-            "Run `/verify profile:<your start.gg URL>` to link manually.",
-            ephemeral=True,
-        )
-        return
-
-    embed = discord.Embed(
-        title="🔗 Is this you?",
-        description=(
-            "I found these likely matches in the tournament entrant list. Click "
-            "the right one to start verification, or **None of these** to enter "
-            "your start.gg URL manually."
-        ),
-        color=discord.Color.blue(),
+    """Reject implicit name matching; identity links require an explicit proof."""
+    await interaction.response.send_message(
+        "For safety, aiTOB does not match Discord identities by name. Use "
+        "`/verify profile:<your start.gg URL>` or an organizer-confirmed entrant link.",
+        ephemeral=True,
     )
-    for cand in top:
-        prefix_disp = f"{cand['prefix']} | " if cand.get("prefix") else ""
-        embed.add_field(
-            name=f"{prefix_disp}{cand['gamerTag']}",
-            value=f"start.gg/user/{cand['slug']} — *{cand.get('tournament') or 'tournament'}*",
-            inline=False,
-        )
-
-    view = _VerifyPickerView(top, interaction.user.id)
-    await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
 @tasks.loop(seconds=10.0)
 async def update_heartbeat():
@@ -824,111 +833,16 @@ async def update_heartbeat():
     await set_setting("bot_last_seen", str(time.time()))
 
 
-# ── Auto-Dispatcher ─────────────────────────────────────────────────────
-# Pops the next bot-managed, fully-resolved match off the queue and queues a
-# `call_match` hub command for it. Same code path as the manual "Call Match"
-# button — only difference is who pressed it. Designed so the TO can flip
-# the master switch off and resume manual control at any time.
-#
-# Safety rails:
-#   • Master switch in global_settings.auto_dispatch_master_switch ("on"/"off")
-#   • Per-tournament arming via tournaments.auto_dispatch_enabled
-#   • Concurrency cap per tournament (auto_dispatch_concurrency)
-#   • Hands back to TO when remaining matches ≤ stop_at threshold (Top 8)
-#   • Skips planned-stream sets (those wait for a free stream station)
-#   • Skips matches with TBD entrants (upstream bracket unresolved)
-#   • Every dispatch and every gate logs to bot_feed so the TO can audit
-
-_DISPATCH_LAST_TICK: dict[tuple[str, str], float] = {}  # per-(tournament, event) cooldown
-_DISPATCH_COOLDOWN_SECONDS = 30.0                        # minimum gap between dispatches per event
-
 @tasks.loop(seconds=20.0)
 async def auto_dispatch_pool_matches():
-    import time
-    from core.database import (
-        get_setting, get_dispatch_eligible_events,
-        count_active_dispatched, count_remaining_event_matches,
-        get_dispatch_candidates, add_hub_command, add_bot_feed,
-        resolve_dispatch_budget,
-    )
+    """Run deterministic policy/service work; no AI, provider, or station calls."""
+    from backend.core.auto_dispatcher import AutoDispatcherService
+    from backend.core.database import set_setting
+    from datetime import UTC, datetime
 
-    # Master kill switch — overrides every per-tournament setting.
-    master = (await get_setting("auto_dispatch_master_switch", "off") or "off").lower()
-    if master != "on":
-        return
-
-    # Option A — per-event budget: each (tournament, event) is its own queue, so
-    # a multi-game tournament never shares concurrency or Top-N across games.
-    events = await get_dispatch_eligible_events()
-    now = time.time()
-
-    for t in events:
-        slug = t["slug"]
-        event_id = t.get("event_id") or ""
-        event_name = t.get("event_name") or ""
-        # A readable tag for the bot feed — game name when known, else a short id.
-        evt_tag = event_name or (f"event {event_id}" if event_id else "")
-        # Read fresh from the DB each tick (no cache) and honor an explicit 0 —
-        # `int(value or 8)` was treating a TO-set stop_at=0 as the default 8.
-        concurrency, stop_at = resolve_dispatch_budget(t)
-
-        # Cooldown — prevents back-to-back dispatches from one tick if the loop
-        # interval is reduced. The 30s gap also gives players time to react.
-        last = _DISPATCH_LAST_TICK.get((slug, event_id), 0.0)
-        if now - last < _DISPATCH_COOLDOWN_SECONDS:
-            continue
-
-        # Top-N changeover: when fewer than (stop_at) uncompleted matches remain
-        # IN THIS EVENT, we treat its bracket as "in TO territory" and stop calling.
-        remaining = await count_remaining_event_matches(slug, event_id)
-        if remaining <= stop_at:
-            # One-shot signal so the operator sees it once, not every tick.
-            key = f"_dispatcher_stop_signaled_{slug}_{event_id}"
-            if not await get_setting(key):
-                from core.database import set_setting as _set
-                await _set(key, "1")
-                label = f"{t['name']}{(' / ' + evt_tag) if evt_tag else ''}"
-                await add_bot_feed(
-                    f"🤖 Auto-dispatcher stopped for {label}: {remaining} matches remain "
-                    f"(threshold ≤ {stop_at}). TO takes over from here.",
-                    "info"
-                )
-            continue
-
-        # Compute open slots for THIS event.
-        in_flight = await count_active_dispatched(slug, event_id)
-        slots = concurrency - in_flight
-        if slots <= 0:
-            continue
-
-        candidates = await get_dispatch_candidates(slug, limit=slots, event_id=event_id)
-        if not candidates:
-            continue
-
-        dispatched_any = False
-        for m in candidates:
-            set_id = m["set_id"]
-
-            # The dispatcher only moves a match not_started → called (it opens the
-            # Discord thread for check-in). Stream matches flow through the SAME
-            # path — no station is bound here. Station binding is the `on_stream`
-            # overlay, realized strictly at the called → in_progress transition
-            # (see match_state.transition_match), per workflows.json.
-            stream_tag = " 📺" if m.get("is_stream_match") else ""
-            evt = f" [{evt_tag}]" if evt_tag else ""
-            await add_hub_command(f"call_match {set_id}")
-            # Routine dispatch traffic: terminal-only (DEBUG) to keep the Hub UI feed clean.
-            # Meaningful signals (stopped/threshold, master switch) remain in bot_feed.
-            logger.debug(
-                "Auto-dispatched%s%s: %s vs %s (%s)",
-                evt, stream_tag,
-                m.get("p1_name"), m.get("p2_name"),
-                m.get("round_name") or m.get("phase_group") or "pool",
-            )
-            dispatched_any = True
-
-        if dispatched_any:
-            _DISPATCH_LAST_TICK[(slug, event_id)] = now
+    # Lets the Hub distinguish a saved ON setting from a running dispatcher.
+    await set_setting("auto_dispatcher_last_seen", datetime.now(UTC).isoformat())
+    await AutoDispatcherService().run_once()
 
 
 # ── Hub-command drain (event-driven outbox) ──────────────────────────────
@@ -947,10 +861,11 @@ async def run_drain():
     """Execute every pending hub command once, in order. Safe to call from any
     trigger (WS nudge, in-process listener, fallback sweeper) — the lock serializes
     and 'processing' claims guard against double execution."""
-    from core.database import get_pending_hub_commands, update_hub_command_status
+    from core.database import claim_pending_hub_commands, finish_hub_command
+    lease_owner = f"discord-bot:{os.getpid()}"
     async with _drain_lock:
         try:
-            pending = await get_pending_hub_commands()
+            pending = await claim_pending_hub_commands(lease_owner)
         except Exception as e:
             print(f"[BOT] drain fetch failed: {e}")
             return
@@ -958,15 +873,14 @@ async def run_drain():
             cmd_id = row.get("id")
             cmd_text = row.get("command_text")
             if not cmd_text:
-                await update_hub_command_status(cmd_id, "done")
+                await finish_hub_command(cmd_id, lease_owner, "done")
                 continue
-            await update_hub_command_status(cmd_id, "processing")  # claim
             try:
-                await handle_ws_command(cmd_text)
-                await update_hub_command_status(cmd_id, "done")
+                await handle_ws_command(cmd_text, workspace_id=row.get("workspace_id"))
+                await finish_hub_command(cmd_id, lease_owner, "done")
             except Exception as e:
-                await update_hub_command_status(cmd_id, "error")
-                print(f"[BOT] hub command {cmd_id} ('{cmd_text}') failed: {e}")
+                await finish_hub_command(cmd_id, lease_owner, "error", "Command execution failed")
+                print(f"[BOT] hub command {cmd_id} failed")
 
 
 @tasks.loop(seconds=60.0)
@@ -976,11 +890,87 @@ async def drain_hub_commands():
     await run_drain()
 
 
+async def _dispatch_workflow_outbox_event(event: dict):
+    """Bot-owned external effects. The worker marks completion only after this returns."""
+    from backend.core.database import get_active_match, get_tournament
+
+    event_type = event["event_type"]
+    # Tournament-wide announcement drafts are intentionally delivered by the
+    # durable outbox, never by an Assistant/tool call.  They may not have a
+    # concrete match row, so handle them before the match-specific paths.
+    if event_type == "discord_announcement":
+        payload = event.get("payload") or {}
+        tournament = await get_tournament(
+            str(payload.get("tournament_slug") or ""), event.get("workspace_id")
+        )
+        account_id = (tournament or {}).get("discord_account_id")
+        if account_id and ACTIVE_DISCORD_ACCOUNT_ID and account_id != ACTIVE_DISCORD_ACCOUNT_ID:
+            raise RuntimeError("Workflow event belongs to a different Discord account.")
+        if not account_id:
+            raise RuntimeError("Tournament has no Discord account destination.")
+        from backend.core.integrations import get_destination
+        destination = await get_destination(account_id, "match_call_channel")
+        if not destination:
+            raise RuntimeError("Discord announcement destination is not configured.")
+        channel = bot.get_channel(int(destination["external_id"]))
+        if not channel:
+            raise RuntimeError("Discord announcement channel is unavailable.")
+        await channel.send(str(payload.get("text") or ""))
+        return
+
+    match = await get_active_match(event["match_id"], event.get("workspace_id"))
+    if not match:
+        return
+    tournament = await get_tournament(
+        match.get("tournament_slug") or "", match.get("workspace_id") or event.get("workspace_id")
+    )
+    account_id = (tournament or {}).get("discord_account_id")
+    if account_id and ACTIVE_DISCORD_ACCOUNT_ID and account_id != ACTIVE_DISCORD_ACCOUNT_ID:
+        # A separate bot process owns the other Discord account. Do not leak a
+        # destination across accounts; the durable outbox will wait safely.
+        raise RuntimeError("Workflow event belongs to a different Discord account.")
+    if event_type == "discord_call":
+        # A pre-existing thread is the durable idempotency proof after a restart.
+        if match.get("discord_thread_id"):
+            return
+        from backend.bot.match_threads import create_match_thread
+        await create_match_thread(
+            bot,
+            await get_tournament(match.get("tournament_slug") or "", match.get("workspace_id")),
+            match,
+        )
+        return
+    if event_type == "discord_ready" and match.get("discord_thread_id"):
+        thread = bot.get_channel(int(match["discord_thread_id"]))
+        if thread:
+            player = (event.get("payload") or {}).get("player", "player")
+            await thread.send(f"✅ {player.upper()} readiness recorded.")
+        return
+    if event_type in {"obs_match_started", "obs_station_assigned", "obs_match_complete"}:
+        # Overlay state is already durable in SQLite; notify the Hub/OBS bridge
+        # only after the outbox item has been claimed by this bot process.
+        await ws_add_bot_feed(f"Workflow effect applied: {event_type} for {event['match_id']}", "info")
+        return
+    if event_type == "discord_match_complete" and match.get("discord_thread_id"):
+        thread = bot.get_channel(int(match["discord_thread_id"]))
+        if thread:
+            await thread.send("✅ Match completion was verified by aiTOB.")
+
+
+@tasks.loop(seconds=5.0)
+async def drain_workflow_outbox():
+    """Retry local Discord/OBS effects without polling a tournament provider."""
+    from backend.core.workflow_outbox import WorkflowOutboxWorker
+
+    worker = WorkflowOutboxWorker(_dispatch_workflow_outbox_event)
+    await worker.run_once()
+
+
 def _on_hub_command_enqueued():
     """In-process listener: a command was just queued in the BOT process (dispatcher,
     transition_match). Drain immediately; the lock coalesces with any WS-nudged drain."""
     try:
-        asyncio.create_task(run_drain())
+        _runtime_tasks.start(run_drain())
     except RuntimeError:
         pass  # no running loop yet (import time) — the 60s sweeper will catch it
 
@@ -1066,8 +1056,8 @@ async def start_match(ctx, opponent: discord.Member):
     
     await thread.send(
         f"Match Started! {player1.mention} vs {player2.mention}\n"
-        "Please coordinate and play your match. Once finished, report the scores here (e.g., 'I won 2-0'). "
-        "The AI Organizer will automatically verify and record the result."
+        "Please coordinate and play your match. When it ends, contact the tournament organizer "
+        "with the result; aiTOB does not accept or submit player-reported scores in Discord yet."
     )
     await ctx.send(f"Match thread created: {thread.mention}")
 
@@ -1203,66 +1193,20 @@ async def workflow_validate(ctx, set_id: str):
 
 @bot.command()
 async def report(ctx, p1_score: int, p2_score: int):
-    """Report match scores in a thread. Usage: !report 2 0"""
-    from core.database import get_active_matches, update_active_match, add_bot_feed
-
-    if not isinstance(ctx.channel, discord.Thread):
-        await ctx.send("This command must be used inside a match thread.")
-        return
-
-    thread_id = str(ctx.channel.id)
-    all_matches = await get_active_matches()
-    match = next((m for m in all_matches if m.get("discord_thread_id") == thread_id), None)
-    if not match:
-        await ctx.send("No active match found for this thread.")
-        return
-
-    set_id = match["set_id"]
-    if p1_score == p2_score:
-        await ctx.send("Scores cannot be tied. Please report again.")
-        return
-
-    winner_key = "p1" if p1_score > p2_score else "p2"
-    loser_key = "p2" if winner_key == "p1" else "p1"
-    winner_id = match.get(f"{winner_key}_entrant_id")
-    if not winner_id:
-        await ctx.send("Winner entrant ID not found. Admin must report via the hub.")
-        return
-
-    await update_active_match(set_id, p1_score=p1_score, p2_score=p2_score)
-
-    from core.providers.registry import get_provider_for_tournament
-    from core.score_reporting import report_score_to_provider
-
-    provider = await get_provider_for_tournament(match.get('tournament_slug') or '')
-    result = await report_score_to_provider(
-        set_id=set_id,
-        winner_id=winner_id,
-        p1_id=match['p1_entrant_id'],
-        p2_id=match['p2_entrant_id'],
-        p1_score=p1_score,
-        p2_score=p2_score,
-        provider=provider
-    )
-    if not result.success:
-        await ctx.send(f"Failed to report scores: {result.error_message}")
-        return
-
-    await update_active_match(set_id, status="complete", station_id=None)
-    await add_bot_feed(f"📝 Match {set_id} reported via Discord: {p1_score}-{p2_score}", "info")
-    await ctx.send(f"✅ Score reported to provider: {p1_score}-{p2_score}")
-    await ctx.channel.edit(archived=True, locked=True)
+    """Explain that player score commands are disabled until Result Claims exist."""
+    await ctx.send(PLAYER_RESULT_ORGANIZER_MESSAGE)
 
 
 async def send_score_report_dms(bot, match):
     p1_discord = match.get("p1_discord")
     p2_discord = match.get("p2_discord")
+    workspace_id = match.get("workspace_id")
     if not p1_discord and match.get("p1_entrant_id"):
         from bot.match_threads import get_discord_id_from_startgg
-        p1_discord = await get_discord_id_from_startgg(match.get("p1_entrant_id"))
+        p1_discord = await get_discord_id_from_startgg(match.get("p1_entrant_id"), workspace_id)
     if not p2_discord and match.get("p2_entrant_id"):
         from bot.match_threads import get_discord_id_from_startgg
-        p2_discord = await get_discord_id_from_startgg(match.get("p2_entrant_id"))
+        p2_discord = await get_discord_id_from_startgg(match.get("p2_entrant_id"), workspace_id)
     p1_name = match.get("p1_name", "TBD")
     p2_name = match.get("p2_name", "TBD")
     set_id = match.get("set_id")
@@ -1270,8 +1214,12 @@ async def send_score_report_dms(bot, match):
         try:
             member = await bot.fetch_user(int(p1_discord))
             embed = discord.Embed(
-                title="Report Your Match Score",
-                description=f"Your match against **{p2_name}** is in progress!\n\nOnce completed, please reply to this DM with:\n`score <your_score> <opponent_score>`\n(e.g., `score 2 1` if you won 2-1).",
+                title="Match Result Confirmation",
+                description=(
+                    f"Your match against **{p2_name}** is in progress.\n\n"
+                    "When it ends, contact the tournament organizer with the result. "
+                    "aiTOB will not accept or submit a result from a player DM yet."
+                ),
                 color=discord.Color.blue()
             )
             await member.send(embed=embed)
@@ -1281,8 +1229,12 @@ async def send_score_report_dms(bot, match):
         try:
             member = await bot.fetch_user(int(p2_discord))
             embed = discord.Embed(
-                title="Report Your Match Score",
-                description=f"Your match against **{p1_name}** is in progress!\n\nOnce completed, please reply to this DM with:\n`score <your_score> <opponent_score>`\n(e.g., `score 2 1` if you won 2-1).",
+                title="Match Result Confirmation",
+                description=(
+                    f"Your match against **{p1_name}** is in progress.\n\n"
+                    "When it ends, contact the tournament organizer with the result. "
+                    "aiTOB will not accept or submit a result from a player DM yet."
+                ),
                 color=discord.Color.blue()
             )
             await member.send(embed=embed)
@@ -1291,148 +1243,17 @@ async def send_score_report_dms(bot, match):
 
 
 async def _llm_extract_dm_score(message_content: str, match: dict, discord_id: str) -> tuple[int, int] | None:
-    """Fallback NL parser: hand the DM to the existing structured-output LLM.
+    """Disabled pending durable Result Claims and organizer review.
 
-    Returns (score1, score2) from the reporting player's perspective, i.e.
-    score1 = how many games the SENDER won, score2 = opponent. Returns None
-    if the LLM can't parse a clear result.
-
-    Same Gemini extractor that handles thread chat — we just give it a tiny
-    one-message "history" with whose-is-who context so it can infer winner.
+    Kept as a compatibility stub so accidental callers cannot re-enable a
+    player-to-provider mutation by merely restoring a parsing prompt.
     """
-    try:
-        from bot.agent.graph import _get_llm
-        _, extractor = await _get_llm()
-    except Exception as e:
-        print(f"[BOT] LLM unavailable for DM score parsing: {e}")
-        return None
-
-    is_p1 = (str(match.get("p1_discord")) == discord_id)
-    sender_name = match["p1_name"] if is_p1 else match["p2_name"]
-    opponent_name = match["p2_name"] if is_p1 else match["p1_name"]
-
-    prompt = (
-        "Extract the match result from a single DM the reporting player just sent.\n\n"
-        f"Sender: {sender_name} (Discord ID: {discord_id})\n"
-        f"Opponent: {opponent_name}\n"
-        f"Message: \"{message_content}\"\n\n"
-        "Determine who won and the series score (e.g. 2-1, 3-0). "
-        "If the message clearly reports a result, set winner_discord_id to "
-        f"{discord_id} if the SENDER won, or to anything else (or null) if the opponent won.\n"
-        "Set conflict_detected=false unless the sender clearly disputes a prior result. "
-        "If the message is not a score report at all, leave winner_discord_id and score empty."
-    )
-    try:
-        result = extractor.invoke(prompt)
-    except Exception as e:
-        print(f"[BOT] LLM DM-extraction failed: {e}")
-        return None
-
-    if not result or not result.score or "-" not in result.score:
-        return None
-
-    try:
-        a, b = [int(x.strip()) for x in result.score.split("-", 1)]
-    except Exception:
-        return None
-    if a == b or max(a, b) > 9:
-        return None  # ties / nonsense
-
-    sender_won = (str(result.winner_discord_id) == discord_id)
-    # `score` is conventionally "winner-loser" — flip to sender-perspective.
-    if sender_won:
-        return (max(a, b), min(a, b))
-    else:
-        return (min(a, b), max(a, b))
+    return None
 
 
 async def handle_score_report_dm(message: discord.Message):
-    discord_id = str(message.author.id)
-    content = message.content.strip()
-    import re
-    from core.database import get_player_in_progress_match, update_active_match, get_tournament, add_bot_feed
-
-    match = await get_player_in_progress_match(discord_id)
-    if not match:
-        await message.channel.send("❌ No active, in-progress match found for you in this tournament.")
-        return
-
-    # Strict regex path — fast & deterministic. Try first.
-    match_obj = re.search(r'^score\s+(\d+)\s+(\d+)', content, re.IGNORECASE)
-    if match_obj:
-        score1 = int(match_obj.group(1))
-        score2 = int(match_obj.group(2))
-    else:
-        # Gap A: fall back to LLM extractor for natural language ("i won 2-1", "lost 0-2", etc).
-        extracted = await _llm_extract_dm_score(content, match, discord_id)
-        if not extracted:
-            await message.channel.send(
-                "❌ I couldn't read that as a score. Try either:\n"
-                "• `score 2 1` (your score first, opponent second), or\n"
-                "• plain English like `i won 2-1` / `lost 0-2`."
-            )
-            return
-        score1, score2 = extracted
-        await add_bot_feed(
-            f"🤖 LLM parsed DM score for {match.get('set_id')}: '{content}' → {score1}-{score2}",
-            "info",
-        )
-
-    set_id = match["set_id"]
-    is_p1 = (str(match.get("p1_discord")) == discord_id)
-    p1_score = score1 if is_p1 else score2
-    p2_score = score2 if is_p1 else score1
-    if p1_score == p2_score:
-        await message.channel.send("❌ Scores cannot be tied. Please report again.")
-        return
-    t = await get_tournament(match["tournament_slug"])
-    bot_manage_finish = t.get("bot_manage_finish", "off") if t else "off"
-    is_stream = match.get("is_stream_match", False)
-    if bot_manage_finish in ["on", "auto"] and not is_stream:
-        from core.providers.registry import get_provider_for_tournament
-        from core.score_reporting import report_score_to_provider
-        
-        provider = await get_provider_for_tournament(match.get('tournament_slug') or '')
-        winner_key = "p1" if p1_score > p2_score else "p2"
-        winner_id = match.get(f"{winner_key}_entrant_id")
-        
-        result = await report_score_to_provider(
-            set_id=set_id,
-            winner_id=winner_id,
-            p1_id=match['p1_entrant_id'],
-            p2_id=match['p2_entrant_id'],
-            p1_score=p1_score,
-            p2_score=p2_score,
-            provider=provider
-        )
-        if result.success:
-            await update_active_match(set_id, status="complete", p1_score=p1_score, p2_score=p2_score, station_id=None)
-            await add_bot_feed(f"🤖 Bot auto-finished match {set_id} ({match['p1_name']} {p1_score} - {p2_score} {match['p2_name']}) via player DM", "success")
-            await message.channel.send(f"✅ Match score reported and completed: {p1_score} - {p2_score}. Thanks!")
-            thread_id = match.get("discord_thread_id")
-            if thread_id:
-                try:
-                    thread = bot.get_channel(int(thread_id))
-                    if thread:
-                        await thread.send(f"✅ Match completed via DM report! Score: {match['p1_name']} **{p1_score}** - **{p2_score}** {match['p2_name']}")
-                        await thread.edit(archived=True, locked=True)
-                except Exception:
-                    pass
-        else:
-            await add_bot_feed(f"❌ Bot failed to auto-report match {set_id} via DM: {result.error_message}", "error")
-            await message.channel.send(f"⚠️ Failed to report score to provider: {result.error_message}. Scores saved in hub; admin will verify.")
-    else:
-        await update_active_match(set_id, p1_score=p1_score, p2_score=p2_score)
-        await add_bot_feed(f"📝 Score reported via DM for match {set_id}: {p1_score} - {p2_score} (Awaiting admin submit)", "info")
-        await message.channel.send(f"✅ Scores saved: {p1_score} - {p2_score}. Awaiting admin submit or stream broadcast.")
-        thread_id = match.get("discord_thread_id")
-        if thread_id:
-            try:
-                thread = bot.get_channel(int(thread_id))
-                if thread:
-                    await thread.send(f"📝 Scores reported via DM: {match['p1_name']} **{p1_score}** - **{p2_score}** {match['p2_name']}. Awaiting admin verification.")
-            except Exception:
-                pass
+    """Reject player result input without parsing, storing, or forwarding it."""
+    await message.channel.send(PLAYER_RESULT_ORGANIZER_MESSAGE)
 
 
 async def handle_conflict_statement_dm(message) -> bool:
@@ -1498,131 +1319,15 @@ async def handle_conflict_statement_dm(message) -> bool:
 
 
 async def handle_match_state_update(message: discord.Message, new_state: dict, bot_instance: commands.Bot):
+    """Keep legacy AI-referee output from changing tournament state.
+
+    Before durable Result Claims exist, a model result is neither evidence nor an
+    approval. This compatibility boundary intentionally does not read a match,
+    create a conflict, send a provider mutation, archive a thread, or write any
+    local score/status.
     """
-    Process the new state of a match thread after a message is handled.
-    Updates the match status (completed, conflict) based on the LLM evaluation.
-    """
-    status = new_state.get("match_status")
-    reasoning = new_state.get("reasoning") or "(no reasoning provided)"
-
-    # ── Resolve the owning match by Discord THREAD id first ──────────────
-    # The referee runs in a thread; mapping thread → active_match is the reliable
-    # bridge back to the real start.gg set_id + player Discord IDs. Falling back
-    # to the state's set_id covers any legacy thread created before this fix.
-    from core.database import (
-        save_match_result, update_active_match, get_active_match,
-        get_active_match_by_thread, add_conflict, add_bot_feed,
-    )
-    match_details = await get_active_match_by_thread(str(message.channel.id))
-    if not match_details:
-        _sid = new_state.get("set_id")
-        match_details = await get_active_match(str(_sid)) if _sid else None
-    set_id = match_details.get("set_id") if match_details else new_state.get("set_id")
-
-    if status == "completed":
-        winner_id = new_state.get("winner_id")
-        score = new_state.get("score_string")
-
-        valid_players = {
-            str(match_details.get("p1_discord")) if match_details else None,
-            str(match_details.get("p2_discord")) if match_details else None,
-        }
-        valid_players.discard(None)
-        valid_players.discard("None")
-
-        if not match_details or str(winner_id) not in valid_players:
-            # Demote — do NOT touch start.gg with a bogus winner.
-            await add_bot_feed(
-                f"🚫 AI Referee rejected (set {set_id}): proposed winner "
-                f"<{winner_id}> isn't a player in this match. Reasoning: {reasoning}",
-                "warn",
-            )
-            if set_id:
-                await add_conflict(
-                    str(set_id),
-                    "AI returned invalid winner_id",
-                    f"LLM said winner=<{winner_id}>; players are {valid_players}",
-                )
-                await update_active_match(str(set_id), status="conflict")
-            await message.channel.send(
-                "⚠️ I parsed a result but the winner didn't match either player. "
-                "Flagging for admin review."
-            )
-            return
-
-        await message.channel.send(
-            f"✅ **Match Completed!**\n"
-            f"Winner: <@{winner_id}>\n"
-            f"Score: {score}\n\n"
-            "Locking this thread."
-        )
-        await message.channel.edit(archived=True, locked=True)
-
-        p1_name = match_details.get("p1_name", "")
-        p2_name = match_details.get("p2_name", "")
-        tournament_slug = match_details.get("tournament_slug", "")
-        stream_slot = match_details.get("station_id")
-        round_name = match_details.get("round_name", "")
-
-        p1_score = "0"
-        p2_score = "0"
-        if score and "-" in score:
-            parts = score.split("-")
-            if len(parts) == 2:
-                p1_score, p2_score = parts[0].strip(), parts[1].strip()
-
-        await save_match_result(
-            set_id=str(set_id),
-            tournament_slug=tournament_slug,
-            stream_slot=stream_slot or "",
-            p1_name=p1_name,
-            p2_name=p2_name,
-            winner=str(winner_id),
-            p1_score=p1_score,
-            p2_score=p2_score,
-            round_name=round_name,
-        )
-        await update_active_match(str(set_id), status="complete", station_id=None)
-
-        await add_bot_feed(
-            f"🤖 AI Referee → completed (set {set_id}, {p1_score}-{p2_score}, "
-            f"winner <@{winner_id}>). Reasoning: {reasoning}",
-            "info",
-        )
-    elif status == "conflict":
-        await message.channel.send(
-            "⚠️ **Conflict Detected!**\n"
-            "The reported scores do not match or a dispute was found. An Admin has been pinged."
-        )
-        if set_id:
-            await add_conflict(str(set_id), "", "")
-            await update_active_match(str(set_id), status="conflict")
-
-            cmatch = match_details or await get_active_match(str(set_id))
-            if cmatch:
-                investigate_msg = (
-                    "⚠️ **Score conflict on your match.**\n"
-                    "Please reply to **this DM** with a brief explanation of what happened "
-                    "(and a **screenshot of the final results screen** if you have one). "
-                    "Your statement goes to the tournament organizer to settle the result."
-                )
-                for did in (cmatch.get("p1_discord"), cmatch.get("p2_discord")):
-                    if did:
-                        try:
-                            player_user = await bot_instance.fetch_user(int(did))
-                            if player_user:
-                                await player_user.send(investigate_msg)
-                        except Exception:
-                            pass
-                await message.channel.send(
-                    "⚠️ Conflict flagged. I've DMed both players for their statements — "
-                    "the TO will resolve this from the dashboard."
-                )
-
-        await add_bot_feed(
-            f"⚠️ AI Referee → conflict (set {set_id}). Reasoning: {reasoning}",
-            "warn",
-        )
+    if new_state.get("match_status") in {"completed", "conflict"}:
+        await message.channel.send(PLAYER_RESULT_ORGANIZER_MESSAGE)
 
 @bot.event
 async def on_message(message):
@@ -1641,53 +1346,18 @@ async def on_message(message):
         await registration_manager.handle_dm(message)
         return
 
-    # Check if it's a Thread
+    # A match thread remains available for player communication and the explicit
+    # Ready button, but the legacy AI Referee must not infer or act on a result.
     if isinstance(message.channel, discord.Thread):
-        try:
-            config = {"configurable": {"thread_id": str(message.channel.id)}}
-            state_snapshot = app.get_state(config)
-
-            if state_snapshot.values:
-                current_status = state_snapshot.values.get("match_status")
-
-                # Gate: do NOT accept results until both players have checked in.
-                # 'waiting_for_checkin' (the workflows.json `called` state) is
-                # ignored by the referee; terminal states are likewise skipped.
-                inert = ["waiting_for_checkin", "completed", "conflict", "dq"]
-                if current_status not in inert:
-                    new_state = await process_message(
-                        thread_id=message.channel.id,
-                        author_id=message.author.id,
-                        author_name=message.author.name,
-                        message_content=message.content
-                    )
-
-                    if new_state:
-                        await handle_match_state_update(message, new_state, bot)
-        except Exception as e:
-            # Never let a referee error kill the handler or desync the Hub.
-            try:
-                from core.database import add_bot_feed
-                await add_bot_feed(
-                    f"❌ AI Referee error in thread {message.channel.id}: {e}", "error"
-                )
-                await message.channel.send(
-                    "⚠️ I hit an error processing that — a tournament organizer has been notified."
-                )
-            except Exception:
-                pass
-        finally:
-            # Always push a Hub refresh so the dashboard reflects current state
-            # even if the referee path raised partway through.
-            try:
-                from backend.api.ws_manager import manager as _hub_mgr
-                await _hub_mgr.broadcast({"type": "match_update"})
-            except Exception:
-                pass
+        if message.content.strip().lower().startswith("score "):
+            await message.channel.send(PLAYER_RESULT_ORGANIZER_MESSAGE)
+            return
 
     await bot.process_commands(message)
 
-# ── Hub Agent Tools & Polling ──────────────────────────────────────────────
+# ── Legacy Bot Helpers ────────────────────────────────────────────────────
+# Organizer Assistant execution moved to backend.core.ai_service. These legacy
+# helpers are not an execution channel for score or DQ mutations.
 
 @tool
 async def get_active_matches_tool():
@@ -1702,155 +1372,35 @@ async def get_active_matches_tool():
 @tool
 async def get_players_tool():
     """Returns a list of all registered players and their Discord IDs."""
-    from core.database import aiosqlite, DB_PATH
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT discord_id, startgg_id, gamer_tag, cfn_id FROM players") as c:
-            rows = await c.fetchall()
-            return str([dict(zip([col[0] for col in c.description], row)) for row in rows])
+    # This read-only legacy tool is retained for compatibility, but it must go
+    # through the repository boundary so PostgreSQL is used at runtime.
+    from core.database import get_players_for_workspace
+    return str(await get_players_for_workspace())
 
 @tool
 async def call_match_tool(set_id: str = "", p1_discord_id: str = "", p2_discord_id: str = ""):
-    """Call a tracked match into the standard check-in flow (not_started → called).
-
-    Pass the `set_id` from get_active_matches_tool (preferred). If you only know the
-    two players, pass both their Discord IDs and the set will be resolved. This goes
-    through the SAME core path as the Hub's Call button — it transitions the match
-    via the state machine and the bot opens the check-in thread; players must click
-    'I'm Ready' before the match goes in-progress. It does NOT create an ad-hoc
-    'instantly playing' thread and never bypasses check-in."""
-    from core.database import get_active_matches
-    from core.match_state import call_match_core
-
-    sid = str(set_id or "").strip()
-    if not sid and p1_discord_id and p2_discord_id:
-        p1, p2 = str(p1_discord_id), str(p2_discord_id)
-        for m in await get_active_matches():
-            if {str(m.get("p1_discord")), str(m.get("p2_discord"))} == {p1, p2}:
-                sid = str(m.get("set_id"))
-                break
-
-    if not sid:
-        return (
-            "Failed: provide a set_id (from get_active_matches_tool) — or both players' "
-            "Discord IDs for a synced bracket match — so I can call the right set."
-        )
-
-    result = await call_match_core(sid)
-    if result.get("error"):
-        return f"Failed to call match {sid}: {result['error']}"
-    return (
-        f"Called {result.get('p1_name')} vs {result.get('p2_name')} (set {sid}) — "
-        "transitioned to 'called'; the check-in thread is being opened. Waiting for "
-        "both players to ready up."
-    )
+    """Legacy AI entrypoint retained as a hard non-execution boundary."""
+    return "AI cannot call matches. Use the authorized organizer Call control in aiTOB."
 
 @tool
 async def post_announcement_tool(announcement_text: str):
-    """Announces a message to the public tournament channel on Discord. Use this to notify players about rounds, schedules, or updates."""
-    from core.database import get_setting, get_connection
-    channel_id = await get_connection("MATCH_CALL_CHANNEL_ID") or await get_setting("MATCH_CALL_CHANNEL_ID") or MATCH_CALL_CHANNEL_ID
-    if not channel_id:
-        return "Failed: MATCH_CALL_CHANNEL_ID is not configured in settings."
-    channel = bot.get_channel(int(channel_id))
-    if not channel:
-        return f"Failed: Could not find channel with ID {channel_id}."
-    await channel.send(announcement_text)
-    return f"Announced successfully: '{announcement_text}'"
+    """Legacy AI tool: announcements require an organizer-approved proposal."""
+    return AI_ANNOUNCEMENT_MUTATION_BLOCKED_MESSAGE
 
 @tool
 async def dq_player_tool(set_id: str, player_to_dq: str):
-    """Disqualifies a player in an active match. player_to_dq can be 'p1', 'p2', or 'both'."""
-    from core.database import get_active_match, update_active_match, add_bot_feed
-    from core.startgg_client import get_client
-    
-    match = await get_active_match(set_id)
-    if not match:
-        return f"Failed: Active match with set ID {set_id} not found."
-        
-    p_to_dq = player_to_dq.lower().strip()
-    if p_to_dq not in ["p1", "p2", "both"]:
-        return "Failed: player_to_dq must be 'p1', 'p2', or 'both'."
-        
-    p1_entrant = match.get("p1_entrant_id")
-    p2_entrant = match.get("p2_entrant_id")
-    
-    if p_to_dq == "both":
-        sgg = get_client()
-        res1 = await sgg.mark_set_dq(set_id, p1_entrant) if p1_entrant else False
-        res2 = await sgg.mark_set_dq(set_id, p2_entrant) if p2_entrant else False
-        if res1 and res2:
-            await update_active_match(set_id, status="complete", p1_score=-1, p2_score=-1, station_id=None)
-            await add_bot_feed(f"🤖 Agent DQ'd both players in match {set_id}", "success")
-            return f"Successfully DQ'd both players in match {set_id}."
-        return "Failed to disqualify both players on Start.gg."
-    else:
-        dq_entrant = p1_entrant if p_to_dq == "p1" else p2_entrant
-        if not dq_entrant:
-            return f"Failed: Entrant ID not found for {p_to_dq}."
-        sgg = get_client()
-        ok = await sgg.mark_set_dq(set_id, dq_entrant)
-        if ok:
-            winner_key = "p2" if p_to_dq == "p1" else "p1"
-            p1_score = -1 if p_to_dq == "p1" else 0
-            p2_score = -1 if p_to_dq == "p2" else 0
-            await update_active_match(set_id, status="complete", p1_score=p1_score, p2_score=p2_score, station_id=None)
-            await add_bot_feed(f"🤖 Agent DQ'd {p_to_dq} in match {set_id}", "success")
-            return f"Successfully DQ'd player {p_to_dq} in match {set_id}."
-        return "Failed to disqualify player on Start.gg."
+    """Legacy AI tool retained only to return an explicit no-execution result."""
+    return AI_DQ_MUTATION_BLOCKED_MESSAGE
 
 @tool
 async def force_score_tool(set_id: str, p1_score: int, p2_score: int):
-    """Forces a specific score result for a match and reports it to Start.gg. Example: set_id='1234', p1_score=2, p2_score=0."""
-    from core.database import get_active_match, update_active_match, add_bot_feed
-    from core.providers.registry import get_provider_for_tournament
-    from core.score_reporting import report_score_to_provider
-    
-    match = await get_active_match(set_id)
-    if not match:
-        return f"Failed: Match with set ID {set_id} not found."
-        
-    if p1_score == p2_score:
-        return "Failed: Scores cannot be tied."
-        
-    winner_key = "p1" if p1_score > p2_score else "p2"
-    winner_id = match.get(f"{winner_key}_entrant_id")
-    if not winner_id:
-        return "Failed: Winner entrant ID not found."
-        
-    provider = await get_provider_for_tournament(match.get('tournament_slug') or '')
-    result = await report_score_to_provider(
-        set_id=set_id,
-        winner_id=winner_id,
-        p1_id=match['p1_entrant_id'],
-        p2_id=match['p2_entrant_id'],
-        p1_score=p1_score,
-        p2_score=p2_score,
-        provider=provider
-    )
-    if not result.success:
-        return f"Failed to report score to provider: {result.error_message}"
-        
-    await update_active_match(set_id, status="complete", p1_score=p1_score, p2_score=p2_score, station_id=None)
-    await add_bot_feed(f"🤖 Agent forced score on match {set_id}: {p1_score}-{p2_score}", "success")
-    return f"Successfully forced score {p1_score}-{p2_score} and completed match {set_id}."
+    """Legacy AI tool retained only to return an explicit no-execution result."""
+    return AI_RESULT_MUTATION_BLOCKED_MESSAGE
 
 @tool
 async def reopen_match_tool(set_id: str):
-    """Reopens or resets a match on Start.gg and resets its local database status back to 'called' / 'in_progress' so it can be re-played or re-reported."""
-    from core.database import get_active_match, update_active_match, add_bot_feed
-    from backend.core.startgg_client import get_client
-    
-    match = await get_active_match(set_id)
-    if not match:
-        return f"Failed: Active match with set ID {set_id} not found."
-        
-    sgg = get_client()
-    ok = await sgg.reset_set(set_id)
-    if ok:
-        await update_active_match(set_id, status="in_progress", p1_score=0, p2_score=0)
-        await add_bot_feed(f"🤖 Agent reopened match {set_id}", "success")
-        return f"Successfully reopened match {set_id}."
-    return "Failed to reset set on Start.gg."
+    """Legacy AI tool: reopening is an organizer-only workflow action."""
+    return AI_REOPEN_MUTATION_BLOCKED_MESSAGE
 
 async def _tournament_discord_ids(tournament_slug: str) -> set[str]:
     """Discord IDs currently appearing in a tournament's synced matches.
@@ -1859,9 +1409,10 @@ async def _tournament_discord_ids(tournament_slug: str) -> set[str]:
     sync-engine-resolved p1_discord/p2_discord on active_matches (reliable
     linkage) rather than the entrant/user-id ambiguity in raw_data.
     """
-    from core.database import get_active_matches
+    from core.database import get_active_matches, get_tournament_workspace_id
+    workspace_id = await get_tournament_workspace_id(tournament_slug)
     ids: set[str] = set()
-    for m in await get_active_matches(tournament_slug):
+    for m in await get_active_matches(tournament_slug, workspace_id=workspace_id):
         for k in ("p1_discord", "p2_discord"):
             v = m.get(k)
             if v:
@@ -1882,7 +1433,9 @@ async def audit_registration_tool(tournament_slug: str = None):
     """
     from core.database import get_verified_players_missing_profile, add_bot_feed
 
-    players = await get_verified_players_missing_profile()
+    from core.database import get_tournament_workspace_id
+    workspace_id = await get_tournament_workspace_id(tournament_slug) if tournament_slug else None
+    players = await get_verified_players_missing_profile(workspace_id)
     if not players:
         return "All verified players have a complete profile (avatar + CFN ID) — nobody to remind."
 
@@ -1936,18 +1489,6 @@ async def audit_registration_tool(tournament_slug: str = None):
         f"{sent_avatar} need avatar, {sent_cfn} need CFN ID, {sent_both} need both. "
         f"DMs sent to {total_sent}; {failed} could not be reached (DMs likely closed)."
     )
-
-hub_tools = [
-    get_active_matches_tool,
-    get_players_tool,
-    call_match_tool,
-    post_announcement_tool,
-    dq_player_tool,
-    force_score_tool,
-    reopen_match_tool,
-    audit_registration_tool,
-]
-hub_agent = build_hub_agent(hub_tools)  # fast-path: uses env key if present
 
 MATCH_CALL_CHANNEL_ID = os.getenv("MATCH_CALL_CHANNEL_ID", "")
 
@@ -2007,7 +1548,7 @@ bot_ws: any = None  # Global bot websocket reference
 async def ws_add_bot_feed(message: str, level: str = "info"):
     """Logs a message over the WebSocket connection to the API, falling back to local DB if disconnected."""
     global bot_ws
-    print(f"[{level.upper()}] {message}")
+    print(console_message(level, message))
     if bot_ws:
         try:
             import json
@@ -2029,10 +1570,8 @@ async def ws_add_bot_feed(message: str, level: str = "info"):
     except Exception as e:
         print(f"[BOT] DB fallback logging failed: {e}")
 
-async def handle_ws_command(cmd_text: str):
+async def handle_ws_command(cmd_text: str, *, workspace_id: str | None = None):
     """Executes a hub command directly from the WebSocket connection."""
-    from langchain_core.messages import HumanMessage
-    import time
     
     try:
         # Check for built-in commands first
@@ -2054,12 +1593,22 @@ async def handle_ws_command(cmd_text: str):
             await ws_add_bot_feed("❌ Failed to announce: MATCH_CALL_CHANNEL_ID not set or channel not found", "error")
             return
 
+        if cmd_text.strip().lower().startswith("execute_action_proposal "):
+            proposal_id = cmd_text.split(" ", 1)[1].strip()
+            from backend.core.action_proposals import execute_approved_proposal
+            result = await execute_approved_proposal(proposal_id, workspace_id=workspace_id)
+            await ws_add_bot_feed(
+                f"Organizer proposal execution: {result.get('execution_status', 'unknown')}",
+                "success" if result.get("execution_status") in {"workflow_started", "outbox_queued"} else "warn",
+            )
+            return
+
         if cmd_text.strip().lower().startswith("call_match "):
             set_id = cmd_text.split(" ")[1].strip()
             from core.database import get_active_match, get_tournament
-            match = await get_active_match(set_id)
+            match = await get_active_match(set_id, workspace_id)
             if match:
-                t = await get_tournament(match['tournament_slug'])
+                t = await get_tournament(match['tournament_slug'], workspace_id)
                 from bot.match_threads import create_match_thread
                 await create_match_thread(bot, t, match)
                 await ws_add_bot_feed(f"🤖 Created match thread for {match.get('p1_name')} vs {match.get('p2_name')}", "success")
@@ -2070,7 +1619,7 @@ async def handle_ws_command(cmd_text: str):
         if cmd_text.strip().lower().startswith("dm_score_request "):
             set_id = cmd_text.split(" ")[1].strip()
             from core.database import get_active_match
-            match = await get_active_match(set_id)
+            match = await get_active_match(set_id, workspace_id)
             if match:
                 await send_score_report_dms(bot, match)
             return
@@ -2081,7 +1630,7 @@ async def handle_ws_command(cmd_text: str):
         if cmd_text.strip().lower().startswith("startgg_go_live "):
             set_id = cmd_text.split(" ")[1].strip()
             from core.database import get_active_match, get_available_stream_station, update_active_match
-            match = await get_active_match(set_id)
+            match = await get_active_match(set_id, workspace_id)
             if not match:
                 return
             # Only stream matches need a green-room handoff; off-stream start.gg matches
@@ -2090,16 +1639,16 @@ async def handle_ws_command(cmd_text: str):
                 # Bind an idle event-matching stream station if one isn't already bound
                 # (the on_stream overlay, realized at the in_progress edge).
                 if not match.get("station_id"):
-                    station = await get_available_stream_station(match.get("event_id") or "")
+                    station = await get_available_stream_station(match.get("event_id") or "", match.get("workspace_id"))
                     if station:
                         await update_active_match(set_id, station_id=station["id"])
-                        match = await get_active_match(set_id)
+                        match = await get_active_match(set_id, match.get("workspace_id"))
                 thread_id = match.get("discord_thread_id")
                 thread = bot.get_channel(int(thread_id)) if thread_id else None
                 if thread:
                     from bot.match_threads import deliver_stream_credentials
                     await deliver_stream_credentials(
-                        bot, thread, set_id, match.get("p1_discord"), match.get("p2_discord")
+                        bot, thread, set_id, match.get("p1_discord"), match.get("p2_discord"), match.get("workspace_id")
                     )
             await ws_add_bot_feed(
                 f"▶️ start.gg check-in complete — {match.get('p1_name')} vs {match.get('p2_name')} is now live.",
@@ -2114,7 +1663,7 @@ async def handle_ws_command(cmd_text: str):
             set_id = parts[1].strip() if len(parts) > 1 else ""
             explicit_thread_id = parts[2].strip() if len(parts) > 2 else ""
             from core.database import get_active_match
-            match = await get_active_match(set_id)
+            match = await get_active_match(set_id, workspace_id)
             thread_id = explicit_thread_id or ((match or {}).get("discord_thread_id") or "")
             if thread_id:
                 try:
@@ -2172,36 +1721,10 @@ async def handle_ws_command(cmd_text: str):
             )
             return
 
-        # General Hub Agent NLP fallback
-        if hub_agent:
-            await ws_add_bot_feed(f"🧠 Hub Agent processing: '{cmd_text}'", "info")
-            
-            from core.database import get_setting as db_get_setting
-            custom_prompt = await db_get_setting("bot_system_prompt")
-            messages = [HumanMessage(content=cmd_text)]
-            if custom_prompt:
-                messages.insert(0, HumanMessage(content=f"INSTRUCTION: {custom_prompt}"))
-                
-            config = {"configurable": {"thread_id": f"hub_ws_{int(time.time())}"}}
-            response = await hub_agent.ainvoke({"messages": messages}, config)
-            raw_content = response["messages"][-1].content
-            ai_msg = extract_text_from_response(raw_content)
-            
-            # Send final response over the WS as an agent_response type!
-            if bot_ws:
-                try:
-                    import json
-                    await bot_ws.send(json.dumps({
-                        "type": "agent_response",
-                        "response": ai_msg,
-                        "command": cmd_text
-                    }))
-                except Exception as e:
-                    print(f"Error sending agent_response: {e}")
-                    
-            await ws_add_bot_feed(f"🤖 Hub Agent: {ai_msg}", "success")
-        else:
-            await ws_add_bot_feed("❌ Command ignored: Hub Agent not initialized", "error")
+        await ws_add_bot_feed(
+            "Unknown manual bot command. Use the Organizer Assistant for questions or a documented bot command.",
+            "warn",
+        )
             
     except Exception as e:
         print(f"WS Command execution error: {e}")
@@ -2228,7 +1751,7 @@ async def bot_ws_listener():
                             await asyncio.sleep(15)
                         except Exception:
                             break
-                asyncio.create_task(ping_loop())
+                _runtime_tasks.start(ping_loop())
                 
                 while True:
                     data = await ws.recv()
@@ -2237,18 +1760,38 @@ async def bot_ws_listener():
                         cmd_text = msg.get("command")
                         if cmd_text:
                             # Run immediately inside an isolated task
-                            asyncio.create_task(handle_ws_command(cmd_text))
+                            _runtime_tasks.start(handle_ws_command(cmd_text))
                     elif msg.get("type") == "drain":
                         # Event-driven nudge: a command was just queued API-side.
-                        asyncio.create_task(run_drain())
+                        _runtime_tasks.start(run_drain())
         except Exception as e:
             bot_ws = None
             print(f"[BOT] WebSocket connection failed: {e}. Retrying in 5 seconds...")
             await asyncio.sleep(5)
 
 if __name__ == "__main__":
-    if TOKEN and TOKEN != "your_discord_bot_token_here":
-        bot.run(TOKEN)
-    else:
-        print("Warning: DISCORD_BOT_TOKEN not found or is default. Please update .env")
+    async def _load_account_token():
+        await init_db()
+        from backend.core.integrations import get_discord_credential, list_integration_accounts
+        selected = os.getenv("AITOB_DISCORD_ACCOUNT_ID", "").strip()
+        # The process selects an account from its own database, regardless of
+        # the account owner's label.  A tournament still binds each workflow
+        # event to one concrete account, so this does not cross destinations.
+        accounts = [account for account in await list_integration_accounts(None) if account["provider_type"] == "discord" and account["status"] == "active"]
+        if selected:
+            accounts = [account for account in accounts if account["id"] == selected]
+        if len(accounts) != 1:
+            raise RuntimeError("Select exactly one active Discord integration account for this bot process.")
+        token = await get_discord_credential(accounts[0]["id"])
+        if not token:
+            raise RuntimeError("Selected Discord account has no bot token.")
+        return accounts[0]["id"], token
 
+    try:
+        from backend.core.storage import require_runtime_database
+        require_runtime_database()
+        ACTIVE_DISCORD_ACCOUNT_ID, TOKEN = asyncio.run(_load_account_token())
+        bot.run(TOKEN)
+    except Exception:
+        print("Discord bot did not start: its selected integration account is unavailable.")
+        sys.exit(1)

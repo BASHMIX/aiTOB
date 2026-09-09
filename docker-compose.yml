@@ -1,4 +1,23 @@
 services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: aitob_postgres
+    environment:
+      POSTGRES_DB: aitob
+      POSTGRES_USER: aitob
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.production}
+    ports:
+      # Do not disturb an existing local PostgreSQL service on 5432.
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aitob -d aitob"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   api:
     build:
       context: .
@@ -8,6 +27,8 @@ services:
       - "8000:8000"
     env_file:
       - .env.production
+    environment:
+      DATABASE_URL: postgresql://aitob:${POSTGRES_PASSWORD}@postgres:5432/aitob
     volumes:
       # Persist the SQLite database using a named volume
       - db_data:/app/backend/core
@@ -16,6 +37,9 @@ services:
       # Persist overlay configs per slot using a named volume
       - overlay_configs:/app/backend/api/overlay_configs
     restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
       interval: 30s
@@ -29,13 +53,16 @@ services:
     container_name: tourney_bot
     env_file:
       - .env.production
+    environment:
+      DATABASE_URL: postgresql://aitob:${POSTGRES_PASSWORD}@postgres:5432/aitob
     volumes:
       # Share the same database and avatars as the API
       - db_data:/app/backend/core
       - static_data:/app/backend/api/static
     restart: always
     depends_on:
-      - api
+      api:
+        condition: service_started
 
   cloudflared:
     image: cloudflare/cloudflared:latest
@@ -48,6 +75,7 @@ services:
       - api
 
 volumes:
+  postgres_data:
   db_data:
   static_data:
   overlay_configs:

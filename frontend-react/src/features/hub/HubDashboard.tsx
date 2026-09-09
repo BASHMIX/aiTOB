@@ -3,10 +3,12 @@ import { TopNavigation } from '@/components/layout/TopNavigation';
 import { TournamentSettings } from './components/TournamentSettings';
 import { ActiveMatchStatus } from './components/ActiveMatchStatus';
 import { ActiveStreamsStatus } from './components/ActiveStreamsStatus';
+import { TournamentOperationsCards } from './components/TournamentOperationsCards';
 import { MatchDashboard } from './components/MatchDashboard';
 import { Conflicts } from './components/Conflicts';
-import { BotFeed } from './components/BotFeed';
-import { GeneralSettings } from './components/GeneralSettings';
+import { OrganizerConsole } from './components/OrganizerConsole';
+import { SettingsWorkspace } from './components/SettingsWorkspace';
+import aiTobLogo from '@/assets/aitob-logo.svg';
 import { DispatcherMasterSwitch } from './components/DispatcherMasterSwitch';
 import { useHubStore } from '@/store/useHubStore';
 import { useHubSocket } from '@/hooks/useHubSocket';
@@ -164,8 +166,11 @@ export function HubDashboard() {
     setStatus,
     setMatches,
     currentSlug,
-    setCurrentSlug
+    setCurrentSlug,
+    tournaments,
   } = useHubStore();
+  const selectedTournament = tournaments.find((tournament) => tournament.slug === currentSlug);
+  const isStartGgTournament = selectedTournament?.provider_type !== 'challonge';
 
   const [isRefetching, setIsRefetching] = useState(false);
   const [activeTab, setActiveTab] = useState<'active' | 'registration' | 'system'>('active');
@@ -190,6 +195,10 @@ export function HubDashboard() {
       }
 
       if (slug) {
+        // Selections saved before the operations-card feature existed must be
+        // promoted once as well. setCurrentSlug is idempotent for the current
+        // selection and records it in the pinned-card list.
+        setCurrentSlug(slug);
         setMatches(matchesRes.data.matches || []);
       } else {
         setMatches([]);
@@ -237,8 +246,8 @@ export function HubDashboard() {
     <div className="flex flex-col gap-4 h-full relative">
       <header className="flex items-center justify-between gap-4 pb-2 border-b border-white/10">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded overflow-hidden flex items-center justify-center">
-            <img src="/assets/favicon.ico" alt="Logo" className="w-full h-full object-contain" />
+          <div className="w-10 h-10 flex items-center justify-center">
+            <img src={aiTobLogo} alt="aiTOB" className="h-full w-full" />
           </div>
           <div className="flex flex-col">
             <h1 className="text-2xl font-bold text-white tracking-wide">FNC Tournament Hub</h1>
@@ -250,7 +259,7 @@ export function HubDashboard() {
         </div>
       </header>
 
-      {status.token_scope && (!status.token_scope.valid || !status.token_scope.has_write_scope) && (
+      {isStartGgTournament && status.token_scope && (!status.token_scope.valid || !status.token_scope.has_write_scope) && (
         <div className="animate-fadeIn p-3.5 rounded-lg border border-red-500/35 bg-red-950/20 text-red-200 text-xs flex items-center justify-between gap-4 shadow-lg shadow-red-950/30 backdrop-blur-md transition-all hover:border-red-500/50">
           <div className="flex items-center gap-3">
             <span className="text-xl shrink-0 filter drop-shadow-sm select-none animate-pulse">⚠️</span>
@@ -318,7 +327,7 @@ export function HubDashboard() {
               onClick={() => setActiveTab('system')}
               className={`px-4 py-1.5 rounded-md text-xs font-bold transition-all ${activeTab === 'system' ? 'bg-accentYellow text-black' : 'text-textDim hover:text-white'}`}
             >
-              SYSTEM
+              SETTINGS
             </button>
           </div>
 
@@ -326,6 +335,7 @@ export function HubDashboard() {
             {activeTab === 'active' && (
               <div className="flex flex-col gap-4 relative animate-fadeIn">
                 <ConnectionLines />
+                <TournamentOperationsCards />
                 <ActiveMatchStatus />
                 <ActiveStreamsStatus />
               </div>
@@ -337,14 +347,14 @@ export function HubDashboard() {
             )}
             {activeTab === 'system' && (
               <div className="animate-fadeIn">
-                <GeneralSettings />
+                <SettingsWorkspace />
               </div>
             )}
           </div>
         </div>
 
         {/* Middle Column (Match Dashboard) */}
-        <div className="lg:col-span-3 bg-cardDark rounded-lg shadow-md flex flex-col h-full border border-white/5 overflow-hidden">
+        <div data-match-dashboard className="lg:col-span-3 bg-cardDark rounded-lg shadow-md flex flex-col h-full border border-white/5 overflow-hidden">
           <div className="p-3 border-b border-white/10 flex items-center justify-between">
             <h2 className="text-accentYellow font-bold text-sm tracking-widest uppercase">Match Dashboard</h2>
             <button
@@ -368,8 +378,7 @@ export function HubDashboard() {
         </div>
       </main>
 
-      {/* Floating collapsible Bot Feed & Logs panel */}
-      <BotFeed />
+      <OrganizerConsole />
     </div>
   );
 }

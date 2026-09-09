@@ -11,13 +11,15 @@ from backend.core.database import (
     DB_PATH
 )
 
-TEST_DB_PATH = "backend/core/test_database.sqlite"
+TEST_DB_PATH = ""
 
 @pytest.fixture
-async def setup_test_db():
+async def setup_test_db(tmp_path):
     import backend.core.database
     import backend.core.match_state
     
+    global TEST_DB_PATH
+    TEST_DB_PATH = str(tmp_path / "optimizations.sqlite")
     orig_db_path = backend.core.database.DB_PATH
     backend.core.database.DB_PATH = TEST_DB_PATH
     backend.core.match_state.DB_PATH = TEST_DB_PATH
@@ -26,12 +28,6 @@ async def setup_test_db():
     
     yield
     
-    if os.path.exists(TEST_DB_PATH):
-        try:
-            os.remove(TEST_DB_PATH)
-        except Exception:
-            pass
-            
     backend.core.database.DB_PATH = orig_db_path
     backend.core.match_state.DB_PATH = orig_db_path
 

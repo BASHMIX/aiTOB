@@ -15,44 +15,18 @@ export function useOBSViewerData(slot: string) {
 
   const fetchData = async () => {
     try {
-      // 1. Resolve active overlay name from station configuration
-      let overlayName = slot;
-      try {
-        const resStations = await fetch('/api/stations');
-        const dataStations = await resStations.json();
-        const station = (dataStations.stations || []).find((s: any) => s.id === slot);
-        if (station && station.active_overlay) {
-          overlayName = station.active_overlay;
-        }
-      } catch (err) {
-        console.error("Failed to fetch station active overlay details", err);
-      }
-
-      // 2. Fetch base overlay preset config
-      const resOverlays = await fetch('/api/overlays');
-      const dataOverlays = await resOverlays.json();
-      const list = dataOverlays.overlays || [];
-      const currentPreset = list.find((p: any) => p.name === overlayName);
-
-      let baseConfig: any = { elements: {}, background_url: '', global_font_url: '', global_font_family: '' };
-      if (currentPreset && currentPreset.config) {
-        const parsed = typeof currentPreset.config === 'string' ? JSON.parse(currentPreset.config) : currentPreset.config;
-        baseConfig = {
-          elements: parsed.elements || {},
-          background_url: parsed.background_url || '',
-          global_font_url: parsed.global_font_url || '',
-          global_font_family: parsed.global_font_family || ''
-        };
-      }
-
-      // 3. Fetch active matches to see if one is currently connected to this station
-      const resMatches = await fetch('/api/active-matches');
-      const dataMatches = await resMatches.json();
-
-      // Match is connected if assigned to this slot and in an active status
-      const activeMatch = (dataMatches.matches || []).find(
-        (m: any) => m.station_id === slot && ['not_started', 'called', 'in_progress'].includes(m.status)
-      );
+      const overlayToken = new URLSearchParams(window.location.hash.replace(/^#/, '')).get('access_token') || '';
+      const response = await fetch(`/obs/${encodeURIComponent(slot)}/data`, {
+        headers: { 'X-Overlay-Token': overlayToken },
+      });
+      if (!response.ok) throw new Error('Overlay access is unavailable');
+      const projection = await response.json();
+      const parsed = typeof projection.config === 'string' ? JSON.parse(projection.config) : (projection.config || {});
+      const baseConfig: any = {
+        elements: parsed.elements || {}, background_url: parsed.background_url || '',
+        global_font_url: parsed.global_font_url || '', global_font_family: parsed.global_font_family || '',
+      };
+      const activeMatch = projection.active_match;
 
       // Requirement 3: If no active match is connected, clear the overlay (render blank transparent screen)
       if (!activeMatch) {
@@ -61,19 +35,7 @@ export function useOBSViewerData(slot: string) {
       }
 
       // 4. Resolve tournament name if slug is available
-      let tournamentName = 'Tournament';
-      if (activeMatch.tournament_slug) {
-        try {
-          const resTournaments = await fetch('/api/tournaments');
-          const dataTournaments = await resTournaments.json();
-          const matchedTournament = (dataTournaments.tournaments || []).find((t: any) => t.slug === activeMatch.tournament_slug);
-          if (matchedTournament) {
-            tournamentName = matchedTournament.name || 'Tournament';
-          }
-        } catch (err) {
-          console.error("Failed to fetch tournament name details", err);
-        }
-      }
+      const tournamentName = projection.tournament_name || 'Tournament';
       activeMatchRef.current = activeMatch;
       tournamentNameRef.current = tournamentName;
 
@@ -232,6 +194,11 @@ export function useOBSViewerData(slot: string) {
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsUrl = `${proto}//${window.location.host}/ws/overlay/${encodeURIComponent(slot)}`;
       ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        const token = new URLSearchParams(window.location.hash.replace(/^#/, '')).get('access_token') || '';
+        ws.send(JSON.stringify({ type: 'authenticate', token }));
+      };
 
       ws.onmessage = (e) => {
         const data = JSON.parse(e.data);

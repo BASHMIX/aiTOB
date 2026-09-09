@@ -4,17 +4,19 @@ import axios from 'axios';
 
 export function TopNavigation() {
   const {
-    tournaments, setTournaments, currentSlug, setCurrentSlug, status, setMatches,
-    events, setEvents, currentEventId, setCurrentEventId,
+    tournaments, setTournaments, currentSlug, setCurrentSlug, removePinnedTournament, status, setMatches,
+    events, setEvents, currentEventId, setCurrentEventId, session,
   } = useHubStore();
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const currentTournament = tournaments.find((tournament) => tournament.slug === currentSlug);
+  const isChallonge = currentTournament?.provider_type === 'challonge';
 
   // Discover the selected tournament's events. Auto-select when there's exactly
   // one; require an explicit pick when there are several (prevents cross-game
   // contamination). Clears when no tournament is selected.
   useEffect(() => {
     let cancelled = false;
-    if (!currentSlug) {
+    if (!currentSlug || isChallonge) {
       setEvents([]);
       setCurrentEventId(null);
       return;
@@ -40,7 +42,7 @@ export function TopNavigation() {
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentSlug]);
+  }, [currentSlug, isChallonge]);
 
   const globalRefresh = async () => {
     setIsRefreshing(true);
@@ -66,6 +68,7 @@ export function TopNavigation() {
       const tourneysRes = await axios.get('/api/tournaments');
       const updatedTournaments = tourneysRes.data.tournaments || [];
       setTournaments(updatedTournaments);
+      removePinnedTournament(currentSlug);
       
       // Select the next available or null
       if (updatedTournaments.length > 0) {
@@ -80,15 +83,19 @@ export function TopNavigation() {
   };
 
   const logout = useHubStore(state => state.logout);
+  const signOut = async () => {
+    try { await axios.post('/api/session/logout'); } catch { /* local clear still protects the UI */ }
+    logout();
+  };
 
   return (
     <nav className="bg-cardDark rounded-md p-3 flex flex-wrap items-center justify-between gap-4 text-sm shadow-md">
       <div className="flex items-center gap-4 font-medium text-white">
         <button 
-          onClick={logout}
+          onClick={signOut}
           className="text-textDim hover:text-accentYellow transition-colors flex items-center gap-2"
         >
-          <span>🚪</span> Logout
+          <span>🚪</span> Logout{session?.workspace_name ? ` · ${session.workspace_name}` : ''}
         </button>
         <div className="flex items-center gap-2 border-l border-white/20 pl-4">
           <span>Tournament:</span>
@@ -127,8 +134,14 @@ export function TopNavigation() {
           )}
         </div>
 
-        {/* Event selector — scopes matches/attendees to a single game/bracket. */}
-        {currentSlug && (events?.length ?? 0) > 0 && (
+        {/* Challonge has one provider bracket, while Start.gg can have many events. */}
+        {currentSlug && isChallonge && (
+          <div className="flex items-center gap-2 border-l border-white/20 pl-4">
+            <span className="text-textDim">Scope:</span>
+            <span className="text-white font-bold">Bracket</span>
+          </div>
+        )}
+        {currentSlug && !isChallonge && (events?.length ?? 0) > 0 && (
           <div className="flex items-center gap-2 border-l border-white/20 pl-4">
             <span>Event:</span>
             {events.length === 1 ? (
@@ -151,14 +164,13 @@ export function TopNavigation() {
           </div>
         )}
 
-        <a className="border-l border-white/20 pl-4 hover:text-accentYellow transition-colors" href="#">Settings</a>
       </div>
       
       <div className="flex items-center gap-4 font-mono text-xs">
         <span className="text-textDim">Status:</span>
         <div className="flex items-center gap-2">
-          <span className={`w-2 h-2 rounded-full ${status.startgg_api ? 'bg-statusGreen shadow-[0_0_8px_rgba(34,197,94,0.4)]' : 'bg-statusRed shadow-[0_0_8px_rgba(239,68,68,0.4)]'}`}></span>
-          <span>Start.gg</span>
+          <span className={`w-2 h-2 rounded-full ${(isChallonge ? currentTournament?.provider_sync_status !== 'error' : status.startgg_api) ? 'bg-statusGreen shadow-[0_0_8px_rgba(34,197,94,0.4)]' : 'bg-statusRed shadow-[0_0_8px_rgba(239,68,68,0.4)]'}`}></span>
+          <span>{isChallonge ? 'Challonge' : 'Start.gg'}</span>
         </div>
         <div className="flex items-center gap-2 border-l border-white/20 pl-4">
           <span className={`w-2 h-2 rounded-full ${status.discord_bot ? 'bg-statusGreen shadow-[0_0_8px_rgba(34,197,94,0.4)]' : 'bg-statusRed shadow-[0_0_8px_rgba(239,68,68,0.4)]'}`}></span>

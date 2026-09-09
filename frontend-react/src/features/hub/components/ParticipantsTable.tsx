@@ -7,17 +7,33 @@ export function ParticipantsTable() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ name: '', team: '', country: '', cfn: '' });
   const [overrides, setOverrides] = useState<Record<string, any>>({});
+  const [links, setLinks] = useState<Record<string, any>>({});
+  const [players, setPlayers] = useState<any[]>([]);
+
+  const normalizePlayerName = (value: string) => value
+    .toLocaleLowerCase()
+    .normalize('NFKC')
+    .replace(/[\u064B-\u065F\u0670]/g, '')
+    .replace(/[أإآ]/g, 'ا')
+    .replace(/ى/g, 'ي')
+    .replace(/[^\p{L}\p{N}]/gu, '');
 
   useEffect(() => {
-    const fetchAllOverrides = async () => {
+    const fetchParticipantData = async () => {
       try {
-        const res = await axios.get('/api/players/overrides');
-        setOverrides(res.data || {});
+        const [overridesResponse, playersResponse, linksResponse] = await Promise.all([
+          axios.get('/api/players/overrides'),
+          axios.get('/api/players'),
+          currentSlug ? axios.get('/api/players/links', { params: { tournament_slug: currentSlug } }) : Promise.resolve({ data: { links: {} } }),
+        ]);
+        setOverrides(overridesResponse.data || {});
+        setPlayers(playersResponse.data?.players || []);
+        setLinks(linksResponse.data?.links || {});
       } catch (e) {
-        console.error("Failed to fetch overrides", e);
+        console.error("Failed to fetch participant data", e);
       }
     };
-    fetchAllOverrides();
+    fetchParticipantData();
   }, [currentSlug]);
 
   const currentTournament = tournaments.find((t) => t.slug === currentSlug);
@@ -93,8 +109,38 @@ export function ParticipantsTable() {
       const newUrl = res.data.avatar_url;
       setOverrides(prev => ({ ...prev, [id]: { ...prev[id], avatar_url: newUrl } }));
     } catch (e: any) {
-      const msg = e.response?.data?.detail || "Failed to upload avatar";
+      const msg = e.response?.data?.detail || e.response?.data?.message || "Failed to upload avatar";
       alert(msg);
+    }
+  };
+
+  const handleLink = async (entrantId: string, discordId: string) => {
+    if (!currentSlug || !discordId) return;
+    try {
+      const response = await axios.put('/api/players/links', {
+        tournament_slug: currentSlug,
+        entrant_id: String(entrantId),
+        discord_id: discordId,
+      });
+      setLinks(prev => ({ ...prev, [String(entrantId)]: response.data.link }));
+    } catch (e: any) {
+      alert(e.response?.data?.detail || 'Failed to link player');
+    }
+  };
+
+  const handleUnlink = async (entrantId: string) => {
+    if (!currentSlug) return;
+    try {
+      await axios.delete('/api/players/links', {
+        params: { tournament_slug: currentSlug, entrant_id: String(entrantId) },
+      });
+      setLinks(prev => {
+        const next = { ...prev };
+        delete next[String(entrantId)];
+        return next;
+      });
+    } catch (e: any) {
+      alert(e.response?.data?.detail || 'Failed to unlink player');
     }
   };
 
@@ -120,7 +166,8 @@ export function ParticipantsTable() {
         <table className="w-full text-left text-sm text-white">
           <thead className="text-xs text-textDim uppercase bg-appDark/50">
             <tr>
-              <th className="px-2 py-2">Start.gg Name</th>
+              <th className="px-2 py-2">Player Name</th>
+              <th className="px-2 py-2">aiTOB Player</th>
               <th className="px-2 py-2">Avatar</th>
               <th className="px-2 py-2">Display Name</th>
               <th className="px-2 py-2">Team</th>
@@ -132,9 +179,59 @@ export function ParticipantsTable() {
           <tbody>
             {entrants.map((e: any, i: number) => {
               const ov = overrides[e.id] || {};
+              const link = links[String(e.id)];
+              const entrantName = typeof e === 'string' ? e : String(e.name || '');
+              const normalizedName = normalizePlayerName(entrantName);
+              const startggCandidate = e.provider_user_id
+                ? players.filter(player => String(player.startgg_id || '') === String(e.provider_user_id))
+                : [];
+              const nameCandidates = normalizedName
+                ? players.filter(player => normalizePlayerName(String(player.gamer_tag || '')) === normalizedName)
+                : [];
+              const suggestedPlayer = startggCandidate.length === 1
+                ? startggCandidate[0]
+                : nameCandidates.length === 1 ? nameCandidates[0] : null;
               return (
                 <tr key={e.id || i} className="border-b border-white/5 hover:bg-white/5">
                   <td className="px-2 py-2 text-textDim">{e.name || e}</td>
+                  <td className="px-2 py-2 min-w-48">
+                    {link ? (
+                      <div className="flex items-center gap-2">
+                        <span className="text-statusGreen text-xs whitespace-nowrap">Linked to: <strong>{link.gamer_tag}</strong></span>
+                        <button
+                          onClick={() => handleUnlink(e.id)}
+                          className="text-textDim hover:text-red-400 text-[10px] uppercase font-bold"
+                        >
+                          Unlink
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-1">
+                        {suggestedPlayer && (
+                          <button
+                            onClick={() => handleLink(e.id, suggestedPlayer.discord_id)}
+                            className="text-left text-[10px] text-accentYellow hover:text-yellow-300"
+                            title="Exact safe match. Click to confirm the link."
+                          >
+                            Suggested: {suggestedPlayer.gamer_tag || suggestedPlayer.discord_id}
+                          </button>
+                        )}
+                        <select
+                          value=""
+                          onChange={event => handleLink(e.id, event.target.value)}
+                          className="max-w-44 bg-appDark border border-white/10 rounded px-1 py-1 text-[10px] text-textDim"
+                          aria-label={`Link ${entrantName} to an aiTOB player`}
+                        >
+                          <option value="">Link to player…</option>
+                          {players.map(player => (
+                            <option key={player.discord_id} value={player.discord_id}>
+                              {player.gamer_tag || player.discord_id}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </td>
                   <td className="px-2 py-2">
                     <div className="relative group w-8 h-8">
                       <img 

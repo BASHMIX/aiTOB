@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { ActionButton } from "./ActionButton";
+import { DQPlayerMenu } from "./DQPlayerMenu";
 import { useHubStore } from "@/store/useHubStore";
 
 // SVG Icons
@@ -73,6 +74,7 @@ export interface MatchData {
   calledAt?: string;
   raw: any;
   stationId?: string;
+  providerType?: 'startgg' | 'challonge';
   // Owning start.gg event — drives the per-card Event badge so multi-game
   // tournaments are visually distinguishable at a glance.
   eventId?: string;
@@ -80,6 +82,10 @@ export interface MatchData {
   // True when the bot has surrendered auto-DQ for this set (partial / no Discord reach).
   // Surfaces as a small banner so the TO knows the bot won't intervene.
   autoDqDisarmed?: boolean;
+  stateAxes?: { provider?: { raw?: string | null; normalized?: string | null }; hub_status?: string | null; sync_status?: string | null } | null;
+  discordWorkflow?: { call_sent?: boolean; called_at?: string | null; thread_id?: string | null; player1_ready_at?: string | null; player2_ready_at?: string | null; attendance_deadline?: string | null } | null;
+  eligibility?: { two_sided?: boolean; actionable?: boolean; reason?: string | null };
+  providerActions?: Record<string, { kind: 'local' | 'remote' | 'unavailable'; enabled: boolean; label?: string; reason?: string }> | null;
 }
 
 // Stable, distinct badge color per event (hash → palette index) so the same
@@ -150,7 +156,7 @@ function ScoreCell({ player }: { player: MatchPlayer }) {
 function UnreachableBadge() {
   return (
     <span
-      title="No linked Discord account — bot can't reach this player. They must check in & report on start.gg directly."
+      title="No linked Discord account — the bot cannot reach this player. Coordinate their check-in through the tournament provider or the Hub."
       className="inline-flex items-center justify-center text-amber-400/90 text-xs leading-none flex-shrink-0 cursor-help select-none"
     >
       📵
@@ -208,39 +214,6 @@ function StreamUnlinkedBadge() {
     >
       ⚠ 📺
     </span>
-  );
-}
-
-function DQMenu({ match, onAction, onOpenChange }: { match: MatchData; onAction: MatchCardProps['onAction']; onOpenChange?: (open: boolean) => void }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    onOpenChange?.(open);
-  }, [open, onOpenChange]);
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (ref.current && !ref.current.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [ref]);
-
-  return (
-    <div className="relative" ref={ref}>
-      <ActionButton tone="dq" label="DQ" icon={<IconDQ />} onClick={() => setOpen(!open)} />
-      {open && (
-        <div className="absolute right-0 top-full mt-1.5 z-[100] bg-[var(--card)] border border-[var(--tone-dq-border)] rounded-md shadow-2xl min-w-[140px] text-left p-1 overflow-hidden animate-slideUp">
-          <div className="px-2.5 py-1 text-[9px] text-[var(--tone-dq)] font-bold uppercase tracking-widest border-b border-white/5 mb-1">DQ who?</div>
-          <button onClick={() => { setOpen(false); onAction("dq", match, "p1"); }} className="w-full text-left px-3 py-2 text-xs text-white hover:bg-[var(--tone-dq-hover)] rounded transition-colors truncate">{match.players[0].name || 'P1'}</button>
-          <button onClick={() => { setOpen(false); onAction("dq", match, "p2"); }} className="w-full text-left px-3 py-2 text-xs text-white hover:bg-[var(--tone-dq-hover)] rounded transition-colors truncate">{match.players[1].name || 'P2'}</button>
-          <button onClick={() => { setOpen(false); onAction("dq", match, "both"); }} className="w-full text-left px-3 py-2 text-xs font-bold text-red-500 hover:bg-[var(--tone-dq-hover)] border-t border-white/5 rounded mt-1 italic transition-colors">Both Players</button>
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -326,6 +299,13 @@ function StationMenu({ match, stations, onAction, onOpenChange }: { match: Match
 export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onToggleStream, stations, streamUnlinked }: MatchCardProps) {
   const meta = STATUS_META[match.status];
   const showTimer = match.status === "live" || match.status === "called";
+  // Legacy Start.gg rows do not carry an action projection. New provider rows
+  // must opt in explicitly, so an unavailable Challonge operation never leaks
+  // through the old fallback controls.
+  const actionEnabled = (action: string) => {
+    const projected = match.providerActions?.[action];
+    return projected ? projected.enabled : match.providerType !== 'challonge';
+  };
 
   const [timeDisplay, setTimeDisplay] = useState("00:00");
   const [isTimerWarning, setIsTimerWarning] = useState(false);
@@ -450,6 +430,13 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
           <span className="text-textDim truncate font-semibold text-xs" title={match.round}>
             {match.round || "Round"}
           </span>
+          {match.stateAxes && (
+            <div className="flex flex-wrap gap-1 pt-0.5 text-[8px] font-sans">
+              <span className="rounded border border-sky-500/30 px-1 text-sky-200" title={match.stateAxes.provider?.raw || undefined}>P: {match.stateAxes.provider?.normalized || 'unknown'}</span>
+              {match.stateAxes.hub_status && <span className="rounded border border-amber-500/30 px-1 text-amber-200">H: {match.stateAxes.hub_status}</span>}
+              {match.stateAxes.sync_status && <span className="rounded border border-violet-500/30 px-1 text-violet-200">S: {match.stateAxes.sync_status}</span>}
+            </div>
+          )}
         </div>
       </div>
 
@@ -457,10 +444,20 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
       <div className="flex items-center justify-between border-t border-white/5 bg-black/20 px-2.5 py-1.5 gap-2 text-xs">
         {/* Left Side: Timer & Auto-DQ Manual Warning */}
         <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+          {match.discordWorkflow && (match.discordWorkflow.call_sent || match.discordWorkflow.thread_id || match.discordWorkflow.player1_ready_at || match.discordWorkflow.player2_ready_at) && (
+            <span title={`Call: ${match.discordWorkflow.call_sent ? 'sent' : 'not recorded'} · Thread: ${match.discordWorkflow.thread_id || 'not recorded'} · Ready: ${match.discordWorkflow.player1_ready_at ? 'P1' : '—'} / ${match.discordWorkflow.player2_ready_at ? 'P2' : '—'}`} className="rounded border border-indigo-500/30 bg-indigo-500/10 px-1.5 py-0.5 text-[8px] font-bold text-indigo-200">
+              Discord: {match.discordWorkflow.call_sent ? 'call recorded' : 'workflow recorded'}
+            </span>
+          )}
+          {match.providerActions?.report_score?.kind === 'unavailable' && (
+            <span title={match.providerActions.report_score.reason} className="rounded border border-slate-500/40 bg-slate-500/10 px-1.5 py-0.5 text-[8px] font-bold text-slate-200">
+              Result: unavailable
+            </span>
+          )}
           {/* Unreachable / Auto-DQ Banner */}
           {match.autoDqDisarmed && match.isLocal && match.status !== "done" && match.status !== "dq" && (
             <span
-              title="Auto-DQ disarmed — partial-reach match. Bot won't intervene; coordinate on start.gg."
+              title="Auto-DQ disarmed — partial-reach match. Bot will not intervene; coordinate this match manually."
               className="rounded border border-amber-500/40 bg-amber-500/10 text-amber-300 px-1.5 py-0.5 text-[8px] font-bold tracking-wider cursor-help select-none shrink-0"
             >
               ⚠ MANUAL
@@ -539,17 +536,23 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
                 <StationMenu match={match} stations={stations || []} onAction={onAction} onOpenChange={setStationMenuOpen} />
               )}
 
-              {match.isLocal && match.status === "live" && (
+              {match.isLocal && match.status === "live" && actionEnabled('report_score') && (
                 <ActionButton tone="send" label="Send Score" icon={<IconSend />} onClick={() => onAction("sendScore", match)} />
               )}
 
-              {match.isLocal && (match.status === "live" || match.status === "called" || match.status === "conflict") && (
-                <DQMenu match={match} onAction={onAction} onOpenChange={setDqMenuOpen} />
+              {match.isLocal && (match.status === "waiting" || match.status === "called" || match.status === "live") && actionEnabled('dq') && (
+                <DQPlayerMenu
+                  players={match.players}
+                  onSelect={(player) => onAction("dq", match, player)}
+                  onBothPlayers={match.providerType === 'challonge' ? undefined : () => onAction("dq", match, "both")}
+                  onOpenChange={setDqMenuOpen}
+                  renderTrigger={({ toggle }) => <ActionButton tone="dq" label="DQ" icon={<IconDQ />} onClick={toggle} />}
+                />
               )}
 
               {match.isLocal && (
                 <>
-                  <ActionButton tone="reset" label="Reset Match" icon={<IconReset />} onClick={() => onAction("resetMatch", match)} />
+                  {actionEnabled('reset') && <ActionButton tone="reset" label="Reset Match" icon={<IconReset />} onClick={() => onAction("resetMatch", match)} />}
                   <ActionButton tone="dq" label="Remove Match" icon={<IconRemove />} onClick={() => onAction("removeMatch", match)} />
                 </>
               )}

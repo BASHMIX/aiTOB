@@ -2,6 +2,8 @@ from fastapi.testclient import TestClient
 from backend.api.main import app
 from backend.core.database import init_db
 import asyncio
+import os
+from backend.core.database import set_setting
 
 client = TestClient(app)
 import pytest
@@ -10,7 +12,11 @@ from backend.api.main import app
 
 @pytest.fixture(autouse=True)
 def setup_db():
+    os.environ["AITOB_BOOTSTRAP_OWNER_EMAIL"] = "api-security@example.test"
+    os.environ["AITOB_BOOTSTRAP_OWNER_PASSWORD"] = "api-security-password"
+    os.environ["AITOB_LEGACY_HUB_PASSWORD_COMPAT"] = "true"
     asyncio.run(init_db())
+    asyncio.run(set_setting("HUB_PASSWORD", "admin"))
 
 def test_sensitive_endpoints_require_auth():
     # Sensitive GET reads must return 401 Unauthorized
@@ -72,4 +78,18 @@ def test_cors_allows_dev_origin_and_blocks_unknown():
     )
     assert resp_blocked.status_code == 400
     assert "access-control-allow-origin" not in resp_blocked.headers
+
+
+def test_cookie_session_rejects_cross_origin_mutation():
+    login = client.post(
+        "/api/session/login",
+        json={"email": "api-security@example.test", "password": "api-security-password"},
+    )
+    assert login.status_code == 200
+    blocked = client.patch(
+        "/api/settings",
+        json={"GLOBAL_LANGUAGE": "en"},
+        headers={"Origin": "https://evil.example"},
+    )
+    assert blocked.status_code == 403
 

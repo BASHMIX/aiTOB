@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { useHubStore } from '@/store/useHubStore';
 import axios from 'axios';
+import { DQPlayerMenu } from './DQPlayerMenu';
+import { tournamentAccent, withAccentAlpha } from './tournamentAccent';
 
 // ── Icons ──────────────────────────────────────────────────────────────
 const IconBot = () => (
@@ -31,6 +33,7 @@ export function ActiveMatchCard({ match }: { match: any }) {
   const [dqOpen, setDqOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [stationOpen, setStationOpen] = useState(false);
+  const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
   const stationRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -45,7 +48,24 @@ export function ActiveMatchCard({ match }: { match: any }) {
 
   const isLive = !!match.station_id;
   const isSwapped = !!match.swapped;
-  const botEnabled = match.bot_enabled !== false;
+  const trackedMatch = matches.find((item) => item.set_id === match.set_id);
+  // The On-Stream card receives a compact match snapshot. Read the mutable
+  // value from Hub state so its colour changes as soon as the PATCH succeeds.
+  const botEnabled = (trackedMatch?.bot_enabled ?? match.bot_enabled) !== false;
+  const tournament = tournaments.find((item) => item.slug === match.tournament_slug || item.slug === currentSlug);
+  const providerType = match.provider_type || tournament?.provider_type || 'startgg';
+  const providerLabel = providerType === 'challonge' ? 'Challonge' : 'Start.gg';
+  const accent = tournamentAccent(tournament);
+  // The On-Stream endpoint is intentionally compact.  Reuse the authoritative
+  // action projection already loaded for the same match in Match Dashboard so
+  // a provider-backed score/DQ action does not disappear from this card.
+  const dashboardMatch = matches.find((item) => item.set_id === match.set_id);
+  const actionEnabled = (action: string) => {
+    const projected = match.actions?.[action] ?? dashboardMatch?.actions?.[action];
+    return projected ? projected.enabled : providerType !== 'challonge';
+  };
+  const canSendScore = actionEnabled('report_score');
+  const canDq = actionEnabled('dq');
 
   // ── Close / remove from active tracking ────────────────────────────
   const closeMatch = async () => {
@@ -113,16 +133,27 @@ export function ActiveMatchCard({ match }: { match: any }) {
     setMatches(matches.map(m =>
       m.set_id === match.set_id ? { ...m, bot_enabled: newBot } : m
     ));
-    await axios.patch(`/api/active-matches/${match.set_id}`, { bot_enabled: newBot });
+    try {
+      await axios.patch(`/api/active-matches/${match.set_id}`, { bot_enabled: newBot });
+    } catch (error: any) {
+      setMatches(matches.map(m =>
+        m.set_id === match.set_id ? { ...m, bot_enabled: botEnabled } : m
+      ));
+      setNotice({ text: error.response?.data?.detail || 'Could not update Bot for this match.', ok: false });
+    }
   };
 
   // ── DQ ─────────────────────────────────────────────────────────────
   const dqPlayer = async (player: 'p1' | 'p2') => {
     setDqOpen(false);
-    await axios.post(`/api/active-matches/${match.set_id}/dq`, { player });
-    setMatches(matches.map(m =>
-      m.set_id === match.set_id ? { ...m, status: 'dq' as const } : m
-    ));
+    try {
+      const response = await axios.post(`/api/active-matches/${match.set_id}/dq`, { player });
+      const fresh = await axios.get('/api/active-matches');
+      setMatches(fresh.data.matches || []);
+      setNotice({ text: response.data.message || 'DQ submitted for provider verification.', ok: true });
+    } catch (error: any) {
+      setNotice({ text: error.response?.data?.detail || 'Could not submit DQ.', ok: false });
+    }
   };
 
   // ── Send score ─────────────────────────────────────────────────────
@@ -130,12 +161,19 @@ export function ActiveMatchCard({ match }: { match: any }) {
     setSending(true);
     try {
       const res = await axios.post(`/api/active-matches/${match.set_id}/send`);
-      if (!res.data.error) {
+      if (!res.data.error && providerType !== 'challonge') {
         const currentMatches = useHubStore.getState().matches;
         setMatches(currentMatches.map(m =>
           m.set_id === match.set_id ? { ...m, status: 'complete' as const } : m
         ));
       }
+      if (providerType === 'challonge') {
+        const fresh = await axios.get('/api/active-matches');
+        setMatches(fresh.data.matches || []);
+      }
+      setNotice({ text: res.data.message || 'Result submitted.', ok: true });
+    } catch (error: any) {
+      setNotice({ text: error.response?.data?.detail || 'Could not submit the result.', ok: false });
     } finally {
       setSending(false);
     }
@@ -207,16 +245,19 @@ export function ActiveMatchCard({ match }: { match: any }) {
   }, [match.status, match.started_at, match.called_at, dqTimerSeconds, showTimer]);
 
   return (
-    <div id={`active-match-${match.set_id}`} className={`bg-cardDark border border-white/10 rounded-lg flex flex-col shadow-md transition-all relative ${dqOpen ? 'z-30 border-red-500/30' : 'z-10'}`}>
+    <div id={`active-match-${match.set_id}`} style={{ borderColor: withAccentAlpha(accent, 0.5) }} className={`bg-cardDark border rounded-lg flex flex-col shadow-md transition-all relative ${dqOpen ? 'z-30' : 'z-10'}`}>
 
       {/* ── Header ── */}
       <div className="flex items-center justify-between px-3 py-2 bg-appDark border-b border-white/10 rounded-t-lg">
-        <div className="flex items-center gap-2">
-          <span className="font-bold text-white text-sm">Match#: {match.match_number || match.set_id}</span>
+        <div className="min-w-0">
+          <span style={{ color: accent }} className="block truncate font-bold text-sm">Match#: {match.match_number || match.set_id}</span>
+          <span className="block truncate text-[9px] font-semibold uppercase tracking-wide text-textDim">
+            {tournament?.name || match.tournament_slug || 'Tournament'} · {providerLabel}
+          </span>
         </div>
         <div className="flex items-center gap-2">
-          <span className={`w-2 h-2 rounded-full ${isLive ? 'bg-statusGreen animate-pulse' : 'bg-gray-600'}`} />
-          <span className={`text-[10px] font-bold ${isLive ? 'text-statusGreen' : 'text-textDim'}`}>
+          <span style={isLive ? { backgroundColor: accent } : undefined} className={`w-2 h-2 rounded-full ${isLive ? 'animate-pulse' : 'bg-gray-600'}`} />
+          <span style={isLive ? { color: accent } : undefined} className={`text-[10px] font-bold ${isLive ? '' : 'text-textDim'}`}>
             {isLive ? 'LIVE ON' : 'NOT LIVE'}
           </span>
           {/* Custom Station Dropdown */}
@@ -346,30 +387,30 @@ export function ActiveMatchCard({ match }: { match: any }) {
       </div>
 
       {/* ── Action Bar ── */}
-      <div className="flex items-center border-t border-white/10 bg-appDark rounded-b-lg overflow-hidden">
+      {notice && <p role="status" className={`mx-2 mt-2 rounded border px-2 py-1 text-[10px] ${notice.ok ? 'border-statusGreen/30 bg-statusGreen/10 text-statusGreen' : 'border-statusRed/30 bg-statusRed/10 text-statusRed'}`}>{notice.text}</p>}
+      <div className="flex items-center border-t border-white/10 bg-appDark rounded-b-lg overflow-visible">
         {/* DQ / Force */}
-        <div className="relative flex-1">
-          <button onClick={() => setDqOpen(o => !o)}
-            className="w-full flex flex-col items-center gap-0.5 py-2 px-1 text-red-400 hover:bg-red-900/20 transition-colors"
-            title="Force DQ a player">
-            <IconDQ /><span className="text-[9px] font-bold">Force DQ</span>
-          </button>
-          {dqOpen && (
-            <>
-              <div className="fixed inset-0 z-40" onClick={() => setDqOpen(false)} />
-              <div className="absolute left-0 bottom-full mb-1.5 z-50 bg-cardDark border border-red-500/40 rounded-lg shadow-2xl min-w-[150px] p-1 overflow-hidden animate-slideUp">
-                <div className="px-2 py-1 text-[9px] text-red-400 font-bold border-b border-white/5 uppercase tracking-widest">DQ Who?</div>
-                <button onClick={() => dqPlayer('p1')} className="w-full text-left px-3 py-2 text-xs text-white hover:bg-red-500/10 rounded transition-colors truncate">{match.p1_name}</button>
-                <button onClick={() => dqPlayer('p2')} className="w-full text-left px-3 py-2 text-xs text-white hover:bg-red-500/10 rounded transition-colors truncate">{match.p2_name}</button>
-              </div>
-            </>
-          )}
-        </div>
-        <div className="w-px h-8 bg-white/10" />
+        {canDq && <div className="flex-1">
+          <DQPlayerMenu
+            players={[{ name: match.p1_name }, { name: match.p2_name }]}
+            onSelect={dqPlayer}
+            onOpenChange={setDqOpen}
+            menuPositionClassName="left-0 bottom-full mb-1.5"
+            renderTrigger={({ toggle }) => (
+              <button onClick={toggle}
+                className="w-full flex flex-col items-center gap-0.5 py-2 px-1 text-red-400 hover:bg-red-900/20 transition-colors"
+                title="DQ a player">
+                <IconDQ /><span className="text-[9px] font-bold">DQ</span>
+              </button>
+            )}
+          />
+        </div>}
+        {canDq && <div className="w-px h-8 bg-white/10" />}
         {/* Bot toggle */}
-        <button onClick={toggleBot}
-          title={botEnabled ? 'Disable Bot for this match' : 'Enable Bot for this match'}
-          className={`flex-1 flex flex-col items-center gap-0.5 py-2 px-1 transition-colors
+          <button onClick={toggleBot}
+            title={botEnabled ? 'Disable Bot for this match' : 'Enable Bot for this match'}
+            aria-pressed={botEnabled}
+            className={`flex-1 flex flex-col items-center gap-0.5 py-2 px-1 transition-colors
             ${botEnabled ? 'text-accentYellow hover:bg-yellow-900/20' : 'text-gray-600 hover:bg-white/5'}`}>
           <IconBot /><span className="text-[9px] font-bold">Bot</span>
         </button>
@@ -381,13 +422,13 @@ export function ActiveMatchCard({ match }: { match: any }) {
             ${isSwapped ? 'text-blue-300 bg-blue-900/20' : 'text-textDim hover:bg-white/5'}`}>
           <IconSwap /><span className="text-[9px] font-bold">Swap</span>
         </button>
-        <div className="w-px h-8 bg-white/10" />
+        {canSendScore && <div className="w-px h-8 bg-white/10" />}
         {/* Send */}
-        <button onClick={sendScore} disabled={sending}
-          title="Report score to Start.gg and close match"
+        {canSendScore && <button onClick={sendScore} disabled={sending}
+          title={providerType === 'challonge' ? 'Submit result for provider verification' : 'Report score to Start.gg and close match'}
           className="flex-1 flex flex-col items-center gap-0.5 py-2 px-1 text-statusGreen hover:bg-green-900/20 transition-colors disabled:opacity-40">
           <IconSend /><span className="text-[9px] font-bold">{sending ? '...' : 'Send'}</span>
-        </button>
+        </button>}
       </div>
     </div>
   );

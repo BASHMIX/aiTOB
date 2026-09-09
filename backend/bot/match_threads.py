@@ -2,7 +2,7 @@ import discord
 import asyncio
 from backend.core.database import (
     get_player, get_active_match, update_active_match, add_bot_feed,
-    get_setting, upsert_active_match,
+    get_setting, upsert_active_match, get_active_matches,
 )
 from backend.core.match_state import generate_lobby_password, start_call_timer
 
@@ -30,16 +30,15 @@ FALLBACK_THREAD_TEXT = (
 )
 
 async def create_match_thread(bot, tournament, set_data):
-    channel_id = await get_setting("match_threads_channel_id")
-    if not channel_id:
-        for guild in bot.guilds:
-            channel = discord.utils.get(guild.text_channels, name="active-matches")
-            if channel:
-                channel_id = channel.id
-                break
+    # An account-bound destination is mandatory. Falling back to the first guild
+    # channel could route a match to a different organizer's Discord account.
+    from backend.core.integrations import get_destination
+    account_id = (tournament or {}).get("discord_account_id")
+    destination = await get_destination(str(account_id or ""), "match_call_channel") if account_id else None
+    channel_id = destination.get("external_id") if destination else None
 
     if not channel_id:
-        await add_bot_feed("Match thread failed: No 'active-matches' channel found.", "error")
+        await add_bot_feed("Match thread failed: selected Discord account has no match-call destination.", "error")
         return
 
     channel = bot.get_channel(int(channel_id))
@@ -61,8 +60,20 @@ async def create_match_thread(bot, tournament, set_data):
     # via _resolve_discord in sync_active_matches). Fall back to a fresh lookup
     # for the case where the row was created outside sync — e.g. via the manual
     # "Activate" hub button before the next sync tick.
-    p1_discord = set_data.get('p1_discord') or await get_discord_id_from_startgg(set_data.get('p1_id') or set_data.get('p1_entrant_id'))
-    p2_discord = set_data.get('p2_discord') or await get_discord_id_from_startgg(set_data.get('p2_id') or set_data.get('p2_entrant_id'))
+    # A Challonge entrant ID is not a Start.gg ID. Never infer a Discord mention
+    # from a display name or query the Start.gg identity table for it; an explicit
+    # persisted link/organizer override is the only permitted recipient source.
+    if (tournament or {}).get("provider_type") == "challonge":
+        p1_discord = set_data.get('p1_discord')
+        p2_discord = set_data.get('p2_discord')
+    else:
+        workspace_id = set_data.get("workspace_id")
+        p1_discord = set_data.get('p1_discord') or await get_discord_id_from_startgg(
+            set_data.get('p1_id') or set_data.get('p1_entrant_id'), workspace_id
+        )
+        p2_discord = set_data.get('p2_discord') or await get_discord_id_from_startgg(
+            set_data.get('p2_id') or set_data.get('p2_entrant_id'), workspace_id
+        )
 
     # ── Dual-mode check-in: 'startgg' hands check-in + DQ to start.gg ──────
     # The bot still opens the thread and pings players, but with a "go to start.gg"
@@ -81,13 +92,21 @@ async def create_match_thread(bot, tournament, set_data):
     fully_unreachable = not p1_discord and not p2_discord
     partial = (bool(p1_discord) ^ bool(p2_discord))  # exactly one side has Discord
 
+    # Challonge DQ is intentionally unavailable until a provider contract has
+    # been proven end-to-end. Its attendance timer may warn, but it must never
+    # invoke the legacy auto-DQ path just because both Discord users are known.
+    from backend.core.provider_feature_flags import get_provider_feature_flags
+    # Challonge's 0/-1 convention is an explicit organizer choice, never an
+    # attendance-timer decision.  Manual DQ may be enabled separately, but
+    # Auto-DQ remains disarmed for every Challonge match.
+    challonge_dq_disarmed = (tournament or {}).get("provider_type") == "challonge"
     await update_active_match(
         set_id,
         discord_thread_id=str(thread.id),
         status="called",
         p1_discord=p1_discord,
         p2_discord=p2_discord,
-        auto_dq_disarmed=(1 if (fully_unreachable or partial) else 0),
+        auto_dq_disarmed=(1 if (fully_unreachable or partial or challonge_dq_disarmed) else 0),
     )
 
     # Initialize the AI-referee state for this thread up front, keyed by the
@@ -136,8 +155,16 @@ async def create_match_thread(bot, tournament, set_data):
         desc = f"**{p1_name}** vs **{p2_name}**\n\nClick **I'm Ready** to check in. You have 10 minutes."
         embed = discord.Embed(title=f"Match Ready: {round_name}", description=desc, color=discord.Color.green())
 
-    view = ReadyCheckView(set_id, p1_discord, p2_discord, is_stream, thread, bot)
-    await thread.send(content=content, embed=embed, view=view)
+    view = ReadyCheckView(set_id, p1_discord, p2_discord, is_stream, thread, bot, workspace_id=set_data.get("workspace_id"))
+    call_message = await thread.send(content=content, embed=embed, view=view)
+    # The thread id is the durable idempotency proof. Persisting the call
+    # message as well gives the Hub an auditable delivery record without
+    # relying on an inferred "called" state.
+    await update_active_match(
+        set_id,
+        call_message_id=str(call_message.id),
+        thread_id=str(thread.id),
+    )
 
     if fully_unreachable:
         await thread.send(
@@ -156,9 +183,9 @@ async def create_match_thread(bot, tournament, set_data):
         )
 
     from backend.core.database import get_tournament
-    t = await get_tournament(set_data.get('tournament_slug', ''))
+    t = await get_tournament(set_data.get('tournament_slug', ''), set_data.get('workspace_id'))
     timeout = (t.get('dq_timer_seconds') or 600) if t else 600
-    asyncio.create_task(run_ready_check_timeout(bot, thread, set_id, timeout))
+    asyncio.create_task(run_ready_check_timeout(bot, thread, set_id, timeout, set_data.get("workspace_id")))
 
 async def _create_startgg_checkin_thread(
     bot, thread, set_id, p1_name, p2_name, round_name,
@@ -206,7 +233,7 @@ async def _create_startgg_checkin_thread(
     # (e.g. set not yet in a callable state) without breaking the thread.
     try:
         from backend.core.providers.registry import get_provider_for_tournament
-        provider = await get_provider_for_tournament(set_data.get("tournament_slug") or "")
+        provider = await get_provider_for_tournament(set_data.get("tournament_slug") or "", set_data.get("workspace_id"))
         result = await provider.mark_called(set_id)
         if result.success:
             await add_bot_feed(
@@ -226,23 +253,23 @@ async def _create_startgg_checkin_thread(
 
     from backend.api.ws_manager import manager as hub_mgr
     try:
-        await hub_mgr.broadcast({"type": "match_update"})
+        await hub_mgr.broadcast({"type": "match_update", "_workspace_id": set_data.get("workspace_id")})
     except Exception:
         pass
 
 
-async def get_discord_id_from_startgg(sgg_id: str) -> str | None:
+async def get_discord_id_from_startgg(sgg_id: str, workspace_id: str | None = None) -> str | None:
     if not sgg_id:
         return None
-    from backend.core.database import aiosqlite, DB_PATH
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT discord_id FROM players WHERE startgg_id = ?", (sgg_id,)) as c:
-            row = await c.fetchone()
-            return str(row[0]) if row else None
+    from backend.core.database import get_discord_id_by_startgg
+    return await get_discord_id_by_startgg(sgg_id, workspace_id)
 
 class ReadyCheckView(discord.ui.View):
-    def __init__(self, set_id, p1_discord, p2_discord, is_stream, thread, bot):
-        super().__init__(timeout=600)
+    def __init__(self, set_id, p1_discord, p2_discord, is_stream, thread, bot, *, workspace_id=None):
+        # Persistent component registration is restored at bot startup from the
+        # durable call/thread/message IDs.  A view timeout made a valid player
+        # click fail after a restart even though the Hub still said `called`.
+        super().__init__(timeout=None)
         self.set_id = set_id
         self.ready_players = set()
         self.p1_discord = p1_discord
@@ -250,21 +277,51 @@ class ReadyCheckView(discord.ui.View):
         self.is_stream = is_stream
         self.thread = thread
         self.bot = bot
+        self.workspace_id = workspace_id
+        self.ready_button.custom_id = f"aitob:ready:{set_id}"
 
     async def on_timeout(self):
-        match = await get_active_match(self.set_id)
+        match = await (get_active_match(self.set_id, self.workspace_id)
+                       if self.workspace_id is not None else get_active_match(self.set_id))
         if match and match.get("status") == "called":
             await self.thread.send("⏰ Ready check expired. Use the hub to manage this match.")
 
     @discord.ui.button(label="I'm Ready", style=discord.ButtonStyle.success)
     async def ready_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = str(interaction.user.id)
+        if user_id not in {str(self.p1_discord or ""), str(self.p2_discord or "")}:
+            await interaction.response.send_message("This Ready button is only for the two assigned players.", ephemeral=True)
+            return
+        # Acknowledge before SQLite/outbox work.  Discord expires an interaction
+        # after roughly three seconds, and an expired acknowledgement used to
+        # show “This interaction failed” even when the Ready state committed.
+        await interaction.response.defer(ephemeral=True, thinking=False)
         self.ready_players.add(user_id)
         player_key = "p1" if user_id == str(self.p1_discord) else "p2"
-        await update_active_match(self.set_id, **{f"{player_key}_ready": True})
-        await interaction.response.send_message(f"✅ {interaction.user.display_name} is ready!", ephemeral=False)
+        match = await (get_active_match(self.set_id, self.workspace_id)
+                       if self.workspace_id is not None else get_active_match(self.set_id))
+        if not match:
+            await interaction.response.send_message("This match is no longer available.", ephemeral=True)
+            return
+        is_challonge_local = (
+            match.get("tournament_slug", "").startswith("challonge:")
+            and (await _challonge_local_workflow_enabled())
+        )
+        if is_challonge_local:
+            from backend.core.match_commands import MatchCommandService
+            try:
+                service = (MatchCommandService(workspace_id=self.workspace_id)
+                           if self.workspace_id is not None else MatchCommandService())
+                await service.mark_ready(self.set_id, player_key)
+            except ValueError as exc:
+                await interaction.followup.send(str(exc), ephemeral=True)
+                return
+        else:
+            await update_active_match(self.set_id, **{f"{player_key}_ready": True})
+        await interaction.followup.send(f"✅ {interaction.user.display_name} is ready!", ephemeral=True)
 
-        match = await get_active_match(self.set_id)
+        match = await (get_active_match(self.set_id, self.workspace_id)
+                       if self.workspace_id is not None else get_active_match(self.set_id))
         opponent_discord = self.p2_discord if player_key == "p1" else self.p1_discord
 
         # Emergency-fallback path: opponent has no Discord. We've already disarmed
@@ -287,8 +344,14 @@ class ReadyCheckView(discord.ui.View):
             # Both checked in → advance through the state machine (called → in_progress).
             # transition_match stamps started_at, best-effort marks the provider
             # in_progress, queues the score-request DM, and broadcasts to the Hub.
-            from backend.core.match_state import transition_match
-            await transition_match(self.set_id, "in_progress")
+            if is_challonge_local:
+                from backend.core.match_commands import MatchCommandService
+                service = (MatchCommandService(workspace_id=self.workspace_id)
+                           if self.workspace_id is not None else MatchCommandService())
+                await service.start(self.set_id)
+            else:
+                from backend.core.match_state import transition_match
+                await transition_match(self.set_id, "in_progress")
 
             # Arm the AI referee: flip the thread's graph state to 'playing' so
             # chat results are now accepted (they were gated during check-in).
@@ -320,7 +383,7 @@ class ReadyCheckView(discord.ui.View):
         """Green-room handoff (thin wrapper). Both players have checked in, so deliver
         the broadcaster's lobby credentials privately. The implementation lives in the
         module-level deliver_stream_credentials so the start.gg-mode sync path can reuse it."""
-        await deliver_stream_credentials(self.bot, self.thread, self.set_id, self.p1_discord, self.p2_discord)
+        await deliver_stream_credentials(self.bot, self.thread, self.set_id, self.p1_discord, self.p2_discord, self.workspace_id)
 
     async def _handle_offstream_match(self):
         password = generate_lobby_password()
@@ -338,7 +401,47 @@ class ReadyCheckView(discord.ui.View):
             pass
         return password
 
-async def deliver_stream_credentials(bot, thread, set_id, p1_discord, p2_discord):
+
+async def _challonge_local_workflow_enabled() -> bool:
+    from backend.core.provider_feature_flags import get_provider_feature_flags
+    return get_provider_feature_flags().challonge_local_workflow_enabled
+
+
+async def restore_ready_check_views(bot) -> int:
+    """Re-register durable Challonge Ready buttons after a bot process restart.
+
+    This reads SQLite only.  It neither sends a Discord message nor performs a
+    provider request, and is intentionally limited to stored called matches.
+    """
+    restored = 0
+    for match in await get_active_matches():
+        if (
+            match.get("provider_type") != "challonge"
+            or match.get("status") != "called"
+            or not match.get("call_message_id")
+            or not match.get("discord_thread_id")
+            or not match.get("p1_discord")
+            or not match.get("p2_discord")
+        ):
+            continue
+        try:
+            thread = bot.get_channel(int(match["discord_thread_id"]))
+            if thread is None:
+                thread = await bot.fetch_channel(int(match["discord_thread_id"]))
+            view = ReadyCheckView(
+                str(match["set_id"]), str(match["p1_discord"]), str(match["p2_discord"]),
+                bool(match.get("is_stream_match")), thread, bot,
+                workspace_id=match.get("workspace_id"),
+            )
+            bot.add_view(view, message_id=int(match["call_message_id"]))
+            restored += 1
+        except (ValueError, TypeError, discord.DiscordException):
+            # A deleted thread/message is not a reason to block the remaining
+            # recovery work.  It stays visible in the Hub for organizer review.
+            continue
+    return restored
+
+async def deliver_stream_credentials(bot, thread, set_id, p1_discord, p2_discord, workspace_id: str | None = None):
     """Privately DM the assigned stream station's broadcaster-lobby credentials to both
     players, posting only a non-sensitive confirmation in the thread.
 
@@ -346,7 +449,7 @@ async def deliver_stream_credentials(bot, thread, set_id, p1_discord, p2_discord
     start.gg-mode sync path (startgg_go_live drain handler). Credentials live on the
     assigned stream station (room_name_or_id / room_password); they are never posted
     publicly. Best-effort throughout — DMs may be closed."""
-    match = await get_active_match(set_id)
+    match = await get_active_match(set_id, workspace_id)
     if not match:
         return
 
@@ -354,7 +457,7 @@ async def deliver_stream_credentials(bot, thread, set_id, p1_discord, p2_discord
     station_id = match.get("station_id")
     if station_id:
         from backend.core.database import get_stations
-        station = next((s for s in await get_stations() if s["id"] == station_id), None)
+        station = next((s for s in await get_stations(match.get("workspace_id")) if s["id"] == station_id), None)
 
     room = (station or {}).get("room_name_or_id") or ""
     pwd = (station or {}).get("room_password") or ""
@@ -416,24 +519,32 @@ async def deliver_stream_credentials(bot, thread, set_id, p1_discord, p2_discord
 
     from backend.api.ws_manager import manager as hub_mgr
     try:
-        await hub_mgr.broadcast({"type": "match_update"})
+        await hub_mgr.broadcast({"type": "match_update", "_workspace_id": match.get("workspace_id")})
     except Exception:
         pass
 
 
-async def run_ready_check_timeout(bot, thread, set_id, timeout_seconds: int = 600):
+async def run_ready_check_timeout(bot, thread, set_id, timeout_seconds: int = 600, workspace_id: str | None = None):
     warning_at = max(0, timeout_seconds - 180)
     await asyncio.sleep(warning_at)
 
     # Re-fetch each time — the disarm flag can be flipped mid-flight, e.g. by a
     # T.O. manually marking the match safe, or by the partial-reach fallback.
-    match = await get_active_match(set_id)
-    if match and match.get('status') == 'called' and not match.get('auto_dq_disarmed'):
-        await thread.send("⚠️ **Warning**: 3 minutes remaining. If both players are not ready, the match may be DQ'd.")
+    match = await get_active_match(set_id, workspace_id)
+    workspace_id = match.get("workspace_id") if match else None
+    is_challonge = bool(match and str(match.get("tournament_slug") or "").startswith("challonge:"))
+    if match and match.get('status') == 'called' and (is_challonge or not match.get('auto_dq_disarmed')):
+        if is_challonge:
+            await thread.send("⚠️ **Warning**: 3 minutes remaining. Check in now; Challonge Auto-DQ is disabled and an organizer will review any no-show.")
+        else:
+            await thread.send("⚠️ **Warning**: 3 minutes remaining. If both players are not ready, the match may be DQ'd.")
 
     await asyncio.sleep(180)
-    match = await get_active_match(set_id)
+    match = await get_active_match(set_id, workspace_id)
     if not match or match.get('status') != 'called':
+        return
+    if str(match.get("tournament_slug") or "").startswith("challonge:"):
+        await thread.send("⏰ **Ready check expired.** No Auto-DQ was sent to Challonge; an organizer must choose the bracket outcome manually.")
         return
     if match.get('auto_dq_disarmed'):
         # Spec section 3: silent surrender to start.gg. No DQ, no thread spam.

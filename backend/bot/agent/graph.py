@@ -14,6 +14,10 @@ load_dotenv()
 # We defer instantiation until first use so the DB is already available.
 _llm = None
 _extractor_llm = None
+# Result inference is intentionally unavailable until a durable Result Claims
+# workflow exists. Kept explicit so historical benchmark tests do not imply
+# that model output is an accepted tournament result.
+AI_REFEREE_RESULT_INFERENCE_ENABLED = False
 
 async def _get_llm():
     """Return the LLM, initializing it on first call using the key from DB or env."""
@@ -54,57 +58,14 @@ async def _get_llm():
     return _llm, _extractor_llm
 
 async def evaluate_chat(state: MatchState) -> dict:
+    """Disable legacy AI-referee result inference pending Result Claims.
+
+    A player chat message is not durable evidence and must never become a
+    completed/conflict state merely because an LLM parsed it. The Organizer
+    Assistant has its own read-only/propose-only service; this legacy graph is
+    intentionally inert until a reviewed Result Claim pipeline consumes it.
     """
-    Node that calls the LLM to evaluate the current chat history.
-    """
-    chat_context = "\n".join(state.get("chat_history", []))
-
-    if not chat_context.strip():
-        return {}
-
-    # Explicit roster so the LLM maps winner_discord_id to a REAL player in this
-    # match (fixes the "winner didn't match either player" mismatch). The chat
-    # lines are tagged "(ID: <discord_id>)", so the model can tie a self-report
-    # ("I won 2-1") to the correct Discord ID.
-    p1_name = state.get("player1_name") or "Player 1"
-    p2_name = state.get("player2_name") or "Player 2"
-    p1_did = state.get("player1_discord")
-    p2_did = state.get("player2_discord")
-    roster = (
-        f"Players in this match (winner_discord_id MUST be one of these two Discord IDs):\n"
-        f"  • {p1_name} — Discord ID: {p1_did}\n"
-        f"  • {p2_name} — Discord ID: {p2_did}\n\n"
-    )
-
-    prompt = (
-        "Evaluate the following match chat and extract the match result.\n"
-        "Look for indications of who won, the score, and if there are any conflicts or disputes.\n"
-        "Each chat line is tagged with the sender's Discord ID. Set winner_discord_id to the "
-        "Discord ID of the player who WON — it must be exactly one of the two IDs listed below.\n\n"
-        f"{roster}"
-        f"Chat History:\n{chat_context}"
-    )
-    
-    try:
-        _, extractor = await _get_llm()
-        result: MatchResultExtraction = extractor.invoke(prompt)
-        
-        updates = {}
-        if result.conflict_detected:
-            updates["match_status"] = "conflict"
-        elif result.winner_discord_id and result.score:
-            updates["match_status"] = "completed"
-            updates["winner_id"] = result.winner_discord_id
-            updates["score_string"] = result.score
-
-        # Always carry the reasoning forward so callers can log it on status flips.
-        if result.reasoning:
-            updates["reasoning"] = result.reasoning
-
-        return updates
-    except Exception as e:
-        print(f"LLM Extraction failed: {e}")
-        return {}
+    return {}
 
 # Build the Graph
 workflow = StateGraph(MatchState)
