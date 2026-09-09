@@ -31,7 +31,7 @@ RUN mkdir -p backend/core backend/api/static/avatars backend/api/overlay_configs
 # ── API image ─────────────────────────────────────────────────────────
 FROM base AS api
 EXPOSE 8000
-CMD ["uvicorn", "backend.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "backend.api.uvicorn_runner"]
 
 # ── Bot image ─────────────────────────────────────────────────────────
 FROM base AS bot

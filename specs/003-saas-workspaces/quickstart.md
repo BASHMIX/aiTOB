@@ -233,6 +233,23 @@ the existing ignored development values; API and bot import smoke checks each
 reported both keys present without printing them. Containers were not started
 against the candidate because startup workers may contact providers.
 
+The Windows API entrypoint now uses `backend.api.uvicorn_runner`, which forces
+uvicorn to use a Selector event loop before application startup. This is
+required for psycopg async connections; the stock uvicorn Windows loop selects
+Proactor and fails before PostgreSQL can be opened. A fresh runner process was
+started against the candidate with background workers paused: `/health` and
+`/readiness` both returned 200 (`database=postgresql`), then the process shut
+down cleanly. The runner factory has a regression test; no bot login or
+external provider request was made.
+
+The current runtime PostgreSQL database was backed up to a custom-format dump
+with a sidecar manifest, and the manifest digest/size/name were verified. A
+separate backup of the populated candidate was restored into a new disposable
+PostgreSQL database and validated before that disposable database was dropped:
+1 workspace, 2 tournaments, 19 active matches, 9 overlays, 2 stations, 2
+players, 2 integration accounts, 8 held Outbox rows, 9 held Hub commands, and
+17 hold audits were preserved. The old runtime database remains untouched.
+
 For a cutover review window, set `AITOB_DISABLE_BACKGROUND_WORKERS=true` before
 starting the API. It initializes the database and accepts read-only checks but
 does not restore workflows, schedule Live polling, sync tournaments, or start

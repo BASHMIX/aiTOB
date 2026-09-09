@@ -81,7 +81,7 @@ SERVICES = [
     {
         "name": "API",
         "color": CYAN,
-        "cmd": [PYTHON, "-m", "uvicorn", "backend.api.main:app", "--reload", "--host", "0.0.0.0", "--port", "8000"],
+        "cmd": [PYTHON, "-m", "backend.api.uvicorn_runner", "--reload", "--host", "0.0.0.0", "--port", "8000"],
     },
     {
         "name": "BOT",
