@@ -83,3 +83,30 @@ async def test_api_startup_can_pause_background_workers_for_cutover(monkeypatch)
         sync_manager.restore_live_schedules.assert_not_awaited()
     finally:
         await main.shutdown_event()
+
+
+@pytest.mark.asyncio
+async def test_startup_sync_never_routes_unowned_legacy_rows_to_provider(monkeypatch):
+    """Unowned migration leftovers must not re-enable the legacy provider bridge."""
+    from backend.api import main
+    from backend.core import database
+    from backend.api.ws_manager import manager as hub_manager
+    from backend.core.provider_sync_manager import sync_manager
+    rows = [
+        {"slug": "legacy/unowned", "provider_type": "startgg", "workspace_id": None},
+        {"slug": "owned/event", "provider_type": "startgg", "workspace_id": "workspace-a"},
+    ]
+    listed = AsyncMock(side_effect=[rows, [rows[1]]])
+    sync = AsyncMock()
+    status = AsyncMock()
+    broadcast = AsyncMock()
+    monkeypatch.setattr(database, "get_tournaments", listed)
+    monkeypatch.setattr(database, "set_tournament_sync_status", status)
+    monkeypatch.setattr(sync_manager, "sync_bracket", sync)
+    monkeypatch.setattr(hub_manager, "broadcast", broadcast)
+
+    await main.sync_tracked_tournaments()
+
+    sync.assert_awaited_once_with("owned/event", workspace_id="workspace-a", reason="startup")
+    status.assert_not_awaited()
+    broadcast.assert_awaited_once_with({"type": "match_update", "_workspace_id": "workspace-a"})

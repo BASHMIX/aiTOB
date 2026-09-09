@@ -231,6 +231,14 @@ async def sync_tracked_tournaments() -> None:
     for tournament in await get_tournaments():
         slug = tournament.get("slug")
         if not slug: continue
+        # Runtime workers may enumerate the repository, but an unowned legacy
+        # row must never enter a provider sync path. Ownership backfill is an
+        # explicit migration concern; silently passing None would re-enable
+        # the old cross-tenant provider bridge.
+        workspace_id = tournament.get("workspace_id")
+        if not workspace_id:
+            print(f"[SYS] Initial sync skipped for unowned tournament {slug}")
+            continue
         if is_completed_challonge_snapshot(tournament):
             continue
         try:
@@ -241,11 +249,11 @@ async def sync_tracked_tournaments() -> None:
                 continue
             await sync_manager.sync_bracket(
                 slug,
-                workspace_id=tournament.get("workspace_id"),
+                workspace_id=workspace_id,
                 reason="startup",
             )
         except Exception as exc:
-            await set_tournament_sync_status(slug, False, str(exc))
+            await set_tournament_sync_status(slug, False, str(exc), workspace_id=workspace_id)
             print(f"[SYS] Initial sync failed for {slug}: {exc}")
     # Emit only to the owning workspace; the broadcast manager drops any
     # unscoped event rather than risking cross-tenant data.
@@ -269,6 +277,10 @@ async def reconciliation_loop():
                 slug = t.get("slug")
                 if not slug:
                     continue
+                workspace_id = t.get("workspace_id")
+                if not workspace_id:
+                    print(f"[SYS] Periodic sync skipped for unowned tournament {slug}")
+                    continue
                 if is_completed_challonge_snapshot(t):
                     continue
                 if t.get("provider_type") == "challonge":
@@ -279,13 +291,13 @@ async def reconciliation_loop():
                 try:
                     await sync_manager.sync_bracket(
                         slug,
-                        workspace_id=t.get("workspace_id"),
+                        workspace_id=workspace_id,
                         reason="periodic",
                     )
                     # Broadcast updates to hub clients
-                    await hub_mgr.broadcast({"type": "match_update", "_workspace_id": t.get("workspace_id")})
+                    await hub_mgr.broadcast({"type": "match_update", "_workspace_id": workspace_id})
                 except Exception as e:
-                    await set_tournament_sync_status(slug, False, str(e))
+                    await set_tournament_sync_status(slug, False, str(e), workspace_id=workspace_id)
                     print(f"[SYS] Reconciliation failed for tournament {slug}: {e}")
         except asyncio.CancelledError:
             print("[SYS] Start.gg reconciliation background task cancelled")
