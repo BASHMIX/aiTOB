@@ -273,7 +273,7 @@ class SyncCoordinator:
                     self._in_flight.pop(base, None)
 
 
-LiveSync = Callable[[str, str], Awaitable[None]]
+LiveSync = Callable[..., Awaitable[None]]
 TournamentState = Callable[[str], Awaitable[Mapping[str, object] | None]]
 
 
@@ -290,7 +290,10 @@ class LiveSyncScheduler:
         self._sync = sync
         self._get_state = get_state
         self._sleep = sleep
-        self._tasks: dict[str, asyncio.Task] = {}
+        # A tournament slug is tenant-local.  Preserve the string key for
+        # unowned migration fixtures, but use (workspace, slug) for owned
+        # schedules so two organizations can run identically named events.
+        self._tasks: dict[str | tuple[str, str], asyncio.Task] = {}
         self._stopping: set[asyncio.Task] = set()
         self.events: list[tuple[str, str, int]] = []
 
@@ -306,15 +309,21 @@ class LiveSyncScheduler:
             return "live_called_match", 300
         return "live_idle", 900
 
-    def start(self, tournament_slug: str) -> bool:
-        existing = self._tasks.get(tournament_slug)
+    def start(self, tournament_slug: str, *, workspace_id: str | None = None) -> bool:
+        task_key: str | tuple[str, str] = (
+            tournament_slug if workspace_id is None else (workspace_id, tournament_slug)
+        )
+        existing = self._tasks.get(task_key)
         if existing and not existing.done():
             return False
-        self._tasks[tournament_slug] = asyncio.create_task(self._run(tournament_slug))
+        self._tasks[task_key] = asyncio.create_task(self._run(tournament_slug, workspace_id, task_key))
         return True
 
-    def stop(self, tournament_slug: str) -> bool:
-        task = self._tasks.pop(tournament_slug, None)
+    def stop(self, tournament_slug: str, *, workspace_id: str | None = None) -> bool:
+        task_key: str | tuple[str, str] = (
+            tournament_slug if workspace_id is None else (workspace_id, tournament_slug)
+        )
+        task = self._tasks.pop(task_key, None)
         if task and not task.done():
             self._stopping.add(task)
             task.add_done_callback(self._stopping.discard)
@@ -330,21 +339,36 @@ class LiveSyncScheduler:
         if self._stopping:
             await asyncio.gather(*tuple(self._stopping), return_exceptions=True)
 
-    async def _run(self, tournament_slug: str) -> None:
+    async def _run(
+        self,
+        tournament_slug: str,
+        workspace_id: str | None,
+        task_key: str | tuple[str, str],
+    ) -> None:
         try:
             while True:
-                state = await self._get_state(tournament_slug)
+                # Existing unowned fixtures use the one-argument callback.  A
+                # durable workspace context is passed to the repository for
+                # every owned schedule, without making workers depend on a
+                # user session.
+                if workspace_id is None:
+                    state = await self._get_state(tournament_slug)
+                else:
+                    state = await self._get_state(tournament_slug, workspace_id)  # type: ignore[misc]
                 if not state:
                     return
                 reason, interval = self.policy(state)
                 if not reason:
                     return
                 self.events.append((tournament_slug, reason, interval))
-                await self._sync(tournament_slug, reason)
+                if workspace_id is None:
+                    await self._sync(tournament_slug, reason)
+                else:
+                    await self._sync(tournament_slug, reason, workspace_id)  # type: ignore[misc]
                 await self._sleep(interval)
         except asyncio.CancelledError:
             raise
         finally:
-            task = self._tasks.get(tournament_slug)
+            task = self._tasks.get(task_key)
             if task is asyncio.current_task():
-                self._tasks.pop(tournament_slug, None)
+                self._tasks.pop(task_key, None)

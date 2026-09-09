@@ -99,6 +99,24 @@ async def get_integration_account(account_id: str, *, workspace_id: str | None =
     return _public_account(dict(row)) if row else None
 
 
+async def get_integration_workspace_id(account_id: str) -> str | None:
+    """Resolve an integration owner's workspace without exposing credentials.
+
+    Provider clients use this only for tenant-scoped telemetry/backoff records;
+    callers still validate the tournament/account binding before doing provider
+    work.  Returning ``None`` for an unbound legacy account keeps migration
+    fixtures explicit instead of guessing an owner.
+    """
+    if not account_id:
+        return None
+    async with aiosqlite.connect(_db_path()) as db:
+        row = await (await db.execute(
+            "SELECT workspace_id FROM integration_accounts WHERE id=?",
+            (account_id,),
+        )).fetchone()
+    return str(row[0]) if row and row[0] else None
+
+
 async def list_integration_accounts(workspace_id: str | None) -> list[dict[str, Any]]:
     async with aiosqlite.connect(_db_path()) as db:
         db.row_factory = aiosqlite.Row

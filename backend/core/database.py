@@ -972,14 +972,21 @@ async def get_provider_usage(provider_type: str, monthly_limit: int | None = Non
                              *, workspace_id: str | None = None,
                              provider_account_id: str | None = None) -> dict:
     """Return a local month-to-date request count for the quota badge."""
+    # ``date('now', ...)`` is SQLite-only and silently breaks the PostgreSQL
+    # runtime path. Keep the predicate dialect-specific while retaining the
+    # same UTC month boundary for both stores.
+    month_start = (
+        "date_trunc('month', CURRENT_TIMESTAMP)" if is_postgres()
+        else "datetime('now', 'start of month')"
+    )
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
-            """
+            f"""
             SELECT COUNT(*) FROM provider_api_usage
             WHERE provider_type = ?
               AND (? IS NULL OR workspace_id = ?)
               AND (? IS NULL OR provider_account_id = ?)
-              AND created_at >= date('now', 'start of month')
+              AND created_at >= {month_start}
             """,
             (provider_type, workspace_id, workspace_id, provider_account_id, provider_account_id),
         ) as cursor:

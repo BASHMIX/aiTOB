@@ -17,7 +17,7 @@ from backend.api.main import app
 from backend.core.workspace_auth import (
     ROLE_PERMISSIONS, authenticate_password, get_session_principal,
     legacy_owner_principal, permission_allowed,
-    accept_workspace_invitation, create_workspace_invitation, disable_workspace_member,
+    accept_workspace_invitation, create_workspace_invitation, cancel_workspace_invitation, disable_workspace_member,
     _totp_at, begin_totp_setup, disable_totp, enable_totp, hash_password,
     register_workspace_owner, set_workspace_member_role,
 )
@@ -99,6 +99,49 @@ def test_invitation_cannot_demote_existing_owner_or_accept_wrong_password(isolat
         with pytest.raises(ValueError, match="already"):
             await accept_workspace_invitation(invite_token, OWNER_PASSWORD, "Owner")
         assert (await authenticate_password(OWNER_EMAIL, OWNER_PASSWORD))[1].role == "owner"
+    run(verify())
+
+
+def test_owner_invitation_projection_is_cancellable_and_never_returns_token(isolated_workspace_db: Path):
+    from backend.core.workspace_auth import list_workspace_invitations
+
+    async def verify():
+        _, owner = await authenticate_password(OWNER_EMAIL, OWNER_PASSWORD)
+        invitation, raw_token = await create_workspace_invitation(owner, "pending@example.test", "viewer")
+        visible = await list_workspace_invitations(owner)
+        row = next(item for item in visible if item["id"] == invitation["id"])
+        assert row["email"] == "pending@example.test"
+        assert "token" not in row and "token_hash" not in row
+        await cancel_workspace_invitation(owner, invitation["id"])
+        cancelled = next(item for item in await list_workspace_invitations(owner) if item["id"] == invitation["id"])
+        assert cancelled["cancelled_at"] is not None
+        with pytest.raises(PermissionError, match="invalid or expired"):
+            await accept_workspace_invitation(raw_token, "pending-password", "Pending")
+
+    run(verify())
+
+
+def test_invitation_projection_and_cancellation_are_owner_scoped(isolated_workspace_db: Path):
+    async def verify():
+        _, owner = await authenticate_password(OWNER_EMAIL, OWNER_PASSWORD)
+        second_workspace = str(uuid.uuid4())
+        async with aiosqlite.connect(isolated_workspace_db) as db:
+            await db.execute("INSERT INTO workspaces (id,slug,name) VALUES (?,?,?)", (second_workspace, "second-invite", "Second"))
+            await db.commit()
+        invitation, _ = await create_workspace_invitation(owner, "one@example.test", "viewer")
+        async with aiosqlite.connect(isolated_workspace_db) as db:
+            await db.execute(
+                "INSERT INTO workspace_invitations (id,workspace_id,email,role,token_hash,expires_at,created_by) VALUES (?,?,?,?,?,?,?)",
+                (str(uuid.uuid4()), second_workspace, "two@example.test", "viewer", str(uuid.uuid4()), (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=1)).isoformat(), owner.user_id),
+            )
+            await db.commit()
+        from backend.core.workspace_auth import list_workspace_invitations
+        rows = await list_workspace_invitations(owner)
+        assert {row["email"] for row in rows} == {"one@example.test"}
+        with pytest.raises(ValueError, match="not found"):
+            await cancel_workspace_invitation(owner, str(uuid.uuid4()))
+        assert invitation["email"] == "one@example.test"
+
     run(verify())
 
 

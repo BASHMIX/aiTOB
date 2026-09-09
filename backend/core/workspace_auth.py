@@ -456,6 +456,26 @@ async def list_workspace_members(principal: SessionPrincipal) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+async def list_workspace_invitations(principal: SessionPrincipal) -> list[dict]:
+    """List safe invitation projections for the owning workspace.
+
+    Invitation hashes and one-time acceptance tokens are deliberately excluded
+    from this projection.  The endpoint is for owner review/cancellation only;
+    it must never become a way to recover an invitation credential.
+    """
+    async with aiosqlite.connect(database.DB_PATH) as db:
+        await _require_current_owner(db, principal)
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            """SELECT id,email,role,expires_at,accepted_at,cancelled_at,created_at
+               FROM workspace_invitations
+               WHERE workspace_id=?
+               ORDER BY created_at DESC""",
+            (principal.workspace_id,),
+        )).fetchall()
+    return [dict(row) for row in rows]
+
+
 async def cancel_workspace_invitation(principal: SessionPrincipal, invitation_id: str) -> None:
     async with aiosqlite.connect(database.DB_PATH) as db:
         await db.execute("BEGIN IMMEDIATE")

@@ -3,10 +3,12 @@ import axios from 'axios';
 
 type Profile = { email: string; display_name: string; role: string; workspace_name: string; mfa_enabled?: boolean };
 type Member = { id: string; email: string; display_name: string; role: string; status: string };
+type Invitation = { id: string; email: string; role: string; expires_at: string; accepted_at?: string | null; cancelled_at?: string | null };
 
 export function AccountSettings() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
+  const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [notice, setNotice] = useState('');
@@ -22,10 +24,12 @@ export function AccountSettings() {
     Promise.all([
       axios.get('/api/session'),
       axios.get('/api/workspace/members').catch(() => ({ data: { members: [] } })),
-    ]).then(([session, memberResponse]) => {
+      axios.get('/api/workspace/invitations').catch(() => ({ data: { invitations: [] } })),
+    ]).then(([session, memberResponse, invitationResponse]) => {
       if (!alive) return;
       setProfile(session.data);
       setMembers(memberResponse.data.members || []);
+      setInvitations(invitationResponse.data.invitations || []);
     }).catch(() => alive && setNotice('Account settings could not be loaded.'));
     return () => { alive = false; };
   }, []);
@@ -56,8 +60,20 @@ export function AccountSettings() {
   const inviteMember = async () => {
     try {
       await axios.post('/api/workspace/invitations', { email: inviteEmail, role: inviteRole });
+      const response = await axios.get('/api/workspace/invitations');
+      setInvitations(response.data.invitations || []);
       setInviteEmail(''); setNotice('Invitation created. Email delivery is used when configured.');
     } catch { setNotice('Invitation could not be created.'); }
+  };
+  const cancelInvitation = async (invitation: Invitation) => {
+    if (!window.confirm(`Cancel the invitation for ${invitation.email}?`)) return;
+    try {
+      await axios.delete(`/api/workspace/invitations/${encodeURIComponent(invitation.id)}`);
+      setInvitations((current) => current.map((item) => item.id === invitation.id ? { ...item, cancelled_at: new Date().toISOString() } : item));
+      setNotice(`Invitation cancelled for ${invitation.email}.`);
+    } catch (error) {
+      setNotice(axios.isAxiosError(error) ? (error.response?.data?.detail || 'Invitation could not be cancelled.') : 'Invitation could not be cancelled.');
+    }
   };
   const changeMemberRole = async (member: Member, role: string) => {
     if (role === member.role) return;
@@ -110,6 +126,7 @@ export function AccountSettings() {
         <h2 className="text-base font-bold text-white">Workspace members</h2>
         <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_180px_auto]"><input type="email" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} placeholder="Member email" className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white" /><select value={inviteRole} onChange={(e) => setInviteRole(e.target.value)} className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white"><option value="tournament_organizer">TO</option><option value="stream_operator">Stream operator</option><option value="moderator">Moderator</option><option value="viewer">Viewer</option></select><button type="button" onClick={inviteMember} disabled={!inviteEmail.includes('@')} className="rounded-lg bg-accentYellow px-4 py-2 text-xs font-bold text-black disabled:opacity-40">Invite</button></div>
         <div className="mt-3 space-y-2">{members.map((member) => <div key={member.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-white/5 px-3 py-2 text-xs"><span className="text-white">{member.display_name} · {member.email}</span><div className="flex items-center gap-2"><select aria-label={`Role for ${member.email}`} value={member.role} disabled={member.role === 'owner' || member.status !== 'active'} onChange={(e) => changeMemberRole(member, e.target.value)} className="rounded border border-white/10 bg-black/20 px-2 py-1 text-textDim"><option value="owner">Owner</option><option value="tournament_organizer">TO</option><option value="stream_operator">Stream operator</option><option value="moderator">Moderator</option><option value="viewer">Viewer</option></select><span className="text-textDim">{member.status}</span>{member.role !== 'owner' && member.status === 'active' && <button type="button" onClick={() => disableMember(member)} className="rounded border border-statusRed/40 px-2 py-1 text-statusRed">Disable</button>}</div></div>)}</div>
+        <div className="mt-5 border-t border-white/10 pt-4"><h3 className="text-xs font-bold uppercase tracking-wide text-textDim">Pending invitations</h3><div className="mt-2 space-y-2">{invitations.filter((invitation) => !invitation.accepted_at && !invitation.cancelled_at).map((invitation) => <div key={invitation.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-white/5 px-3 py-2 text-xs"><span className="text-white">{invitation.email} · {invitation.role}<span className="ml-2 text-textDim">expires {new Date(invitation.expires_at).toLocaleDateString()}</span></span><button type="button" onClick={() => cancelInvitation(invitation)} className="rounded border border-statusRed/40 px-2 py-1 text-statusRed">Cancel</button></div>)}{invitations.filter((invitation) => !invitation.accepted_at && !invitation.cancelled_at).length === 0 && <p className="text-xs text-textDim">No pending invitations.</p>}</div></div>
       </section>}
     </div>
   );

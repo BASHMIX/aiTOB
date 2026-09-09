@@ -15,7 +15,7 @@ from backend.core.workspace_auth import (
     register_workspace_owner, revoke_session, session_public_profile, set_workspace_member_role,
     change_password, create_password_reset, consume_password_reset,
     create_email_verification, consume_email_verification,
-    list_workspace_members, cancel_workspace_invitation,
+    list_workspace_members, list_workspace_invitations, cancel_workspace_invitation,
     enforce_auth_rate_limit,
 )
 
@@ -189,6 +189,12 @@ async def remove_member(user_id: str, principal: SessionPrincipal = Depends(requ
 @router.get("/workspace/members")
 async def members(principal: SessionPrincipal = Depends(require_permission("workspace.manage"))):
     return {"members": await list_workspace_members(principal)}
+
+
+@router.get("/workspace/invitations")
+async def invitations(principal: SessionPrincipal = Depends(require_permission("workspace.manage"))):
+    """Return owner-visible invitation metadata without token material."""
+    return {"invitations": await list_workspace_invitations(principal)}
 
 
 @router.post("/workspace/disable", status_code=status.HTTP_202_ACCEPTED)

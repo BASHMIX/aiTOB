@@ -61,12 +61,17 @@ class ProviderSyncManager:
         # in another tenant must not be serialized behind (or share state with)
         # this tenant's refresh.
         self._locks: dict[tuple[str | None, str], asyncio.Lock] = defaultdict(asyncio.Lock)
-        self._deferred: dict[str, asyncio.Task] = {}
+        # Deferred and stale-open work is tenant scoped as well as slug scoped.
+        # A slug is only unique inside a workspace in the SaaS data model; using
+        # it as the in-process key would let one tenant replace another tenant's
+        # refresh task.  Keep the legacy string key for deliberately unowned
+        # fixtures so existing tests/tools remain compatible during migration.
+        self._deferred: dict[str | tuple[str, str], asyncio.Task] = {}
         self._stopping: set[asyncio.Task] = set()
         # Constructed lazily only after both explicit V2 read flags are enabled.
         # Importing this module and normal legacy startup create no coordinator task.
         self._v2_coordinator: SyncCoordinator | None = None
-        self._stale_open_tasks: dict[str, asyncio.Task] = {}
+        self._stale_open_tasks: dict[str | tuple[str, str], asyncio.Task] = {}
         self._live_scheduler = LiveSyncScheduler(self._run_live_sync, get_live_sync_state_v2)
 
     def _get_v2_coordinator(self) -> SyncCoordinator:
@@ -74,15 +79,20 @@ class ProviderSyncManager:
             self._v2_coordinator = SyncCoordinator()
         return self._v2_coordinator
 
-    async def _run_live_sync(self, tournament_slug: str, reason: str) -> None:
+    async def _run_live_sync(
+        self,
+        tournament_slug: str,
+        reason: str,
+        workspace_id: str | None = None,
+    ) -> None:
         # The scheduler stores only a tournament key; resolve its durable
         # workspace before doing any provider work.  This keeps worker context
         # independent from a user session while preventing same-slug tenants
         # from sharing a provider client or projection.
-        tournament = await get_tournament(tournament_slug)
+        tournament = await get_tournament(tournament_slug, workspace_id)
         await self.sync_bracket(
             tournament_slug,
-            workspace_id=(tournament or {}).get("workspace_id"),
+            workspace_id=(tournament or {}).get("workspace_id") or workspace_id,
             reason=reason,
         )
 
@@ -93,14 +103,17 @@ class ProviderSyncManager:
         started = 0
         for tournament in await get_tournaments():
             if tournament.get("provider_type") == "challonge" and tournament.get("challonge_sync_mode") == "live":
-                started += int(self._live_scheduler.start(str(tournament["slug"])))
+                started += int(self._live_scheduler.start(
+                    str(tournament["slug"]),
+                    workspace_id=tournament.get("workspace_id"),
+                ))
         return started
 
     async def configure_live_schedule(self, tournament_slug: str, *, workspace_id: str | None = None) -> bool:
         state = await get_live_sync_state_v2(tournament_slug, workspace_id)
         if not state or state.get("mode") != "live":
-            return self._live_scheduler.stop(tournament_slug)
-        return self._live_scheduler.start(tournament_slug)
+            return self._live_scheduler.stop(tournament_slug, workspace_id=workspace_id)
+        return self._live_scheduler.start(tournament_slug, workspace_id=workspace_id)
 
     async def close_live_schedules(self) -> None:
         await self._live_scheduler.close()
@@ -240,7 +253,10 @@ class ProviderSyncManager:
                 stale = True
         if not stale:
             return False
-        task = self._stale_open_tasks.get(tournament_slug)
+        task_key: str | tuple[str, str] = (
+            tournament_slug if workspace_id is None else (workspace_id, tournament_slug)
+        )
+        task = self._stale_open_tasks.get(task_key)
         if task and not task.done():
             return True
 
@@ -261,10 +277,10 @@ class ProviderSyncManager:
                 # sync_bracket records a safe error for genuine transport failures.
                 pass
             finally:
-                if self._stale_open_tasks.get(tournament_slug) is asyncio.current_task():
-                    self._stale_open_tasks.pop(tournament_slug, None)
+                if self._stale_open_tasks.get(task_key) is asyncio.current_task():
+                    self._stale_open_tasks.pop(task_key, None)
 
-        self._stale_open_tasks[tournament_slug] = asyncio.create_task(run_once())
+        self._stale_open_tasks[task_key] = asyncio.create_task(run_once())
         return True
 
     def schedule_bracket_sync(
@@ -275,7 +291,10 @@ class ProviderSyncManager:
         delay_seconds: int = 120,
     ) -> None:
         """Coalesce a burst of score reports into one later provider refresh."""
-        old_task = self._deferred.get(tournament_slug)
+        task_key: str | tuple[str, str] = (
+            tournament_slug if workspace_id is None else (workspace_id, tournament_slug)
+        )
+        old_task = self._deferred.get(task_key)
         if old_task and not old_task.done():
             self._stopping.add(old_task)
             old_task.add_done_callback(self._stopping.discard)
@@ -300,10 +319,10 @@ class ProviderSyncManager:
                 # rate-limited request automatically.
                 pass
             finally:
-                if self._deferred.get(tournament_slug) is asyncio.current_task():
-                    self._deferred.pop(tournament_slug, None)
+                if self._deferred.get(task_key) is asyncio.current_task():
+                    self._deferred.pop(task_key, None)
 
-        self._deferred[tournament_slug] = asyncio.create_task(run())
+        self._deferred[task_key] = asyncio.create_task(run())
 
 
 sync_manager = ProviderSyncManager()

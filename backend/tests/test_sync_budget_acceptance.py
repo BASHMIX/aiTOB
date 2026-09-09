@@ -81,3 +81,83 @@ async def test_replaced_deferred_sync_does_not_remove_new_task(budget_db):
     finally:
         await manager.close_live_schedules()
     assert latest.done()
+
+
+@pytest.mark.asyncio
+async def test_deferred_refreshes_do_not_collide_across_workspaces():
+    from backend.core.provider_sync_manager import ProviderSyncManager
+
+    manager = ProviderSyncManager()
+    manager.schedule_bracket_sync("same-slug", workspace_id="workspace-a", delay_seconds=3600)
+    manager.schedule_bracket_sync("same-slug", workspace_id="workspace-b", delay_seconds=3600)
+    await asyncio.sleep(0)
+    try:
+        assert ("workspace-a", "same-slug") in manager._deferred
+        assert ("workspace-b", "same-slug") in manager._deferred
+        assert manager._deferred[("workspace-a", "same-slug")] is not manager._deferred[("workspace-b", "same-slug")]
+    finally:
+        await manager.close_live_schedules()
+
+
+@pytest.mark.asyncio
+async def test_stale_open_refreshes_do_not_collide_across_workspaces(monkeypatch):
+    from backend.core.provider_sync_manager import ProviderSyncManager
+
+    manager = ProviderSyncManager()
+
+    async def tournament(slug, workspace_id=None):
+        return {
+            "slug": slug,
+            "workspace_id": workspace_id,
+            "provider_type": "challonge",
+            "provider_last_synced_at": None,
+            "economy_sync_on_stale_open": True,
+        }
+
+    async def no_sync(*args, **kwargs):
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr("backend.core.provider_sync_manager.get_tournament", tournament)
+    monkeypatch.setattr(manager, "sync_bracket", no_sync)
+    # The flag is enabled in this test process by the fixture defaults used by
+    # the other stale-open acceptance tests.
+    monkeypatch.setattr(
+        "backend.core.provider_sync_manager.get_provider_feature_flags",
+        lambda: type("Flags", (), {"challonge_read_enabled": True})(),
+    )
+    assert await manager.maybe_sync_on_stale_open("same-slug", workspace_id="workspace-a")
+    assert await manager.maybe_sync_on_stale_open("same-slug", workspace_id="workspace-b")
+    await asyncio.sleep(0)
+    try:
+        assert ("workspace-a", "same-slug") in manager._stale_open_tasks
+        assert ("workspace-b", "same-slug") in manager._stale_open_tasks
+    finally:
+        await manager.close_live_schedules()
+
+
+@pytest.mark.asyncio
+async def test_live_schedules_are_tenant_scoped_for_same_slug():
+    from backend.core.sync_coordinator import LiveSyncScheduler
+
+    seen: list[tuple[str, str | None]] = []
+    stop = asyncio.Event()
+
+    async def state(slug, workspace_id=None):
+        return {"mode": "live", "active_match": False, "called_match": False,
+                "workspace_id": workspace_id}
+
+    async def sync(slug, reason, workspace_id=None):
+        seen.append((slug, workspace_id))
+        await stop.wait()
+
+    async def no_wait(seconds):
+        await stop.wait()
+
+    scheduler = LiveSyncScheduler(sync, state, sleep=no_wait)
+    assert scheduler.start("same-slug", workspace_id="workspace-a")
+    assert scheduler.start("same-slug", workspace_id="workspace-b")
+    await asyncio.sleep(0)
+    assert scheduler.start("same-slug", workspace_id="workspace-a") is False
+    stop.set()
+    await scheduler.close()
+    assert set(seen) == {("same-slug", "workspace-a"), ("same-slug", "workspace-b")}

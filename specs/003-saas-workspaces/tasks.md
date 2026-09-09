@@ -44,7 +44,10 @@ operational check; a rehearsal is never a cutover.
   startup, periodic, stale-open and post-score worker paths; unowned fixtures
   retain the legacy one-argument test hook only. Its in-process refresh lock is
   keyed by `(workspace_id, tournament_slug)` so unrelated tenants do not share
-  a serialization bucket.
+  a serialization bucket. Deferred/stale-open refreshes and Live scheduler
+  tasks now use the same tenant-qualified key; `test_sync_budget_acceptance.py`
+  covers identical slugs in two workspaces. Provider usage telemetry records the
+  account/workspace and uses PostgreSQL-safe month boundaries.
   Remaining runtime inventory to close before cutover (each must use the
   PostgreSQL repository boundary and a trusted workspace context):
   `backend/api/routers/settings.py` (`api_get_settings`, `api_patch_settings`,
@@ -170,7 +173,9 @@ operational check; a rehearsal is never a cutover.
   enumeration and propagation are scoped to the trusted owner workspace.
   Provider budgets/caches and remaining global bot service contexts still need
   explicit tenant ownership before the temporary compatibility enumeration is
-  removed.
+  removed. In-process budget/backoff state is account-keyed; durable budget/cache
+  schema ownership and the legacy bot service contexts remain open for the
+  repository parity pass.
 
 ## D. Integrations, assets and overlays
 

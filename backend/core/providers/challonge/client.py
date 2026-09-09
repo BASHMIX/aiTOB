@@ -102,7 +102,15 @@ class ChallongeClient:
     async def _record_usage(self, method: str, path: str, status_code: int | None) -> None:
         try:
             from backend.core.database import record_provider_api_usage
-            await record_provider_api_usage("challonge", method, path, status_code)
+            workspace_id = None
+            if self.account_id:
+                from backend.core.integrations import get_integration_workspace_id
+                workspace_id = await get_integration_workspace_id(self.account_id)
+            await record_provider_api_usage(
+                "challonge", method, path, status_code,
+                workspace_id=workspace_id,
+                provider_account_id=self.account_id,
+            )
         except Exception:
             # Usage telemetry must never turn a successful provider call into a
             # failure (e.g. during first-run schema initialization).
