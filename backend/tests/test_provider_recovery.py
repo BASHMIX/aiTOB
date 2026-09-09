@@ -61,6 +61,23 @@ async def test_overdue_timer_requests_review_never_auto_dq(recovery_db):
 
 
 @pytest.mark.asyncio
+async def test_call_timer_only_warns_and_never_auto_dq(monkeypatch):
+    from backend.core import match_state
+
+    feeds: list[tuple[str, str]] = []
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(match_state.asyncio, "sleep", lambda _seconds: real_sleep(0))
+    monkeypatch.setattr(match_state, "get_active_match", lambda _set_id: real_sleep(0, result={"status": "called"}))
+    monkeypatch.setattr(match_state, "add_bot_feed", lambda message, level="info": real_sleep(0, result=feeds.append((message, level))))
+    async def must_not_run(_set_id):
+        raise AssertionError("automatic DQ must remain disabled")
+    monkeypatch.setattr(match_state, "auto_dq_match", must_not_run)
+
+    await match_state.start_call_timer("manual-only", timeout_seconds=0)
+    assert feeds and "automatic DQ is disabled" in feeds[0][0]
+
+
+@pytest.mark.asyncio
 async def test_competing_outbox_workers_claim_once_and_effect_deduplicates_after_crash(recovery_db):
     from backend.core.workflow_outbox import WorkflowOutboxWorker
 

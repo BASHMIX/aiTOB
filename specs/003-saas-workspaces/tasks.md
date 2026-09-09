@@ -102,6 +102,11 @@ operational check; a rehearsal is never a cutover.
   path remains available. This closes extra execution paths rather than
   removing authorized manual controls.
 
+  Attendance timeouts are warning-only platform-wide: `start_call_timer` never
+  invokes `auto_dq_match`; single-player DQ remains an explicit organizer
+  action. `test_call_timer_only_warns_and_never_auto_dq` proves the timeout
+  cannot create a provider mutation or winner.
+
 ## B. Identity, registration and roles
 
 - [~] **T010 / FR-003–005** One-time Owner bootstrap and session base are in
@@ -273,6 +278,7 @@ operational check; a rehearsal is never a cutover.
   | SC-006 | Workspace with no payment gateway | Open plan/settings screens and attempt checkout | UI identifies free/non-billed state and exposes no live checkout | Screenshot/API projection and absence-of-route test |
   | FR-017 | Authorized TO, Operator/Viewer, AI Assistant and both DQ modes | Submit manual single-player DQ; attempt AI approval, AI DQ, Auto-DQ and double-DQ | Manual DQ follows approved provider policy; AI/Auto-DQ and Challonge double-DQ are unavailable | Role matrix, provider call trace, capability projection |
 
-  No row is accepted when its required external/live test is skipped. T053
-  remains open until every row has evidence; it is not closed by local unit
+  No row is accepted when its required external/live test is skipped. The local
+  DQ safety behavior has a dedicated regression, but T053 remains open until
+  every row has evidence; it is not closed by local unit
   tests alone.

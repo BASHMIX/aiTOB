@@ -327,12 +327,19 @@ async def start_call_timer(set_id: str, timeout_seconds: int = 600):
     match = await get_active_match(set_id)
     if not match or match.get("status") != "called":
         return
+    # Auto-DQ is deliberately disabled platform-wide.  The timer is retained
+    # only as an attendance warning; an organizer must choose the single-player
+    # manual DQ through the authorized workflow.  This keeps a timeout from
+    # inventing a winner or issuing a provider mutation.
     if match.get("auto_dq_disarmed"):
         await add_bot_feed(
-            f"⏰ Call timer expired for {set_id} — auto-DQ disarmed (partial/no Discord reach). "
-            "Letting start.gg own this match.",
+            f"⏰ Call timer expired for {set_id} — automatic DQ is disabled; "
+            "an organizer must resolve attendance manually.",
             "info"
         )
         return
-    await add_bot_feed(f"⏰ Call timer expired for match {set_id}, auto-DQ triggered", "warn")
-    await auto_dq_match(set_id)
+    await add_bot_feed(
+        f"⏰ Call timer expired for match {set_id} — automatic DQ is disabled; "
+        "review attendance and use manual DQ if appropriate.",
+        "warn"
+    )
