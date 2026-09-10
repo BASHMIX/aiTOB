@@ -336,6 +336,30 @@ connected to the Gateway. Workers remained paused, so no Discord effect was
 sent. The token is no longer a connectivity blocker; worker resumption still
 requires the reviewed cutover sequence.
 
+## Runtime process reconciliation — 2026-09-10
+
+The earlier report mixed two process contexts: a temporary API smoke process
+used the populated cutover candidate, while the long-lived API listener on
+port 8000 still used the original `aitob` database (which had zero workspaces
+and tournaments). This was verified by process cwd/command lines and direct,
+redacted row counts; it was not a data rollback or a change to the candidate.
+
+The duplicate project processes were stopped by verified command and working
+directory identity only. A single API supervisor/worker now listens on
+127.0.0.1:8000, and a single Bot parent/child runs from the same project and
+candidate database. The Vite process remains the sole listener on
+127.0.0.1:5173 and proxies `/api`, `/static`, `/assets`, and `/ws` to port 8000.
+PostgreSQL is the `aitob_postgres` container on host port 5433. No connection
+strings or secrets are recorded here.
+
+The new API process was started with background workers enabled and provider
+startup probes disabled; `/health` and `/readiness` returned 200 with
+`database=postgresql`, owner login succeeded, and the two candidate tournaments
+were returned. The Bot connected to Discord and the local Hub WebSocket; the
+reviewed eight Outbox rows and nine held Hub commands remained unchanged and
+unclaimable. The old `aitob` database remains preserved and is not consumed by
+any current API or Bot process.
+
 For a cutover review window, set `AITOB_DISABLE_BACKGROUND_WORKERS=true` before
 starting the API. It initializes the database and accepts read-only checks but
 does not restore workflows, schedule Live polling, sync tournaments, or start
