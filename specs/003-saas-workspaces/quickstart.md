@@ -541,3 +541,11 @@ workspace, tournament, match, image, provider, or overlay data. The default is
 30 days and `AITOB_AUTH_ARTIFACT_RETENTION_DAYS` may be set from 1 to 3650;
 invalid values fail closed. `backend/tests/test_retention.py` proves both
 atomic cleanup and preservation of fresh/workspace rows.
+
+Browser Source acceptance follow-up (2026-09-10): the Vite proxy now forwards
+only station telemetry/redirect paths under `/obs/` to the API; the React viewer
+page remains served from 5173. A newly issued T073 acceptance link loaded in a
+fresh browser tab and rendered the test participants, avatar layers, round and
+0–0 score with no fetch error. Existing OBS scenes and Browser Sources were not
+modified. Native OBS Studio visual confirmation remains a human gate because
+the current automation surface cannot inspect native OBS windows.

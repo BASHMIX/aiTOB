@@ -640,3 +640,10 @@ operational check; a rehearsal is never a cutover.
   surface, so visual Browser Source confirmation remains open rather than
   being inferred from the HTTP overlay check. SMTP remains deferred pending
   service fields; payment remains deferred by decision.
+  On 2026-09-10 the Vite dev proxy was corrected to forward only
+  `/obs/{station}/data` and `/obs/{station}` requests to the API while keeping
+  the React `/obs` page on 5173. A freshly issued revocable acceptance link
+  loaded the T073 station in a new browser tab and visibly rendered the two
+  participant names, avatar layers, round and 0–0 telemetry; the page emitted
+  no overlay fetch errors. This is browser evidence, not a substitute for the
+  still-open native OBS Studio visual gate.
