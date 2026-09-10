@@ -248,7 +248,9 @@ operational check; a rehearsal is never a cutover.
   pass (2/2, 2026-09-11), and `npm run build` passes. T010 remains partial only
   because public registration is deliberately still configuration-closed while
   the final live acceptance gates are open; no setup endpoint or default
-  credential bypass was added.
+  credential bypass was added. The frontend regression suite also passes
+  42/42 (`npm run test -- --run`, 2026-09-11), preserving the Account Settings
+  rendering and protected-save behavior.
 - [~] **T011 / FR-003–005** Email verification, password change/reset, TOTP
   recovery codes, session revocation and auth rate limits are implemented and
   covered by session tests; account UI is present. Email delivery remains
