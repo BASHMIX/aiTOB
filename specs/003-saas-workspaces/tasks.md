@@ -72,6 +72,8 @@ operational check; a rehearsal is never a cutover.
   explicitly documented test-environment/live-dependency cases). The two bot SQLite
   reads were replaced with
   repository calls and are guarded by `test_runtime_bot_paths_do_not_open_sqlite_directly`.
+  The subsequent launcher dotenv-isolation correction was verified by the
+  complete local suite at 449 passed / 27 skipped (2026-09-10).
   Player listing and platform-admin checks now use repository functions and are
   guarded by `test_workspace_api_paths_use_repository_boundary`.
   Latest disposable PostgreSQL acceptance (storage, migration and station-overlay
