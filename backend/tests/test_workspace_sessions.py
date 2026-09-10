@@ -433,6 +433,28 @@ def test_password_change_revokes_other_sessions_and_reset_is_one_use(isolated_wo
     run(verify())
 
 
+def test_password_reset_http_round_trip_and_old_password_rejected(isolated_workspace_db):
+    """The public reset endpoints consume a one-use hashed token without exposing it."""
+    from backend.core.workspace_auth import create_password_reset
+
+    client = TestClient(app)
+    assert client.post("/api/session/password/reset-request", json={"email": OWNER_EMAIL}).status_code == 202
+    reset_token = None
+    async def issue_reset():
+        nonlocal reset_token
+        reset_token = await create_password_reset(OWNER_EMAIL)
+    run(issue_reset())
+    assert reset_token
+    assert client.post("/api/session/password/reset", json={
+        "token": reset_token, "new_password": "http-reset-password",
+    }).status_code == 204
+    assert client.post("/api/session/login", json={"email": OWNER_EMAIL, "password": OWNER_PASSWORD}).status_code == 401
+    assert client.post("/api/session/login", json={"email": OWNER_EMAIL, "password": "http-reset-password"}).status_code == 200
+    assert client.post("/api/session/password/reset", json={
+        "token": reset_token, "new_password": "second-reset-password",
+    }).status_code == 422
+
+
 def test_granular_match_routes_enforce_role_boundaries(isolated_workspace_db):
     async def add_members():
         async with aiosqlite.connect(isolated_workspace_db) as db:
