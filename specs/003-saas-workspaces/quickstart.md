@@ -83,12 +83,12 @@ claims, and unique command keys. No global compatibility lock serializes
 unrelated Workspaces; bootstrap and other critical paths use scoped locks.
 Two independent membership transactions cannot remove both last Owners.
 
-The local complete suite completed without hanging (445 passed / 21 skipped),
+The local complete suite completed without hanging (447 passed / 27 skipped),
 but exposed a thread-cleanup warning. The focused recovery/budget/coordinator
 group reproduced it with warnings treated as errors. Scheduler `close()` now
 awaits stopped tasks, and the explicit test-only SQLite connector drains opening
 and closing work on cancellation. The focused group then passed all 17 tests.
-The full post-fix rerun completed at 445 passed / 21 skipped (2026-09-10),
+The full post-fix rerun completed at 447 passed / 27 skipped (2026-09-10),
 including the Windows uvicorn selector-loop regression.
 
 The PostgreSQL-enabled full regression uses the same `.venv` interpreter with
@@ -191,7 +191,7 @@ update; the prior verified restore drill remains the recovery evidence.
 
 The latest PostgreSQL acceptance rerun completed 32/32 tests on disposable
 databases after the workspace feed/station changes. The local backend suite is
-445 passed / 21 skipped; skipped cases remain the explicitly PostgreSQL-only
+447 passed / 27 skipped; skipped cases remain the explicitly PostgreSQL-only
 cases when no `AITOB_PG_TEST_URL` is supplied to the local command.
 
 On 2026-09-10 the PostgreSQL worker/dispatcher acceptance was rerun after
@@ -205,10 +205,10 @@ The same PostgreSQL run now includes Challonge local workflow (8/8), identity
 and per-event dispatch scoping (20/20), SQL-safety and tournament-removal
 checks (7/7); all are passing against disposable databases. SQLite-only
 migration-fixture tests remain intentionally separate from this runtime proof.
-The post-fix local regression was rerun on 2026-09-10: 445 passed / 21
+The post-fix local regression was rerun on 2026-09-10: 447 passed / 27
 intentionally skipped, with no hanging subprocesses or unhandled task errors.
 The complete PostgreSQL-targeted regression was then rerun with the explicit
-DSN: 461 passed / 5 skipped. The five skips are intentional and named: three
+DSN: 469 passed / 5 skipped. The five skips are intentional and named: three
 SQLite-source migration cases (the PostgreSQL-target migration test remains
 active), the disabled legacy AI Referee benchmark, and one live-network test
 protected unless `AITOB_ALLOW_LIVE_TESTS=true` is explicitly set.
@@ -228,6 +228,9 @@ token ownership, referenced-asset deletion guards, manual entitlement limits,
 retention, and redacted telemetry without external effects. Legacy overlay
 preset ownership backfill and final deletion/Cloudinary operational acceptance
 remain explicit T032/T033 gates.
+The additional `test_assets_workspace_scope.py` regression passes 1/1 locally
+and 1/1 on PostgreSQL, proving a workspace cannot enumerate shared legacy
+files through the asset listing API.
 The V2 provider lease/outbox repositories now also pass 4/4 on PostgreSQL;
 the migration-fixture test remains SQLite-only by design because it validates
 upgrading a pre-V2 file rather than runtime PostgreSQL behavior.
@@ -240,14 +243,15 @@ The broad `pytest backend/tests --postgres` sweep on 2026-09-10 initially
 reported 427 passed, 26 failures, 10 errors, and 2 skips. Those failures were
 not hidden: the runtime PG issues in identity, Dispatcher, local Challonge
 workflow, SQL-safety, tournament removal, and V2 leases were fixed and rerun.
-The final PG-targeted regression is 461 passed / 5 intentional skips. The three
+The final PG-targeted regression is 469 passed / 5 intentional skips. The three
 SQLite-source migration fixtures are excluded by an explicit marker while the
 PostgreSQL-target migration test remains active; the other two skips are the
 disabled AI benchmark and the opt-in live-network test.
 
 The post-acceptance additions include two redacted error-telemetry tests,
-seven backup-manifest restore-safety tests and the selector-loop regression;
-they are included in the 445-pass count above.
+seven backup-manifest restore-safety tests, the workspace identity acceptance,
+and the asset-listing isolation regression; they are included in the 447-pass
+count above.
 
 PostgreSQL runtime smoke (2026-09-09) loaded the FastAPI lifespan against the
 configured local PostgreSQL DSN with provider probes disabled, initialized the
