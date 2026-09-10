@@ -89,11 +89,16 @@ export function StationCard({ station, onReload }: { station: any, onReload: () 
     await axios.patch(`/api/stations/${station.id}`, { name: newName.trim() });
   };
 
-  const copyLink = async () => {
+  const copyLink = async (overlayName?: string) => {
     try {
-      const response = await axios.post(`/api/stations/${station.id}/overlay-access`);
+      const response = await axios.post(
+        `/api/stations/${station.id}/overlay-access`,
+        overlayName ? { overlay_name: overlayName } : undefined,
+      );
       await navigator.clipboard.writeText(`${location.origin}${response.data.url}`);
-      alert('A new revocable OBS link was copied. The previous link is now invalid.');
+      alert(overlayName
+        ? 'A new revocable link for this overlay slide was copied.'
+        : 'A new revocable station link was copied. It follows the active slide.');
     } catch {
       alert('The OBS link could not be created.');
     }
@@ -147,7 +152,11 @@ export function StationCard({ station, onReload }: { station: any, onReload: () 
               </button>
               <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button onClick={() => removeOverlay(o.overlay_name)} className="text-statusRed hover:text-red-400">✖</button>
-                <button onClick={copyLink} className="text-textDim hover:text-white">📋</button>
+                <button
+                  onClick={() => copyLink(o.overlay_name)}
+                  className="text-textDim hover:text-white"
+                  title="Copy a link fixed to this overlay slide"
+                >📋</button>
                 <button onClick={() => window.open(`/admin/editor?station_id=${station.id}`)} className="text-textDim hover:text-white">✏️</button>
               </div>
             </li>

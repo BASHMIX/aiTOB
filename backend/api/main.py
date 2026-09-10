@@ -565,7 +565,9 @@ async def get_obs_overlay_data(station_id: str, x_overlay_token: str | None = He
     if not station:
         raise HTTPException(status_code=404, detail="Overlay station not found")
         
-    overlay_name = station.get("active_overlay") or station_id
+    # A station-scoped token follows the active slide. A slide-scoped token
+    # carries its fixed association and cannot be changed by URL parameters.
+    overlay_name = access.get("overlay_name") or station.get("active_overlay") or station_id
     
     # 2. Fetch base overlay preset config
     overlays_list = await get_overlays(workspace_id)

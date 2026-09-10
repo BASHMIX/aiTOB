@@ -248,6 +248,15 @@ class AddStationOverlayRequest(BaseModel):
     overlay_name: str = Field(description="Name of the overlay configuration to link", min_length=1, examples=["default"])
 
 
+class IssueOverlayAccessRequest(BaseModel):
+    """Optional fixed-slide scope for a revocable Browser Source link."""
+    overlay_name: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        description="Pin the link to one overlay associated with the station; omit to follow the active slide.",
+    )
+
+
 class SetActiveOverlayRequest(BaseModel):
     overlay_name: Optional[str] = Field(default=None, description="Active overlay name (pass null to hide)", examples=["default"])
 

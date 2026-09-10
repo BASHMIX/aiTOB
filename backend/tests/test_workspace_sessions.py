@@ -647,6 +647,35 @@ def test_overlay_link_is_workspace_scoped_hashed_and_revocable(isolated_workspac
     run(verify())
 
 
+def test_overlay_links_distinguish_station_slideshow_and_fixed_slide(isolated_workspace_db):
+    """Station links follow the active slide; slide links stay pinned and isolated."""
+    from backend.core.overlay_access import issue_overlay_access, resolve_overlay_access
+
+    async def verify():
+        _, owner = await authenticate_password(OWNER_EMAIL, OWNER_PASSWORD)
+        await database.create_station("slide-station", "Slide Station", owner.workspace_id)
+        await database.save_overlay("slide-a", '{"elements": {}}', owner.workspace_id)
+        await database.add_station_overlay("slide-station", "slide-a", owner.workspace_id)
+
+        station_id, station_token = await issue_overlay_access(
+            owner.workspace_id, "slide-station", owner.user_id
+        )
+        fixed_id, fixed_token = await issue_overlay_access(
+            owner.workspace_id, "slide-station", owner.user_id, "slide-a"
+        )
+
+        station_link = await resolve_overlay_access(station_token, "slide-station")
+        fixed_link = await resolve_overlay_access(fixed_token, "slide-station")
+        assert station_link and station_link["overlay_name"] is None
+        assert fixed_link and fixed_link["overlay_name"] == "slide-a"
+        # Rotating one scope must not revoke the other scope.
+        assert await resolve_overlay_access(station_token, "slide-station")
+        assert await resolve_overlay_access(fixed_token, "slide-station")
+        assert station_id != fixed_id
+
+    run(verify())
+
+
 def test_managed_asset_deletion_refuses_workspace_overlay_config_reference(isolated_workspace_db):
     """An owned upload remains undeletable while an overlay preset uses it.
 

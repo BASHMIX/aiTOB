@@ -363,6 +363,9 @@ TABLE_SCHEMAS = [
         station_id TEXT NOT NULL REFERENCES stations(id),
         token_hash TEXT NOT NULL UNIQUE,
         created_by TEXT NOT NULL REFERENCES users(id),
+        -- NULL means a station-scoped link that follows the active slide;
+        -- a value pins the link to one overlay preset on this station.
+        overlay_name TEXT,
         expires_at TIMESTAMP,
         revoked_at TIMESTAMP,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -839,6 +842,9 @@ MIGRATIONS = [
     "ALTER TABLE tournaments ADD COLUMN bot_manage_finish TEXT DEFAULT 'off'",
     # stations new columns
     "ALTER TABLE stations ADD COLUMN active_overlay TEXT",
+    # A browser-source link may be station-scoped (NULL, follows active slide)
+    # or pinned to one overlay slide. Existing links remain station-scoped.
+    "ALTER TABLE overlay_access_tokens ADD COLUMN overlay_name TEXT",
     # start.gg stream queue support — maps local station to a provider stream
     "ALTER TABLE stations ADD COLUMN startgg_stream_id TEXT",
     # cached provider stream list per tournament (JSON: [{id,name,source,game}])

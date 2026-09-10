@@ -9,7 +9,8 @@ from backend.api.auth import require_permission
 from backend.core.workspace_auth import SessionPrincipal
 from backend.core.entitlements import EntitlementLimitExceeded, require_workspace_capacity
 from backend.api.schemas import (
-    CreateStationRequest, UpdateStationRequest, AddStationOverlayRequest, SetActiveOverlayRequest
+    CreateStationRequest, UpdateStationRequest, AddStationOverlayRequest, SetActiveOverlayRequest,
+    IssueOverlayAccessRequest,
 )
 
 router = APIRouter(tags=["stations"])
@@ -100,11 +101,20 @@ async def api_delete_station(id: str, principal: SessionPrincipal = Depends(requ
     return {"message": "Deleted"}
 
 
-@router.post("/{id}/overlay-access", summary="Rotate the revocable Browser Source link")
-async def api_issue_overlay_access(id: str, principal: SessionPrincipal = Depends(require_permission("overlay.manage"))):
+@router.post("/{id}/overlay-access", summary="Rotate a revocable station or slide Browser Source link")
+async def api_issue_overlay_access(
+    id: str,
+    body: IssueOverlayAccessRequest | None = None,
+    principal: SessionPrincipal = Depends(require_permission("overlay.manage")),
+):
     from backend.core.overlay_access import issue_overlay_access
     try:
-        token_id, token = await issue_overlay_access(principal.workspace_id, id, principal.user_id)
+        token_id, token = await issue_overlay_access(
+            principal.workspace_id,
+            id,
+            principal.user_id,
+            body.overlay_name if body else None,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     # Fragment material is never sent in an HTTP request or server access log.

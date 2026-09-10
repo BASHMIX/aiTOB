@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Save, Edit3, Check, X, Image as ImageIcon, Type, Link as LinkIcon, Undo, Redo } from 'lucide-react';
+import axios from 'axios';
 import { useEditorStore } from '@/store/useEditorStore';
 
 interface TopBarProps {
@@ -21,10 +22,15 @@ export function TopBar({ slot, stationId, onRename, onSave, onLoadClick, status 
     setIsEditing(false);
   };
 
-  const copyOBSLink = () => {
-    const obsUrl = `${window.location.origin}/obs?slot=${stationId}`;
-    navigator.clipboard.writeText(obsUrl);
-    alert(`Station OBS URL copied successfully!\n${obsUrl}`);
+  const copyOBSLink = async () => {
+    try {
+      const response = await axios.post(`/api/stations/${stationId}/overlay-access`);
+      const obsUrl = `${window.location.origin}${response.data.url}`;
+      await navigator.clipboard.writeText(obsUrl);
+      alert('Station Browser Source link copied. It follows the station active slide.');
+    } catch {
+      alert('The station Browser Source link could not be created.');
+    }
   };
 
   return (
@@ -127,7 +133,7 @@ export function TopBar({ slot, stationId, onRename, onSave, onLoadClick, status 
         <button 
           onClick={copyOBSLink}
           className="flex items-center gap-2 bg-accentYellow/20 hover:bg-accentYellow/30 text-accentYellow border border-accentYellow/40 px-4 py-1.5 rounded-full text-sm font-bold transition-all hover:scale-105 active:scale-95"
-          title="Copy static OBS link for this station"
+          title="Copy revocable Browser Source link for the full station slideshow"
         >
           <LinkIcon size={16} />
           Copy OBS Link
