@@ -14,13 +14,26 @@ os.makedirs(ASSETS_DIR, exist_ok=True)
 
 @router.get("", summary="List uploaded assets")
 async def list_assets(principal: SessionPrincipal = Depends(require_permission("workspace.read"))):
-    """Return all files in the static assets directory."""
-    files = []
-    for f in os.listdir(ASSETS_DIR):
-        if os.path.isfile(os.path.join(ASSETS_DIR, f)):
-            files.append({"name": f, "url": f"/static/assets/{f}"})
+    """Return only assets owned by the caller's workspace.
+
+    The static directory is shared by the process and can contain legacy
+    files from several workspaces.  Enumerating it here would disclose the
+    names and URLs of another workspace's uploads even though the managed
+    database projection is tenant-filtered.  Legacy URLs remain valid when
+    referenced by an existing overlay, but are deliberately not enumerable
+    through a workspace API response.
+    """
     from backend.core.database import list_media_assets
-    return {"assets": files, "managed_assets": await list_media_assets(principal.workspace_id)}
+    managed_assets = await list_media_assets(principal.workspace_id)
+    files = [
+        {
+            "name": asset.get("storage_key") or str(asset.get("storage_url", "")).rstrip("/").rsplit("/", 1)[-1],
+            "url": asset.get("storage_url"),
+        }
+        for asset in managed_assets
+        if asset.get("storage_url")
+    ]
+    return {"assets": files, "managed_assets": managed_assets}
 
 
 @router.post("/upload", summary="Upload an asset file")
