@@ -15,10 +15,15 @@ from pathlib import Path
 SCOPED_TABLES = (
     "tournaments", "active_matches", "players", "stations", "overlays",
     "integration_accounts", "integration_destinations", "action_proposals",
-    "hub_commands", "bot_feed", "workflow_outbox", "provider_command_ledger",
+    "hub_commands", "workflow_outbox", "provider_command_ledger",
     "provider_snapshot_cache", "provider_api_budgets", "dispatcher_decisions",
     "dispatcher_dispatch_claims",
 )
+
+# ``bot_feed`` is intentionally absent: it is global operational telemetry,
+# not a tenant-owned resource.  Assigning it to the Owner workspace would
+# create a misleading ownership boundary for records that are not used by
+# tournament, account, or worker decisions.
 
 
 def owner_workspace(connection: sqlite3.Connection, requested: str | None) -> str:
@@ -42,6 +47,10 @@ def owner_workspace(connection: sqlite3.Connection, requested: str | None) -> st
 
 def table_has_workspace_id(connection: sqlite3.Connection, table: str) -> bool:
     return any(str(row[1]) == "workspace_id" for row in connection.execute(f"PRAGMA table_info({table})"))
+
+
+def unscoped_count(connection: sqlite3.Connection, table: str) -> int:
+    return int(connection.execute(f"SELECT count(*) FROM {table} WHERE workspace_id IS NULL").fetchone()[0])
 
 
 def inspect(connection: sqlite3.Connection, workspace_id: str) -> list[tuple[str, int, int]]:
@@ -102,7 +111,7 @@ def main() -> int:
         before = inspect(connection, workspace_id)
         if not args.apply:
             for table, total, foreign in before:
-                unscoped = total - foreign
+                unscoped = unscoped_count(connection, table)
                 print(f"{table}: total={total} eligible_unscoped={unscoped} foreign={foreign}")
             print("Dry run only; no data was changed.")
             return 0

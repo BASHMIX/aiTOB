@@ -406,10 +406,11 @@ operational check; a rehearsal is never a cutover.
   local disk is explicit development mode. Participant and Discord upload
   regressions pass; generic overlay asset ownership and CDN-variant policy
   remain isolated in T032.
-- [~] **T032 / FR-007** Added workspace-owned `media_assets` records for new
+- [x] **T032 / FR-007** Added workspace-owned `media_assets` records for new
   participant and overlay uploads, workspace-filtered listing, and soft deletion that
   refuses referenced player/match assets. Existing image URLs remain untouched;
-  generic overlay asset ownership and a full old-URL acceptance pass remain.
+  generic overlay asset ownership and the old-URL acceptance pass are now
+  closed against the current source and candidate databases.
   Schema/migration coverage is included in the disposable PostgreSQL migration
   test (1 passing) and image/API regression tests (18 passing). Before deletion,
   inspect station overlay configuration, overlay JSON image/background URLs,
@@ -422,8 +423,18 @@ operational check; a rehearsal is never a cutover.
   relying on cross-workspace duplicate keys. The deletion guard now recursively
   checks every owning-workspace overlay JSON value (including nested image
   `src` and `background_url`) and rejects a referenced asset; SQLite focused
-  and disposable-PostgreSQL regressions pass. Legacy unowned preset backfill
-  remains a cutover concern. `test_assets_workspace_scope.py` now proves the
+  and disposable-PostgreSQL regressions pass. A read-only inventory of the
+  current SQLite source (2026-09-10) found nine overlay presets, all owned by
+  workspace `1fe3fcde-47cd-49c4-85ab-53043b78113a`; the populated PostgreSQL
+  candidate independently reports nine overlays and zero unowned rows. A
+  consistent pre-backfill copy was saved as
+  `.migration-backups/database-t032-prebackfill-20260910.sqlite` (SHA-256
+  recorded outside source control), and `backfill_legacy_workspace.py` was
+  rehearsed with `--apply` on a disposable copy: every scoped table reported
+  zero changed rows, and a second dry run remained zero/unowned. The script
+  reports `workspace_id IS NULL` directly and deliberately excludes global
+  `bot_feed` telemetry; no ambiguous preset or asset record was found, and no
+  URL, JSON content, or image file was rewritten. `test_assets_workspace_scope.py` now proves the
   HTTP listing never enumerates shared legacy files: 1 local and 1 PostgreSQL
   case pass after explicitly isolating this SQLite fixture from the PG harness.
   The live candidate smoke also exposed and fixed two projection/configuration
@@ -507,7 +518,13 @@ operational check; a rehearsal is never a cutover.
   rehearsal was then backed up and restored to a second disposable target;
   reopening it with the existing service-level integration key authenticated
   all five ciphertext rows without emitting the key. Both disposable targets
-  were dropped after verification; no production rows changed.
+  were dropped after verification; no production rows changed. The current
+  ownership/backfill/overlay/restore/retention acceptance slice was re-run on
+  2026-09-10 (20 passed), covering restore-manifest validation, retention
+  policy, overlay ownership, recursive asset-reference protection, and
+  idempotent backfill. The only T043 work still external is reconciliation of
+  historical effects whose remote receipt cannot be proven; those rows stay
+  held for review and are never replayed blindly.
   A direct preflight against the configured runtime PostgreSQL target found
   existing schema history, two stations, and one `workflow_outbox` record in
   `needs_review`; `--allow-schema-only-target` correctly refused the merge
@@ -720,6 +737,14 @@ operational check; a rehearsal is never a cutover.
   external sinks and do not drain either queue. T053 therefore remains open
   only for the explicit human/session gates listed above; no generic “broader
   acceptance” placeholder is being used.
+
+  On 2026-09-10 the executable T053 local matrix was re-run after the
+  ownership and test-discovery changes: action proposals, deterministic
+  Dispatcher decisions, outage/recovery, queue holds, worker workspace scope,
+  On-Stream overlay projection, Start.gg transition edges, and sync-budget
+  behavior completed 63 passed. The official `testpaths` run then completed
+  457 passed / 31 intentionally skipped. No local case sent Discord/OBS or
+  provider effects; the remaining human and external gates are unchanged.
 
   Full local regression rerun after the workspace-scope fix (2026-09-10)
   completed at 457 passed / 31 skipped. The skips are named and intentional:
