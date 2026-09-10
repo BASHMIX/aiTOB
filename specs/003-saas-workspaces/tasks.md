@@ -363,7 +363,12 @@ operational check; a rehearsal is never a cutover.
   regression is 36/36 passing; these tests use isolated accounts and workspaces
   and do not enable external effects. Remaining status reflects legacy preset
   backfill and deployment-level Cloudinary/receipt acceptance, not a failing
-  PostgreSQL repository path.
+  PostgreSQL repository path. On 2026-09-10 the legacy Start.gg credential
+  found in the owner-scoped candidate settings was migrated through
+  `migrate_legacy_integrations` into an encrypted owner Workspace account,
+  idempotently, and `tournament/testfnc` was bound to it; the live candidate
+  API then reported three account-scoped integrations and both tournaments
+  `provider_sync_status=ready`.
 - [~] **T031 / FR-007** New Discord registration and participant avatar uploads
   use `image_store` with MIME/decodability, byte/dimension bounds and safe PNG
   transforms. Managed deployments now fail closed without Cloudinary, while

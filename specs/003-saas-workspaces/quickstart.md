@@ -373,6 +373,23 @@ any current API or Bot process. The managed runtime now points explicitly at
 the populated candidate database; this does not by itself close final cutover
 acceptance.
 
+The legacy Start.gg credential was present in the owner candidate's retained
+settings. On 2026-09-10 the service migration created the owner-scoped Start.gg
+Integration Account, encrypted its access credential, and bound the previously
+unbound `tournament/testfnc` without deleting the legacy settings. Re-running
+the migration was idempotent. The running API then exposed three configured
+account types (Start.gg, Challonge and Discord); both candidate tournaments
+reported `provider_sync_status=ready` after reconciliation. No credential value
+is recorded here.
+
+Worker evidence from the same run: Dispatcher heartbeat was fresh and the
+organizer console reported `service_alive=true` (the Challonge tournament is
+paused at its configured scope, while the Start.gg tournament is not). The Bot
+process was online with Hub WebSocket accepted; its Hub-command consumer and
+5-second Outbox loop were active, while the explicitly held eight Outbox rows
+and commands 126–134 remained unchanged after restart. API startup logged the
+reconciliation loop and local recovery restore; no held row was claimed.
+
 For a cutover review window, set `AITOB_DISABLE_BACKGROUND_WORKERS=true` before
 starting the API. It initializes the database and accepts read-only checks but
 does not restore workflows, schedule Live polling, sync tournaments, or start

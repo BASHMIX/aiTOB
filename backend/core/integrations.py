@@ -320,13 +320,21 @@ async def migrate_legacy_integrations(workspace_id: str) -> dict[str, Any]:
     _box()  # Fail before starting a transaction.
     if not workspace_id:
         raise IntegrationError("An explicit workspace is required for legacy integration migration.")
-    report: dict[str, Any] = {"migrated_accounts": 0, "discord_account_id": None, "challonge_account_id": None, "oauth_application_id": None, "legacy_retained": True}
+    report: dict[str, Any] = {
+        "migrated_accounts": 0,
+        "discord_account_id": None,
+        "challonge_account_id": None,
+        "startgg_account_id": None,
+        "oauth_application_id": None,
+        "legacy_retained": True,
+    }
     async with aiosqlite.connect(_db_path()) as db:
         await db.execute("BEGIN IMMEDIATE")
         discord_token = await _legacy_value(db, "global_settings", "DISCORD_BOT_TOKEN") or await _legacy_value(db, "connections", "DISCORD_BOT_TOKEN")
         channel = await _legacy_value(db, "connections", "MATCH_CALL_CHANNEL_ID") or await _legacy_value(db, "global_settings", "MATCH_CALL_CHANNEL_ID")
         access = await _legacy_value(db, "connections", "CHALLONGE_OAUTH_ACCESS_TOKEN")
         api_key = await _legacy_value(db, "connections", "CHALLONGE_API_KEY")
+        startgg_token = await _legacy_value(db, "global_settings", "STARTGG_API_TOKEN") or await _legacy_value(db, "connections", "STARTGG_API_TOKEN")
         if discord_token:
             account = await _legacy_account(db, "discord", workspace_id)
             if not account:
@@ -352,6 +360,25 @@ async def migrate_legacy_integrations(workspace_id: str) -> dict[str, Any]:
                     await db.execute("INSERT INTO integration_credentials (owner_kind, owner_id, secret_type, ciphertext, updated_at) VALUES ('account', ?, ?, ?, ?) ON CONFLICT(owner_kind, owner_id, secret_type) DO NOTHING", (account, name, _box().encrypt(value.encode()).decode(), _now()))
             await db.execute("UPDATE tournaments SET provider_account_id=? WHERE workspace_id=? AND provider_type='challonge' AND (provider_account_id IS NULL OR provider_account_id='' OR provider_account_id='default')", (account, workspace_id))
             await _audit(db, account, "legacy_migrated", {"provider_type": "challonge"})
+        if startgg_token:
+            account = await _legacy_account(db, "startgg", workspace_id)
+            if not account:
+                account = str(uuid.uuid4())
+                await db.execute(
+                    "INSERT INTO integration_accounts (id, owner_id, workspace_id, provider_type, external_account_id, display_name) VALUES (?, ?, ?, 'startgg', 'legacy', 'Migrated Start.gg')",
+                    (account, workspace_id, workspace_id),
+                )
+                report["migrated_accounts"] += 1
+            report["startgg_account_id"] = account
+            await db.execute(
+                "INSERT INTO integration_credentials (owner_kind, owner_id, secret_type, ciphertext, updated_at) VALUES ('account', ?, 'access_token', ?, ?) ON CONFLICT(owner_kind, owner_id, secret_type) DO NOTHING",
+                (account, _box().encrypt(startgg_token.encode()).decode(), _now()),
+            )
+            await db.execute(
+                "UPDATE tournaments SET provider_account_id=? WHERE workspace_id=? AND provider_type='startgg' AND (provider_account_id IS NULL OR provider_account_id='' OR provider_account_id='default')",
+                (account, workspace_id),
+            )
+            await _audit(db, account, "legacy_migrated", {"provider_type": "startgg"})
         client_id = await _legacy_value(db, "connections", "CHALLONGE_OAUTH_CLIENT_ID")
         callback = await _legacy_value(db, "connections", "CHALLONGE_OAUTH_REDIRECT_URI")
         client_secret = await _legacy_value(db, "connections", "CHALLONGE_OAUTH_CLIENT_SECRET")

@@ -124,3 +124,23 @@ async def test_legacy_migration_does_not_reuse_another_workspaces_account(integr
     assert report["challonge_account_id"] != other["id"]
     assert (await get_integration_account(report["challonge_account_id"]))["workspace_id"] == "admin"
     assert (await database.get_tournament("other"))["provider_account_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_legacy_startgg_credential_migrates_to_owner_account(integration_db):
+    from backend.core.integrations import get_integration_secret, migrate_legacy_integrations
+
+    await database.set_setting("STARTGG_API_TOKEN", "legacy-startgg-token")
+    await database.upsert_tournament(
+        "tournament/owner-startgg", "Owner Start.gg", "", "", "", "{}",
+        provider_type="startgg", provider_tournament_id="owner-startgg",
+        workspace_id="admin",
+    )
+    first = await migrate_legacy_integrations("admin")
+    second = await migrate_legacy_integrations("admin")
+
+    assert first["startgg_account_id"]
+    assert second["startgg_account_id"] == first["startgg_account_id"]
+    assert second["migrated_accounts"] == 0
+    assert await get_integration_secret(first["startgg_account_id"], "access_token") == "legacy-startgg-token"
+    assert (await database.get_tournament("tournament/owner-startgg"))["provider_account_id"] == first["startgg_account_id"]
