@@ -3816,12 +3816,13 @@ async def apply_local_workflow_transition_v2(
                 await db.execute(
                     """INSERT INTO workflow_outbox (
                            event_id, match_id, event_type, payload_json, deduplication_key,
-                           status, attempts, next_attempt_at
-                       ) VALUES (?, ?, ?, ?, ?, 'pending', 0, NULL)
+                           status, attempts, next_attempt_at, workspace_id
+                       ) VALUES (?, ?, ?, ?, ?, 'pending', 0, NULL, ?)
                        ON CONFLICT(deduplication_key) DO NOTHING""",
                     (
                         event.get("event_id") or str(uuid.uuid4()), match_id,
                         event["event_type"], json.dumps(event.get("payload", {})), dedupe,
+                        match.get("workspace_id"),
                     ),
                 )
             await db.commit()
@@ -3890,10 +3891,11 @@ async def complete_match_and_enqueue_effects_v2(
             for event_type in ("discord_match_complete", "obs_match_complete", "next_match_discovery"):
                 await db.execute(
                     """INSERT INTO workflow_outbox (
-                           event_id, match_id, event_type, payload_json, deduplication_key, status, attempts
-                       ) VALUES (?, ?, ?, '{}', ?, 'pending', 0)
+                           event_id, match_id, event_type, payload_json, deduplication_key,
+                           status, attempts, workspace_id
+                       ) VALUES (?, ?, ?, '{}', ?, 'pending', 0, ?)
                        ON CONFLICT(deduplication_key) DO NOTHING""",
-                    (str(uuid.uuid4()), match_id, event_type, f"{event_type}:{match_id}"),
+                    (str(uuid.uuid4()), match_id, event_type, f"{event_type}:{match_id}", match.get("workspace_id")),
                 )
             await db.commit()
         except Exception:

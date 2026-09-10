@@ -16,10 +16,10 @@ async def local_workflow_db(tmp_path, monkeypatch):
     slug = "challonge:account:fnc:1"
     await database.upsert_tournament(
         slug, "FNC", None, None, None, json.dumps({}), provider_type="challonge",
-        provider_tournament_id="1", provider_account_id="account",
+        provider_tournament_id="1", provider_account_id="account", workspace_id="workspace-a",
     )
     await database.upsert_active_match(
-        "challonge:m1", tournament_slug=slug, p1_name="Alpha", p2_name="Bravo",
+        "challonge:m1", workspace_id="workspace-a", tournament_slug=slug, p1_name="Alpha", p2_name="Bravo",
         p1_entrant_id="p1", p2_entrant_id="p2", status="not_started",
         provider_state_raw="open", provider_state_normalized="not_started",
         hub_status="available", sync_status="synced",
@@ -29,10 +29,10 @@ async def local_workflow_db(tmp_path, monkeypatch):
         status="not_started",
     )
     await database.upsert_tournament("startgg:legacy", "Legacy", None, None, None, json.dumps({}))
-    await database.upsert_active_match("challonge:other", tournament_slug=slug, p1_name="Other A", p2_name="Other B", status="called", station_id="station-b")
+    await database.upsert_active_match("challonge:other", workspace_id="workspace-a", tournament_slug=slug, p1_name="Other A", p2_name="Other B", status="called", station_id="station-b")
     async with aiosqlite.connect(database.DB_PATH) as db:
-        await db.execute("INSERT INTO stations (id, name) VALUES ('station-a', 'Station A')")
-        await db.execute("INSERT INTO stations (id, name) VALUES ('station-b', 'Station B')")
+        await db.execute("INSERT INTO stations (id, name, workspace_id) VALUES ('station-a', 'Station A', 'workspace-a')")
+        await db.execute("INSERT INTO stations (id, name, workspace_id) VALUES ('station-b', 'Station B', 'workspace-a')")
         await db.commit()
     return slug
 
@@ -69,6 +69,8 @@ async def test_challonge_call_ready_start_and_station_are_atomic_and_provider_si
                     for row in effect_rows
                 }
                 effects = dict(effects)
+        async with db.execute("SELECT DISTINCT workspace_id FROM workflow_outbox WHERE match_id='challonge:m1'") as cursor:
+            assert [row[0] for row in await cursor.fetchall()] == ["workspace-a"]
         async with db.execute("SELECT active_match_id FROM stations WHERE id='station-a'") as cursor:
             assert (await cursor.fetchone())[0] == "challonge:m1"
     assert effects == {"discord_call": 1, "discord_ready": 2, "obs_match_started": 1, "obs_station_assigned": 1}
@@ -94,6 +96,18 @@ async def test_challonge_stream_station_assignment_marks_the_local_match_on_stre
     async with aiosqlite.connect(database.DB_PATH) as db:
         async with db.execute("SELECT active_match_id FROM stations WHERE id='station-a'") as cursor:
             assert (await cursor.fetchone())[0] == "challonge:m1"
+
+
+@pytest.mark.asyncio
+async def test_completion_effects_inherit_match_workspace(local_workflow_db):
+    await database.complete_match_and_enqueue_effects_v2(
+        "challonge:m1", "score", p1_score=2, p2_score=1,
+    )
+    async with aiosqlite.connect(database.DB_PATH) as db:
+        async with db.execute(
+            "SELECT DISTINCT workspace_id FROM workflow_outbox WHERE match_id='challonge:m1'"
+        ) as cursor:
+            assert [row[0] for row in await cursor.fetchall()] == ["workspace-a"]
 
 
 @pytest.mark.asyncio

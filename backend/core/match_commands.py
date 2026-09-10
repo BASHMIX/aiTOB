@@ -145,7 +145,7 @@ class MatchCommandService:
         # assigning a stream station makes this a featured/on-stream match;
         # assigning an ordinary station explicitly takes it off stream.  This is
         # local workflow metadata only and must not call the provider.
-        station = await database.get_station(station_id)
+        station = await database.get_station(station_id, self._workspace_id or match.get("workspace_id"))
         if not station:
             raise MatchCommandError("Station was not found")
         try:
