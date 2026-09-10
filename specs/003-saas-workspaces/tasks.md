@@ -233,10 +233,19 @@ operational check; a rehearsal is never a cutover.
   proves closed=403, one opened registration=201, then 429 at the configured
   bound. Keep the implemented path closed until T022/T053 isolation
   acceptance; add the protected Owner setup/account UI before closure.
+  Disposable PostgreSQL HTTP acceptance now proves the bootstrapped Owner
+  profile, session-derived workspace (client workspace spoof ignored), logout,
+  and durable revocation in `test_postgres_identity_acceptance.py` (3/3 PG
+  cases, 2026-09-10). The one-time bootstrap remains environment-gated and no
+  default credential is created.
 - [~] **T011 / FR-003–005** Email verification, password change/reset, TOTP
   recovery codes, session revocation and auth rate limits are implemented and
   covered by session tests; account UI is present. Email delivery remains
-  deployment-dependent and public registration stays closed.
+  deployment-dependent and public registration stays closed. The same isolated
+  PG HTTP acceptance covers TOTP enable, missing-code rejection, one-use
+  recovery login, post-reset session revocation and password replacement; the
+  reset token is supplied by an in-process test delivery sink, not SMTP. Live
+  SMTP/provider delivery remains an explicit deployment dependency.
 - [x] **T012 / FR-003** Canonical Owner / TO / Stream operator / Moderator /
   Viewer permission matrix is now present in `workspace_auth.py`, with legacy
   aliases retained only for staged data migration; session and WebSocket
@@ -257,9 +266,13 @@ operational check; a rehearsal is never a cutover.
   change and membership disable are implemented with last-Owner protection;
   tests cover invitation replay and role/removal safety. Account Settings now
   exposes owner-only role changes and member disable actions, while the API
-  remains the enforcement point. Invitation cancellation and mail delivery
-  remain deployment-dependent. Owner-visible invitation listing and
-  cancellation are now covered without exposing invitation hashes/tokens.
+  remains the enforcement point. Owner-visible invitation listing and
+  cancellation are now covered without exposing invitation hashes/tokens. The
+  isolated PG HTTP acceptance additionally proves invite acceptance, replay
+  rejection, Owner role change, non-Owner role-change denial, cancellation
+  invalidation, and last-Owner deletion protection. Email delivery remains a
+  deployment dependency; acceptance uses the returned one-time test token and
+  does not claim that SMTP sent it.
 
 ## C. Ownership and tenant isolation
 
