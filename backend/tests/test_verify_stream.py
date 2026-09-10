@@ -7,6 +7,7 @@ binding (bound id no longer on start.gg) is the precise silent-failure case.
 """
 import os
 import pytest
+from fastapi import HTTPException
 
 import backend.core.database as db
 import backend.core.match_state as match_state
@@ -123,6 +124,17 @@ async def test_no_stream_stations(setup, monkeypatch):
     assert res["ok"] is False
     assert res["reason"] == "no_stream_stations"
     assert res["stations"] == []
+
+
+@pytest.mark.asyncio
+async def test_unbound_provider_is_a_configuration_conflict_not_a_500(setup, monkeypatch):
+    async def _unbound(*_args, **_kwargs):
+        raise ValueError("Start.gg tournament is not bound to an integration account.")
+
+    monkeypatch.setattr(tr, "get_provider_for_tournament", _unbound)
+    with pytest.raises(HTTPException) as exc_info:
+        await tr.api_verify_tournament_stream(SLUG)
+    assert getattr(exc_info.value, "status_code", None) == 409
 
 
 # ── side effect: live fetch refreshes the cached stream list ────────────────

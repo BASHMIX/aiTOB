@@ -387,6 +387,11 @@ operational check; a rehearsal is never a cutover.
   remains a cutover concern. `test_assets_workspace_scope.py` now proves the
   HTTP listing never enumerates shared legacy files: 1 local and 1 PostgreSQL
   case pass after explicitly isolating this SQLite fixture from the PG harness.
+  The live candidate smoke also exposed and fixed two projection/configuration
+  edges: PostgreSQL timestamps are normalized before the active-match response
+  (`test_tournament_progression_and_state_axes.py`, 9/9), and an unbound
+  Start.gg integration now returns explicit HTTP 409 setup state rather than a
+  500 or global-credential fallback (`test_verify_stream.py`, 7/7).
 - [~] **T033 / FR-008** Revocable hashed workspace-station Browser Source tokens
   and least-privilege `/obs/{station}/data` plus authenticated overlay WebSocket
   are implemented; issuance/revocation and cross-workspace tests pass. Existing

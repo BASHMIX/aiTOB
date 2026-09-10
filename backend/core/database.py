@@ -1664,9 +1664,24 @@ def serialize_active_match_for_display(match: dict) -> dict:
     receive a fresh dictionary and the SQLite row, station ownership, Discord
     workflow, and provider state remain untouched.
     """
+    from datetime import date, datetime
+
     from backend.core.tournament_progression import project_match
 
-    return {**match, **project_match(match)}
+    def json_safe(value):
+        if isinstance(value, (datetime, date)):
+            return value.isoformat()
+        if isinstance(value, dict):
+            return {key: json_safe(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [json_safe(item) for item in value]
+        return value
+
+    # psycopg returns TIMESTAMP/TIMESTAMPTZ columns as datetime instances,
+    # while the public display contract is string-based. Normalize both the
+    # persisted row and the derived Discord/provider projection without
+    # changing storage or workflow state.
+    return json_safe({**match, **project_match(match)})
 
 async def get_active_match(set_id: str, workspace_id: str | None = None):
     async with aiosqlite.connect(DB_PATH) as db:

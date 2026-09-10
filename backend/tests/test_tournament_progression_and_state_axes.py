@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 import pytest
 
 from backend.core.tournament_progression import project_match
@@ -55,6 +57,20 @@ def test_legacy_challonge_row_without_v2_axes_still_projects_actions(monkeypatch
     })
 
     assert actions and actions["call"]["kind"] == "local"
+
+
+def test_active_match_display_normalizes_postgres_datetime_columns():
+    """PostgreSQL timestamps must satisfy the public string projection."""
+    from backend.core.database import serialize_active_match_for_display
+
+    payload = serialize_active_match_for_display({
+        "set_id": "pg-m1", "provider_state_raw": "open",
+        "provider_state_normalized": "not_started", "hub_status": "called",
+        "sync_status": "local_only", "p1_name": "Alpha", "p2_name": "Bravo",
+        "called_at": datetime(2026, 9, 10, 7, 0, tzinfo=timezone.utc),
+    })
+    assert payload["called_at"] == "2026-09-10T07:00:00+00:00"
+    assert payload["discord"]["called_at"] == "2026-09-10T07:00:00+00:00"
 
 
 def test_active_legacy_stream_match_keeps_result_controls_when_hub_axis_is_stale(monkeypatch):

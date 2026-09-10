@@ -9,6 +9,25 @@ import json
 import signal
 import subprocess
 import threading
+from urllib.parse import urlsplit, urlunsplit
+
+from dotenv import load_dotenv
+
+# The desktop launcher is the service boundary. Load the ignored local
+# development values first (including the integration key), then the explicit
+# runtime profile. Child API/Bot processes inherit this single environment.
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env.production"), override=True)
+
+runtime_database_name = os.getenv("AITOB_RUNTIME_DATABASE_NAME", "").strip()
+database_url = os.getenv("DATABASE_URL", "").strip()
+if runtime_database_name and database_url.lower().startswith(("postgres://", "postgresql://")):
+    parsed_database_url = urlsplit(database_url)
+    os.environ["DATABASE_URL"] = urlunsplit(
+        (parsed_database_url.scheme, parsed_database_url.netloc,
+         "/" + runtime_database_name, parsed_database_url.query,
+         parsed_database_url.fragment)
+    )
 
 if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding='utf-8')
@@ -159,6 +178,11 @@ if __name__ == "__main__":
     # launcher uses :8001 so an abandoned reload worker on :8000 cannot serve
     # stale code behind an otherwise healthy Vite page.
     api_port = 8001 if detached else 8000
+    # Local API/Bot traffic must stay on the same process boundary as Vite.
+    # Deployments that intentionally use an external Hub URL must opt in
+    # explicitly; a stale external value must not produce a 530 on local WS.
+    if os.getenv("AITOB_ALLOW_EXTERNAL_API_BASE_URL", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        os.environ["API_BASE_URL"] = f"http://127.0.0.1:{api_port}"
 
     cprint(GREEN, "SYS", "Starting AI Tournament Organizer…")
     cprint(GREEN, "SYS", f"Python: {PYTHON}")

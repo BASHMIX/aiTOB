@@ -433,7 +433,14 @@ async def api_refresh_tournament(slug: str, principal: SessionPrincipal = Depend
             detail="Challonge identity imports do not refresh bracket or metadata in Phase 4.",
         )
     workspace_id = _workspace(principal)
-    provider = await get_provider_for_tournament(slug, workspace_id) if workspace_id else await get_provider_for_tournament(slug)
+    try:
+        provider = await get_provider_for_tournament(slug, workspace_id) if workspace_id else await get_provider_for_tournament(slug)
+    except ValueError as exc:
+        # A tenant-owned tournament without a provider account is a
+        # configuration dependency, not an unhandled server failure. Keep the
+        # response explicit so the UI can show setup guidance without claiming
+        # that the stream is absent or silently falling back to a global token.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     info = await provider.fetch_tournament(provider_reference(t or {"slug": slug}))
     if not info:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Could not find tournament: {slug}")
@@ -556,7 +563,13 @@ async def api_verify_tournament_stream(slug: str, principal: SessionPrincipal = 
 
     # LIVE fetch (not the cache) — this is the whole point of the preflight.
     workspace_id = _workspace(principal)
-    provider = await get_provider_for_tournament(slug, workspace_id) if workspace_id else await get_provider_for_tournament(slug)
+    try:
+        provider = await get_provider_for_tournament(slug, workspace_id) if workspace_id else await get_provider_for_tournament(slug)
+    except ValueError as exc:
+        # Missing tenant-owned provider configuration is actionable setup
+        # state, not an unhandled server error or permission to use a global
+        # credential fallback.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     try:
         live = await provider.fetch_streams(slug)
     except Exception as e:
