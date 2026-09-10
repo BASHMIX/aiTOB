@@ -648,3 +648,32 @@ operational check; a rehearsal is never a cutover.
   participant names, avatar layers, round and 0–0 telemetry; the page emitted
   no overlay fetch errors. This is browser evidence, not a substitute for the
   still-open native OBS Studio visual gate.
+
+  Queue classification is now recorded against the running candidate rather
+  than inferred from counts. The eight legacy Outbox rows remain
+  `needs_review` (four for match 471045156 and four for 471045157) and Hub
+  commands 126–134 remain `needs_review`; all are non-claimable after restart
+  and were not re-sent. The independent Challonge acceptance on match
+  471045163 already performed and verified its single remote score mutation
+  (2–1, winner entrant 303608384). Its five local follow-up effects are
+  distinct pending rows, not additional provider mutations: event IDs
+  `8f9638f8-c089-455d-bea5-c4e778e373fd` (`discord_call`),
+  `359232a7-7a9f-41c7-b7cb-2c313ed57366` (`obs_match_started`),
+  `072fabd8-5fa3-4fef-9a12-2d0341437e27` (`discord_match_complete`),
+  `273200db-2a0d-4e90-8cff-8a12ca467f51` (`obs_match_complete`), and
+  `f5d23573-c8de-400a-9ff7-7d5522fb9b55` (`next_match_discovery`). Each has
+  attempts=0, no lease, no `effect_started_at` or receipt, and is owned by
+  the acceptance workspace. They are intentionally paused while external
+  acceptance is reviewed; no Discord/OBS effect was sent and no provider
+  result is eligible for replay. A scoped repair backfilled the missing
+  `workspace_id` on exactly these five rows in one transaction and wrote five
+  redacted audit events; status and payloads were unchanged. This separates
+  the fresh local notification backlog from the eight historical held rows.
+
+  Latest focused acceptance after that repair: 79 local account/isolation/
+  asset/security/entitlement/retention cases passed (3 intentionally skipped
+  live-email cases), and 32 PostgreSQL workspace/worker/overlay/asset cases
+  passed (one disabled external benchmark skipped). These runs use mocked
+  external sinks and do not drain either queue. T053 therefore remains open
+  only for the explicit human/session gates listed above; no generic “broader
+  acceptance” placeholder is being used.

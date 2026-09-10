@@ -549,3 +549,19 @@ fresh browser tab and rendered the test participants, avatar layers, round and
 0–0 score with no fetch error. Existing OBS scenes and Browser Sources were not
 modified. Native OBS Studio visual confirmation remains a human gate because
 the current automation surface cannot inspect native OBS windows.
+
+Candidate queue evidence (2026-09-10): the eight historical Outbox effects for
+Challonge matches 471045156/471045157 are `needs_review` and Hub commands
+126–134 are also `needs_review`; they remain held and non-claimable after
+restart. A separate fresh Challonge acceptance match 471045163 completed one
+remote score mutation and read-back verification. Its five local follow-up
+events remain pending by acceptance policy (no attempts, lease,
+`effect_started_at` or receipt): `8f9638f8-c089-455d-bea5-c4e778e373fd`,
+`359232a7-7a9f-41c7-b7cb-2c313ed57366`,
+`072fabd8-5fa3-4fef-9a12-2d0341437e27`,
+`273200db-2a0d-4e90-8cff-8a12ca467f51`, and
+`f5d23573-c8de-400a-9ff7-7d5522fb9b55`. They are owned by the acceptance
+workspace and are not provider mutations; no external notification was sent.
+The scoped workspace repair changed only their missing ownership fields and
+added redacted audit records. This backlog is distinct from the historical
+held rows and will not be drained as part of rollback or recovery.
