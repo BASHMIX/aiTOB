@@ -13,6 +13,8 @@ async def finalize_verification(
     discord_id: str,
     gamer_tag: str | None = None,
     avatar_path: str | None = None,
+    *,
+    workspace_id: str | None = None,
 ):
     """Single source of truth for completing a player's verification.
 
@@ -24,7 +26,9 @@ async def finalize_verification(
     fields = {"is_verified": True, "registration_step": "verified"}
     if avatar_path:
         fields["avatar_path"] = avatar_path
-    await create_or_update_player(discord_id, **fields)
+    if not workspace_id:
+        raise RuntimeError("Verification requires a workspace-owned bot context.")
+    await create_or_update_player(discord_id, workspace_id=workspace_id, **fields)
     cmd = f"apply_verified_role {discord_id}"
     if gamer_tag:
         cmd += f" {gamer_tag}"
@@ -58,9 +62,11 @@ class RegistrationManager:
             return "startgg_linked"
         return self._LEGACY_STEP_ALIASES.get(step, step)
 
-    async def handle_dm(self, message: discord.Message):
+    async def handle_dm(self, message: discord.Message, *, workspace_id: str | None = None):
         discord_id = str(message.author.id)
-        player = await get_player(discord_id)
+        if not workspace_id:
+            raise RuntimeError("Registration requires a workspace-owned bot context.")
+        player = await get_player(discord_id, workspace_id)
 
         if not player:
             # Should not happen if they clicked the button, but handle just in case
@@ -71,18 +77,18 @@ class RegistrationManager:
         lang = player.get("preferred_language", "en")
 
         if step == "startgg_linked":
-            await self._handle_language_step(message, discord_id, lang)
+            await self._handle_language_step(message, discord_id, lang, workspace_id)
         elif step == "language_selected":
-            await self._handle_cfn_step(message, discord_id, lang)
+            await self._handle_cfn_step(message, discord_id, lang, workspace_id)
         elif step == "cfn_entered":
-            await self._handle_avatar_step(message, discord_id, lang)
+            await self._handle_avatar_step(message, discord_id, lang, workspace_id)
         elif step == "avatar_upload":
             # Bio-code (Path B) broadcast-avatar collection. No language/CFN was
             # gathered on this path, so we fall back to the stored language.
-            await self._handle_broadcast_avatar_step(message, discord_id, lang)
+            await self._handle_broadcast_avatar_step(message, discord_id, lang, workspace_id)
         elif step == "cfn_pending":
             # Path B post-avatar: CFN was not found on start.gg, player is DMing it now.
-            await self._handle_cfn_pending_step(message, discord_id, lang)
+            await self._handle_cfn_pending_step(message, discord_id, lang, workspace_id)
         elif step == "avatar_uploaded":
             # Avatar was attempted but didn't finalize; nudge them to retry.
             await message.channel.send(get_msg("avatar_prompt", lang))
@@ -91,11 +97,11 @@ class RegistrationManager:
             # If they DM an IMAGE, treat it as a broadcast-avatar update rather
             # than swallowing it behind the generic "update your profile?" reply.
             if message.attachments:
-                await self._handle_broadcast_avatar_step(message, discord_id, lang)
+                await self._handle_broadcast_avatar_step(message, discord_id, lang, workspace_id)
             else:
                 await message.channel.send(get_msg("profile_update", lang))
 
-    async def _handle_language_step(self, message, discord_id, current_lang):
+    async def _handle_language_step(self, message, discord_id, current_lang, workspace_id):
         text = message.content.strip().lower()
         if text in ("1", "ar", "arabic", "العربية"):
             lang = "ar"
@@ -107,12 +113,13 @@ class RegistrationManager:
 
         await create_or_update_player(
             discord_id,
+            workspace_id=workspace_id,
             preferred_language=lang,
             registration_step="language_selected",
         )
         await message.channel.send(get_msg("cfn_prompt", lang))
 
-    async def _handle_cfn_step(self, message, discord_id, lang):
+    async def _handle_cfn_step(self, message, discord_id, lang, workspace_id):
         cfn_id = message.content.strip()
         if not cfn_id or len(cfn_id) < 3:
             await message.channel.send(get_msg("cfn_prompt", lang))
@@ -120,12 +127,13 @@ class RegistrationManager:
 
         await create_or_update_player(
             discord_id,
+            workspace_id=workspace_id,
             cfn_id=cfn_id,
             registration_step="cfn_entered",
         )
         await message.channel.send(get_msg("avatar_prompt", lang))
 
-    async def _process_and_save_avatar(self, message, discord_id, lang) -> str | None:
+    async def _process_and_save_avatar(self, message, discord_id, lang, workspace_id) -> str | None:
         """Validate (quality + safety) and persist a DM'd avatar attachment.
 
         Shared by the full-flow (Path A) avatar step and the bio-code (Path B)
@@ -159,18 +167,18 @@ class RegistrationManager:
                 return None
 
             # Process + store (Cloudinary when configured, local fallback otherwise).
-            p = await get_player(discord_id)
+            p = await get_player(discord_id, workspace_id)
             filename_id = (p or {}).get('startgg_id') or discord_id
             saved = await store_avatar(image_bytes, filename_id)
             # Keep Discord uploads in the same managed-asset ledger as the
             # participant page.  This gives the workspace a durable ownership
             # record and lets the guarded deletion path inspect live references;
             # it does not alter existing avatar URLs or re-upload old assets.
-            workspace_id = (p or {}).get("workspace_id")
-            if workspace_id:
+            owner_workspace = (p or {}).get("workspace_id") or workspace_id
+            if owner_workspace:
                 from backend.core.database import record_media_asset
                 await record_media_asset(
-                    workspace_id=workspace_id,
+                    workspace_id=owner_workspace,
                     asset_type="player_avatar",
                     owner_type="player",
                     owner_id=discord_id,
@@ -186,19 +194,20 @@ class RegistrationManager:
             await message.channel.send(get_msg("error_generic", lang))
             return None
 
-    async def _handle_avatar_step(self, message, discord_id, lang):
-        saved_path = await self._process_and_save_avatar(message, discord_id, lang)
+    async def _handle_avatar_step(self, message, discord_id, lang, workspace_id):
+        saved_path = await self._process_and_save_avatar(message, discord_id, lang, workspace_id)
         if not saved_path:
             return
         await create_or_update_player(
             discord_id,
+            workspace_id=workspace_id,
             avatar_path=saved_path,
             registration_step="verified",
             is_verified=True,
         )
         await message.channel.send(get_msg("reg_complete", lang))
 
-    async def _handle_cfn_pending_step(self, message, discord_id, lang):
+    async def _handle_cfn_pending_step(self, message, discord_id, lang, workspace_id):
         """Path B post-avatar: player is DMing their CFN ID to complete registration.
 
         Reached when start.gg had no linked Capcom account and the avatar step
@@ -208,34 +217,34 @@ class RegistrationManager:
         if not cfn_id or len(cfn_id) < 3:
             await message.channel.send(get_msg("cfn_post_verify_prompt", lang))
             return
-        player = await get_player(discord_id)
-        workspace_id = (player or {}).get("workspace_id")
+        player = await get_player(discord_id, workspace_id)
+        workspace_id = (player or {}).get("workspace_id") or workspace_id
         await create_or_update_player(discord_id, workspace_id=workspace_id, cfn_id=cfn_id)
         await sync_player_cfns_to_matches(discord_id, workspace_id)
         player = await get_player(discord_id, workspace_id)
         gamer_tag = (player or {}).get("gamer_tag")
-        await finalize_verification(discord_id, gamer_tag, avatar_path=None)
+        await finalize_verification(discord_id, gamer_tag, avatar_path=None, workspace_id=workspace_id)
         await message.channel.send(get_msg("reg_complete", lang))
 
-    async def _handle_broadcast_avatar_step(self, message, discord_id, lang):
+    async def _handle_broadcast_avatar_step(self, message, discord_id, lang, workspace_id):
         """Bio-code (Path B): collect the broadcast avatar, then finalize or request CFN.
 
         Reached when a new (or replacing) bio-verified player DMs their photo.
         If CFN was pre-populated from start.gg at verify-confirm, we finalize immediately.
         If CFN is still missing, we park the player in cfn_pending and prompt them to DM it.
         """
-        saved_path = await self._process_and_save_avatar(message, discord_id, lang)
+        saved_path = await self._process_and_save_avatar(message, discord_id, lang, workspace_id)
         if not saved_path:
             return
-        player = await get_player(discord_id)
+        player = await get_player(discord_id, workspace_id)
         gamer_tag = (player or {}).get("gamer_tag")
         cfn_id = (player or {}).get("cfn_id")
         if not cfn_id:
             # CFN was not on start.gg — park in cfn_pending, avatar is already saved.
-            await create_or_update_player(discord_id, avatar_path=saved_path, registration_step="cfn_pending")
+            await create_or_update_player(discord_id, workspace_id=workspace_id, avatar_path=saved_path, registration_step="cfn_pending")
             await message.channel.send(get_msg("cfn_post_verify_prompt", lang))
             return
-        await finalize_verification(discord_id, gamer_tag, saved_path)
+        await finalize_verification(discord_id, gamer_tag, saved_path, workspace_id=workspace_id)
         await message.channel.send(get_msg("reg_complete", lang))
 
 registration_manager = RegistrationManager()

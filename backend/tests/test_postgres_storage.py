@@ -295,6 +295,61 @@ async def test_auth_rate_limit_concurrent_first_window_is_not_reset_by_upsert_ra
 
 
 @pytest.mark.asyncio
+async def test_authenticated_api_limiter_is_shared_across_process_like_requests(monkeypatch):
+    """The API dependency charges one DB-backed window, not one process-local counter."""
+    from types import SimpleNamespace
+    from backend.core.workspace_auth import SessionPrincipal, enforce_authenticated_api_rate_limit
+
+    monkeypatch.setenv("AITOB_API_RATE_LIMIT_PER_MINUTE", "1")
+    monkeypatch.setenv("AITOB_API_RATE_LIMIT_WINDOW_SECONDS", "3600")
+    principal = SessionPrincipal("user-a", "workspace-a", "owner", "session-a")
+
+    def request():
+        return SimpleNamespace(
+            url=SimpleNamespace(path="/api/matches"), method="POST",
+            client=SimpleNamespace(host="independent-process"), state=SimpleNamespace(),
+        )
+
+    outcomes = await asyncio.gather(*(
+        enforce_authenticated_api_rate_limit(request(), principal) for _ in range(2)
+    ), return_exceptions=True)
+    assert sum(value is None for value in outcomes) == 1
+    assert sum(isinstance(value, PermissionError) for value in outcomes) == 1
+
+
+@pytest.mark.asyncio
+async def test_retention_is_atomic_when_two_workers_run_together():
+    """Concurrent housekeeping cannot double-delete or touch workspace data."""
+    import datetime as dt
+    import uuid
+    from backend.core.retention import purge_expired_auth_artifacts
+
+    user_id = str(uuid.uuid4())
+    old = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=31)).isoformat()
+    async with database.aiosqlite.connect(database.DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO users (id,email,display_name,password_hash) VALUES (?,?,?,?)",
+            (user_id, f"retention-pg-{user_id}@example.test", "Retention PG", "hash"),
+        )
+        await db.execute(
+            "INSERT INTO password_reset_tokens (id,user_id,token_hash,expires_at,used_at) VALUES (?,?,?,?,?)",
+            (str(uuid.uuid4()), user_id, f"old-{user_id}", old, old),
+        )
+        await db.commit()
+
+    counts = await asyncio.gather(
+        purge_expired_auth_artifacts(retention_days=30),
+        purge_expired_auth_artifacts(retention_days=30),
+    )
+    assert sum(item["password_reset_tokens"] for item in counts) == 1
+    async with database.aiosqlite.connect(database.DB_PATH) as db:
+        remaining = await (await db.execute(
+            "SELECT COUNT(*) FROM password_reset_tokens WHERE user_id=?", (user_id,)
+        )).fetchone()
+    assert remaining[0] == 0
+
+
+@pytest.mark.asyncio
 async def test_recovery_code_is_consumed_once_across_postgres_sessions(monkeypatch):
     from cryptography.fernet import Fernet
     from backend.core.workspace_auth import (

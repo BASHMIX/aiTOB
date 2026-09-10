@@ -1359,29 +1359,32 @@ import datetime as _dt
 
 
 async def create_pending_verification(discord_id: str, startgg_slug: str,
-                                       code: str, ttl_seconds: int = 300):
+                                       code: str, ttl_seconds: int = 300,
+                                       workspace_id: str | None = None):
     """Create or replace a pending bio-code verification for this Discord user."""
     expires = (_dt.datetime.utcnow() + _dt.timedelta(seconds=ttl_seconds)).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "INSERT INTO pending_verifications (discord_id, startgg_slug, code, expires_at, attempts) "
-            "VALUES (?, ?, ?, ?, 0) "
+            "INSERT INTO pending_verifications (discord_id, workspace_id, startgg_slug, code, expires_at, attempts) "
+            "VALUES (?, ?, ?, ?, ?, 0) "
             "ON CONFLICT(discord_id) DO UPDATE SET "
-            "  startgg_slug=excluded.startgg_slug, code=excluded.code, "
+            "  workspace_id=excluded.workspace_id, startgg_slug=excluded.startgg_slug, code=excluded.code, "
             "  expires_at=excluded.expires_at, attempts=0, created_at=CURRENT_TIMESTAMP",
-            (discord_id, startgg_slug, code, expires)
+            (discord_id, workspace_id, startgg_slug, code, expires)
         )
         await db.commit()
 
 
-async def get_pending_verification(discord_id: str) -> dict | None:
+async def get_pending_verification(discord_id: str, workspace_id: str | None = None) -> dict | None:
     """Return the pending verification, or None if missing/expired."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT * FROM pending_verifications WHERE discord_id = ?",
-            (discord_id,)
-        ) as cursor:
+        query = "SELECT * FROM pending_verifications WHERE discord_id = ?"
+        params: tuple[str, ...] = (discord_id,)
+        if workspace_id is not None:
+            query += " AND workspace_id = ?"
+            params += (workspace_id,)
+        async with db.execute(query, params) as cursor:
             row = await cursor.fetchone()
     if not row:
         return None
@@ -1396,25 +1399,33 @@ async def get_pending_verification(discord_id: str) -> dict | None:
     return d
 
 
-async def increment_verification_attempts(discord_id: str) -> int:
+async def increment_verification_attempts(discord_id: str, workspace_id: str | None = None) -> int:
     """Increment attempts counter; return new value. Used to rate-limit retries."""
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "UPDATE pending_verifications SET attempts = attempts + 1 WHERE discord_id = ?",
-            (discord_id,)
-        )
+        query = "UPDATE pending_verifications SET attempts = attempts + 1 WHERE discord_id = ?"
+        params: tuple[str, ...] = (discord_id,)
+        if workspace_id is not None:
+            query += " AND workspace_id = ?"
+            params += (workspace_id,)
+        await db.execute(query, params)
         await db.commit()
-        async with db.execute(
-            "SELECT attempts FROM pending_verifications WHERE discord_id = ?",
-            (discord_id,)
-        ) as cursor:
+        query = "SELECT attempts FROM pending_verifications WHERE discord_id = ?"
+        if workspace_id is not None:
+            query += " AND workspace_id = ?"
+            params += (workspace_id,)
+        async with db.execute(query, params) as cursor:
             row = await cursor.fetchone()
     return int(row[0]) if row else 0
 
 
-async def delete_pending_verification(discord_id: str):
+async def delete_pending_verification(discord_id: str, workspace_id: str | None = None):
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("DELETE FROM pending_verifications WHERE discord_id = ?", (discord_id,))
+        query = "DELETE FROM pending_verifications WHERE discord_id = ?"
+        params: tuple[str, ...] = (discord_id,)
+        if workspace_id is not None:
+            query += " AND workspace_id = ?"
+            params += (workspace_id,)
+        await db.execute(query, params)
         await db.commit()
 
 # ── Match Results ──────────────────────────────────────────────────────────

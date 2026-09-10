@@ -117,6 +117,22 @@ async def test_owned_startgg_tournament_uses_selected_integration_account(monkey
 
 
 @pytest.mark.asyncio
+async def test_unscoped_startgg_resolution_fails_closed_outside_tools(monkeypatch):
+    from backend.core import database
+
+    monkeypatch.delenv("AITOB_TESTING", raising=False)
+    monkeypatch.delenv("AITOB_SQLITE_MIGRATION_TOOL", raising=False)
+    monkeypatch.delenv("AITOB_LEGACY_PROVIDER_FALLBACK", raising=False)
+    monkeypatch.setattr(
+        database,
+        "get_tournament",
+        AsyncMock(return_value={"slug": "legacy/event", "provider_type": "startgg"}),
+    )
+    with pytest.raises(ValueError, match="workspace binding is required"):
+        await get_provider_for_tournament("legacy/event")
+
+
+@pytest.mark.asyncio
 async def test_shutdown_providers():
     mock_provider = MockProvider()
     mock_provider.close = AsyncMock()

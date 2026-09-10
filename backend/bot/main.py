@@ -176,8 +176,12 @@ async def _start_bio_verification(interaction: discord.Interaction, slug: str):
     from core.database import create_pending_verification
 
     discord_id = str(interaction.user.id)
+    workspace_id = ACTIVE_DISCORD_WORKSPACE_ID
+    if not workspace_id:
+        await interaction.response.send_message("Verification is temporarily unavailable: the bot has no workspace-owned identity.", ephemeral=True)
+        return
     code = _generate_verify_code()
-    await create_pending_verification(discord_id, slug, code, ttl_seconds=300)
+    await create_pending_verification(discord_id, slug, code, ttl_seconds=300, workspace_id=workspace_id)
 
     embed = discord.Embed(
         title="🔗 One more step — prove account control",
@@ -237,6 +241,7 @@ async def _finalize_or_request_cfn(
     followup,
     done_msg: str,
     avatar_path: str | None = None,
+    workspace_id: str | None = None,
 ):
     """Gate point shared by all Path-B avatar finalization callbacks.
 
@@ -246,10 +251,13 @@ async def _finalize_or_request_cfn(
     a holding reply via the followup so the interaction doesn't expire silently.
     """
     from core.database import get_player, create_or_update_player, sync_player_cfns_to_matches
-    player = await get_player(discord_id)
+    workspace_id = workspace_id or ACTIVE_DISCORD_WORKSPACE_ID
+    if not workspace_id:
+        raise RuntimeError("Verification requires a workspace-owned bot context.")
+    player = await get_player(discord_id, workspace_id)
     cfn_id = (player or {}).get("cfn_id")
     if not cfn_id:
-        await create_or_update_player(discord_id, registration_step="cfn_pending")
+        await create_or_update_player(discord_id, workspace_id=workspace_id, registration_step="cfn_pending")
         try:
             member = await bot.fetch_user(int(discord_id))
             await member.send(get_msg("cfn_post_verify_prompt", lang))
@@ -260,7 +268,7 @@ async def _finalize_or_request_cfn(
             ephemeral=True,
         )
         return
-    await finalize_verification(discord_id, gamer_tag, avatar_path)
+    await finalize_verification(discord_id, gamer_tag, avatar_path, workspace_id=workspace_id)
     await followup.send(done_msg, ephemeral=True)
 
 
@@ -272,11 +280,12 @@ class BroadcastAvatarView(discord.ui.View):
     next DM'd photo is validated and saved before verification completes.
     """
 
-    def __init__(self, discord_id: str, gamer_tag: str | None, lang: str = "en"):
+    def __init__(self, discord_id: str, gamer_tag: str | None, lang: str = "en", workspace_id: str | None = None):
         super().__init__(timeout=600)
         self.discord_id = str(discord_id)
         self.gamer_tag = gamer_tag
         self.lang = lang
+        self.workspace_id = workspace_id or ACTIVE_DISCORD_WORKSPACE_ID
 
         keep_btn = discord.ui.Button(
             label=get_msg("avatar_keep_btn", lang) or "Keep Existing Avatar",
@@ -320,13 +329,14 @@ class BroadcastAvatarView(discord.ui.View):
             followup=interaction.followup,
             done_msg=get_msg("avatar_kept_done", self.lang, gamer_tag=self.gamer_tag or "")
                      or f"✅ Verified as **{self.gamer_tag}** with your existing avatar.",
+            workspace_id=self.workspace_id,
         )
 
     async def _upload_new(self, interaction: discord.Interaction):
         if not await self._guard(interaction):
             return
         from core.database import create_or_update_player
-        await create_or_update_player(self.discord_id, registration_step="avatar_upload")
+        await create_or_update_player(self.discord_id, workspace_id=self.workspace_id, registration_step="avatar_upload")
         await self._disable_all(interaction)
         await interaction.followup.send(
             get_msg("avatar_send_new", self.lang)
@@ -343,11 +353,12 @@ class NewAvatarPromptView(discord.ui.View):
     safe to be auto-dispatched off-stream. They can backfill later via /avatar.
     """
 
-    def __init__(self, discord_id: str, gamer_tag: str | None, lang: str = "en"):
+    def __init__(self, discord_id: str, gamer_tag: str | None, lang: str = "en", workspace_id: str | None = None):
         super().__init__(timeout=600)
         self.discord_id = str(discord_id)
         self.gamer_tag = gamer_tag
         self.lang = lang
+        self.workspace_id = workspace_id or ACTIVE_DISCORD_WORKSPACE_ID
 
         skip_btn = discord.ui.Button(
             label=get_msg("avatar_skip_btn", lang) or "Skip for Now",
@@ -379,6 +390,7 @@ class NewAvatarPromptView(discord.ui.View):
                 or "✅ Verification complete! Remember to upload your avatar later using "
                    "the `/avatar` command before the broadcast begins."
             ),
+            workspace_id=self.workspace_id,
         )
 
 
@@ -387,9 +399,13 @@ class NewAvatarPromptView(discord.ui.View):
 async def verify_command(interaction: discord.Interaction, profile: str | None = None):
     from core.database import get_player
     discord_id = str(interaction.user.id)
+    workspace_id = ACTIVE_DISCORD_WORKSPACE_ID
+    if not workspace_id:
+        await interaction.response.send_message("Verification is temporarily unavailable: the bot has no workspace-owned identity.", ephemeral=True)
+        return
 
     # Idempotency — already verified?
-    player = await get_player(discord_id)
+    player = await get_player(discord_id, workspace_id)
     if player and player.get("is_verified") and player.get("startgg_id"):
         tag = player.get("gamer_tag") or "your start.gg account"
         await interaction.response.send_message(
@@ -426,9 +442,13 @@ async def verify_confirm_command(interaction: discord.Interaction):
     )
 
     discord_id = str(interaction.user.id)
+    workspace_id = ACTIVE_DISCORD_WORKSPACE_ID
+    if not workspace_id:
+        await interaction.response.send_message("Verification is temporarily unavailable: the bot has no workspace-owned identity.", ephemeral=True)
+        return
 
     # Cheap idempotency guard.
-    existing = await get_player(discord_id)
+    existing = await get_player(discord_id, workspace_id)
     if existing and existing.get("is_verified") and existing.get("startgg_id"):
         await interaction.response.send_message(
             f"✅ Already verified as **{existing.get('gamer_tag') or 'your start.gg account'}**.",
@@ -436,7 +456,7 @@ async def verify_confirm_command(interaction: discord.Interaction):
         )
         return
 
-    pending = await get_pending_verification(discord_id)
+    pending = await get_pending_verification(discord_id, workspace_id)
     if not pending:
         await interaction.response.send_message(
             "❌ No active verification request found, or it expired. Run `/verify` to start over.",
@@ -444,9 +464,9 @@ async def verify_confirm_command(interaction: discord.Interaction):
         )
         return
 
-    attempts = await increment_verification_attempts(discord_id)
+    attempts = await increment_verification_attempts(discord_id, workspace_id)
     if attempts > 5:
-        await delete_pending_verification(discord_id)
+        await delete_pending_verification(discord_id, workspace_id)
         await interaction.response.send_message(
             "❌ Too many attempts. Please run `/verify` again to get a fresh code.",
             ephemeral=True,
@@ -493,7 +513,7 @@ async def verify_confirm_command(interaction: discord.Interaction):
 
     # Capture any existing broadcast avatar BEFORE writing, so we can tell a brand
     # new player (no avatar → must upload) from a returning one (keep / replace).
-    existing_player = await get_player(discord_id)
+    existing_player = await get_player(discord_id, workspace_id)
     existing_avatar = (existing_player or {}).get("avatar_path")
 
     # Attempt to pre-fetch CFN from start.gg so the player never has to type it.
@@ -520,11 +540,11 @@ async def verify_confirm_command(interaction: discord.Interaction):
     )
     if cfn_from_sgg:
         player_fields["cfn_id"] = cfn_from_sgg
-    await create_or_update_player(discord_id=discord_id, **player_fields)
+    await create_or_update_player(discord_id=discord_id, workspace_id=workspace_id, **player_fields)
     if cfn_from_sgg:
         from core.database import sync_player_cfns_to_matches
-        await sync_player_cfns_to_matches(discord_id, (existing_player or {}).get("workspace_id"))
-    await delete_pending_verification(discord_id)
+        await sync_player_cfns_to_matches(discord_id, workspace_id)
+    await delete_pending_verification(discord_id, workspace_id)
     await add_bot_feed(
         f"🔗 Bio-code matched: Discord <{discord_id}> ↔ start.gg user {sgg_user_id} "
         f"({gamer_tag}, lang={lang_pref}). Awaiting broadcast avatar.",
@@ -541,14 +561,14 @@ async def verify_confirm_command(interaction: discord.Interaction):
         )
         if display_url:
             embed.set_image(url=display_url)
-        view = BroadcastAvatarView(discord_id, gamer_tag, lang_pref)
+        view = BroadcastAvatarView(discord_id, gamer_tag, lang_pref, workspace_id)
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
     else:
         # New player — prompt for an avatar, but SOFT-GATE it: a [Skip for Now]
         # button finalizes verification immediately (role applied, avatar NULL) so
         # the auto-dispatcher never DQs an otherwise-ready player. The avatar is a
         # broadcast nicety they can add later via /avatar.
-        view = NewAvatarPromptView(discord_id, gamer_tag, lang_pref)
+        view = NewAvatarPromptView(discord_id, gamer_tag, lang_pref, workspace_id)
         await interaction.followup.send(
             get_msg("bio_confirmed_new", lang_pref, gamer_tag=gamer_tag or ""),
             view=view,
@@ -572,7 +592,11 @@ async def avatar_command(interaction: discord.Interaction):
     """
     from core.database import get_player, create_or_update_player
     discord_id = str(interaction.user.id)
-    player = await get_player(discord_id)
+    workspace_id = ACTIVE_DISCORD_WORKSPACE_ID
+    if not workspace_id:
+        await interaction.response.send_message("Avatar updates are temporarily unavailable: the bot has no workspace-owned identity.", ephemeral=True)
+        return
+    player = await get_player(discord_id, workspace_id)
 
     # Prefer the player's stored language; otherwise derive (and persist) it.
     lang = (player or {}).get("preferred_language") or _map_discord_locale(interaction.locale)
@@ -590,7 +614,7 @@ async def avatar_command(interaction: discord.Interaction):
     fields = {"registration_step": "avatar_upload"}
     if not (player or {}).get("preferred_language"):
         fields["preferred_language"] = lang
-    await create_or_update_player(discord_id, **fields)
+    await create_or_update_player(discord_id, workspace_id=workspace_id, **fields)
 
     await interaction.response.send_message(
         get_msg("avatar_cmd_prompt", lang)
@@ -1003,15 +1027,19 @@ class RegistrationView(discord.ui.View):
     async def register_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         from core.database import get_connection
         discord_id = str(interaction.user.id)
+        workspace_id = ACTIVE_DISCORD_WORKSPACE_ID
+        if not workspace_id:
+            await interaction.response.send_message("Registration is temporarily unavailable: the bot has no workspace-owned identity.", ephemeral=True)
+            return
         
         # Check if already registered
-        player = await get_player(discord_id)
+        player = await get_player(discord_id, workspace_id)
         if player and player.get("is_verified"):
             await interaction.response.send_message(get_msg("profile_update", player.get("preferred_language", "en")), ephemeral=True)
             return
 
         # Initialize registration state
-        await create_or_update_player(discord_id, registration_step="startgg_linked")
+        await create_or_update_player(discord_id, workspace_id=workspace_id, registration_step="startgg_linked")
         
         api_base = await get_connection("API_BASE_URL", API_BASE_URL_ENV)
         login_url = f"{api_base}/api/auth/startgg/login?discord_id={discord_id}"
@@ -1363,7 +1391,10 @@ async def on_message(message):
         # investigation statement rather than a registration message.
         if await handle_conflict_statement_dm(message):
             return
-        await registration_manager.handle_dm(message)
+        if not ACTIVE_DISCORD_WORKSPACE_ID:
+            await message.channel.send("Registration is temporarily unavailable: the bot has no workspace-owned identity.")
+            return
+        await registration_manager.handle_dm(message, workspace_id=ACTIVE_DISCORD_WORKSPACE_ID)
         return
 
     # A match thread remains available for player communication and the explicit
@@ -1806,29 +1837,62 @@ async def bot_ws_listener():
             print(f"[BOT] WebSocket connection failed: {e}. Retrying in 5 seconds...")
             await asyncio.sleep(5)
 
-if __name__ == "__main__":
-    async def _load_account_token():
-        await init_db()
-        from backend.core.integrations import get_discord_credential, list_integration_accounts
-        selected = os.getenv("AITOB_DISCORD_ACCOUNT_ID", "").strip()
-        # The process selects an account from its own database, regardless of
-        # the account owner's label.  A tournament still binds each workflow
-        # event to one concrete account, so this does not cross destinations.
-        accounts = [account for account in await list_integration_accounts(None) if account["provider_type"] == "discord" and account["status"] == "active"]
-        if selected:
-            accounts = [account for account in accounts if account["id"] == selected]
+async def load_discord_account_token():
+    """Load exactly one workspace-owned Discord account for this process.
+
+    Runtime bot identity must never enumerate the global account bucket.  A
+    selected account is looked up with its workspace scope; when no account is
+    selected, an explicit workspace is required and only that workspace is
+    considered.  This keeps startup fail-closed while allowing a deployment
+    to choose its identity through non-secret environment configuration.
+    """
+    await init_db()
+    from backend.core.integrations import (
+        get_discord_credential,
+        get_integration_account,
+        get_integration_workspace_id,
+        list_integration_accounts,
+    )
+
+    selected = os.getenv("AITOB_DISCORD_ACCOUNT_ID", "").strip()
+    workspace_hint = os.getenv("AITOB_DISCORD_WORKSPACE_ID", "").strip()
+    account = None
+    if selected:
+        account = await get_integration_account(
+            selected, workspace_id=workspace_hint or None, active_only=True,
+        )
+        if not account:
+            raise RuntimeError("Selected Discord integration account is not active in the configured workspace.")
+    else:
+        if not workspace_hint:
+            raise RuntimeError("AITOB_DISCORD_WORKSPACE_ID is required when no Discord account is selected.")
+        accounts = [
+            item for item in await list_integration_accounts(workspace_hint)
+            if item["provider_type"] == "discord" and item["status"] == "active"
+        ]
         if len(accounts) != 1:
-            raise RuntimeError("Select exactly one active Discord integration account for this bot process.")
-        token = await get_discord_credential(accounts[0]["id"])
-        if not token:
-            raise RuntimeError("Selected Discord account has no bot token.")
-        from backend.core.integrations import get_integration_workspace_id
-        return accounts[0]["id"], token, await get_integration_workspace_id(accounts[0]["id"])
+            raise RuntimeError("Select exactly one active Discord integration account for this workspace.")
+        account = accounts[0]
+
+    if account.get("provider_type") != "discord" or account.get("status") != "active":
+        raise RuntimeError("Selected integration account is not an active Discord account.")
+    account_workspace = await get_integration_workspace_id(account["id"])
+    if not account_workspace:
+        raise RuntimeError("Selected Discord integration account has no workspace owner.")
+    if workspace_hint and account_workspace != workspace_hint:
+        raise RuntimeError("Selected Discord integration account is outside the configured workspace.")
+    token = await get_discord_credential(account["id"])
+    if not token:
+        raise RuntimeError("Selected Discord account has no bot token.")
+    return account["id"], token, account_workspace
+
+
+if __name__ == "__main__":
 
     try:
         from backend.core.storage import require_runtime_database
         require_runtime_database()
-        ACTIVE_DISCORD_ACCOUNT_ID, TOKEN, ACTIVE_DISCORD_WORKSPACE_ID = asyncio.run(_load_account_token())
+        ACTIVE_DISCORD_ACCOUNT_ID, TOKEN, ACTIVE_DISCORD_WORKSPACE_ID = asyncio.run(load_discord_account_token())
         bot.run(TOKEN)
     except Exception:
         print("Discord bot did not start: its selected integration account is unavailable.")

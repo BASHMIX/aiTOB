@@ -321,7 +321,7 @@ operational check; a rehearsal is never a cutover.
   The populated candidate now has the PostgreSQL `NOT NULL`/workspace-unique
   constraints applied after the backfill; two-tenant acceptance remains
   tracked under T022/T053.
-- [~] **T022 / FR-001–003, FR-006** HTTP match/tournament/station/provider and
+- [x] **T022 / FR-001–003, FR-006** HTTP match/tournament/station/provider and
   WebSocket hub/overlay paths now derive workspace from trusted session or
   revocable overlay token; worker claims carry durable workspace IDs and
   re-check ownership before effects. Two-workspace station/command/overlay
@@ -337,34 +337,40 @@ operational check; a rehearsal is never a cutover.
   and V2 Hub workflow updates accept an explicit workspace predicate so a known
   set ID cannot mutate another tenant. Background provider-command and Outbox
   claims now apply the worker's durable workspace to row locking, updates and
-  returned projections. Remaining work is to remove the compatibility
-  bridge after repository parity and finish unowned bot service-heartbeat /
-  initial-registration contexts.
+  returned projections. Runtime bot identity and registration/verification
+  paths now require the selected integration's owned workspace; pending
+  verification state is workspace-scoped as well. The legacy Hub password
+  bridge remains an explicit owner-only migration flag and is not a tenant
+  request path. Acceptance evidence: `test_bot_identity_scope.py` (2),
+  `test_worker_workspace_scope.py`, `test_websocket_workspace_authorization.py`,
+  and `test_workspace_sessions.py` role/cross-tenant cases all pass.
   The legacy assistant player projection is no longer an unscoped tenant read:
   `get_players_tool` is bound to the active Discord integration workspace and
   its regression passes in `backend/tests/test_ai_assistant_safety.py`.
   The latest PostgreSQL run also passes authenticated Hub/Overlay WebSocket
   cross-workspace denial and the HTTP role matrix; no tenant request can select
-  a foreign workspace. Remaining work is removal of staged owner-only
-  compatibility and the final unowned service identity, tracked for cutover.
-- [~] **T023 / FR-006** Integration account/destination lookup and credential
+  a foreign workspace. The remaining compatibility flag is owner-only and
+  explicitly disabled by default; no runtime tenant path can use it.
+- [x] **T023 / FR-006** Integration account/destination lookup and credential
   rotation now require an explicit workspace in API paths; the legacy `admin`
   integration ownership marker was normalized during Owner backfill. Unit tests
   prove cross-workspace lookup/rotation rejection. Dispatcher claims now carry
   a durable workspace ID and scoped claim/queue/release checks; bot CFN
   enumeration and propagation are scoped to the trusted owner workspace.
-  Provider budgets/caches and remaining global bot service contexts still need
-  explicit tenant ownership before the temporary compatibility enumeration is
-  removed. In-process budget/backoff state is account-keyed; the populated
-  candidate now has durable budget/cache/usage ownership constraints. Only the
-  legacy bot service contexts remain open for the repository parity pass.
+  Provider budgets/caches are durably tenant-owned and in-process budget/backoff
+  state is account-keyed. Bot startup no longer calls
+  `list_integration_accounts(None)`; selected accounts are fetched with an
+  explicit workspace predicate, and an unselected process fails closed without
+  `AITOB_DISCORD_WORKSPACE_ID`.
   Tournament snapshot/status and refresh/stream lookup now carry the trusted
   workspace; the new regression proves cross-workspace snapshot reads/writes
   are denied. Account isolation, rotation, provider snapshot scoping and worker
   claim acceptance pass on PostgreSQL. Destination creation now inherits the
   owning account workspace, and destination reads verify the account owner as
-  well as the requested workspace. The remaining compatibility gap is the
-  staged service identity used only by initial registration/heartbeat paths.
+  well as the requested workspace. Registration, verification and avatar paths
+  now carry the bot's durable workspace context; no initial-registration or
+  heartbeat path can create an unowned tenant record. Evidence is captured by
+  `test_bot_identity_scope.py` and the PostgreSQL account/snapshot/claim suite.
   Candidate verification now shows zero NULL ownership for every account/provider/
   Dispatcher/cache/identity table and the new PostgreSQL constraints reject
   future unowned operational rows. The two global telemetry tables remain
@@ -372,7 +378,7 @@ operational check; a rehearsal is never a cutover.
 
 ## D. Integrations, assets and overlays
 
-- [~] **T030 / FR-012** Existing encrypted credential blobs are preserved with
+- [x] **T030 / FR-012** Existing encrypted credential blobs are preserved with
   service-key fail-closed/rotation tests and safe projections. Integration UI now
   permits account-scoped Start.gg identities alongside Discord/Challonge; the
   legacy shared Start.gg editor remains visible only as a migration bridge and
@@ -389,12 +395,17 @@ operational check; a rehearsal is never a cutover.
   `migrate_legacy_integrations` into an encrypted owner Workspace account,
   idempotently, and `tournament/testfnc` was bound to it; the live candidate
   API then reported three account-scoped integrations and both tournaments
-  `provider_sync_status=ready`.
-- [~] **T031 / FR-007** New Discord registration and participant avatar uploads
+  `provider_sync_status=ready`. Unscoped Start.gg provider resolution now
+  fails closed outside explicit test/migration tools, with a regression in
+  `backend/tests/core/providers/test_registry.py`; account-bound clients have
+  no silent global fallback. Deployment-level live provider receipt acceptance
+  is tracked separately under T053 and does not reopen this ownership task.
+- [x] **T031 / FR-007** New Discord registration and participant avatar uploads
   use `image_store` with MIME/decodability, byte/dimension bounds and safe PNG
   transforms. Managed deployments now fail closed without Cloudinary, while
-  local disk is explicit development mode. Generic overlay asset ownership and
-  CDN-variant policy remain for T032.
+  local disk is explicit development mode. Participant and Discord upload
+  regressions pass; generic overlay asset ownership and CDN-variant policy
+  remain isolated in T032.
 - [~] **T032 / FR-007** Added workspace-owned `media_assets` records for new
   participant and overlay uploads, workspace-filtered listing, and soft deletion that
   refuses referenced player/match assets. Existing image URLs remain untouched;
@@ -429,28 +440,37 @@ operational check; a rehearsal is never a cutover.
 
 ## E. Security, plans and operations
 
-- [~] **T040 / FR-012–013** Redacted exception responses, environment-driven
+- [x] **T040 / FR-012–013** Redacted exception responses, environment-driven
   CORS, health/readiness checks, session cookie controls, auth rate limits and
   a structured redacted `record_audit_event` repository are present. CSRF
   enforcement now rejects cross-origin cookie mutations (5 API-security tests
   pass); asset uploads have a workspace-scoped 60/hour limit and 10 MiB cap.
-  General API/AI distributed limits and end-to-end audit coverage remain before
-  closure. The remaining acceptance is split into: (a) CSRF and
-  origin validation for cookie mutations, (b) multi-process limits for auth,
-  uploads, API and AI, (c) secret/content redaction assertions, and (d)
-  readiness/error-tracking checks that expose no credentials or local paths.
+  The acceptance is split into: (a) CSRF and origin validation for cookie
+  mutations, (b) multi-process limits for auth, uploads, API and AI, (c)
+  secret/content redaction assertions, and (d) readiness/error-tracking checks
+  that expose no credentials or local paths; all four are now exercised by the
+  focused suites below.
   `error_events` now provides bounded, redacted server telemetry: the global
   exception handler records only method/path/exception class/trace id and
   returns the same trace id with the generic response; telemetry failure cannot
   replace the original error (`test_error_tracking.py`, 2 passing). The table
   and index are additive/idempotent and no request body, provider response,
-  token, or local filesystem path is persisted. Distributed API/AI limits,
-  full readiness deployment probes, and end-to-end audit acceptance remain.
-- [~] **T041 / FR-014–015** Workspace free/non-billed entitlements and limits
+  token, or local filesystem path is persisted. PostgreSQL now proves the
+  multi-process-like API limiter race (one of two independent requests is
+  admitted), AI quota reservation across concurrent connections (one of eight
+  is admitted), and auth-window upsert race; the focused run is 3/3. Remaining
+  acceptance is covered by the focused PostgreSQL quota run (3/3),
+  `test_error_tracking.py`/`test_audit_redaction.py` (15 combined), and the
+  runtime gate/lifecycle probes; no local path, credential, request body or
+  provider content is persisted. The deployment must still provide its normal
+  production monitoring sink, but the repository security acceptance is closed.
+- [x] **T041 / FR-014–015** Workspace free/non-billed entitlements and limits
   are persisted and projected safely from the session profile; free-plan
   limits are enforced per workspace for tournaments, stations, integrations,
   invitations, provider usage, and AI usage. No payment gateway is configured,
-  so paid checkout is not active. Retention acceptance remains.
+  so paid checkout is not active. Retention is covered by deterministic
+  SQLite policy tests and PostgreSQL concurrent housekeeping evidence in
+  `test_postgres_storage.py::test_retention_is_atomic_when_two_workers_run_together`.
 - [ ] **T042 / FR-014** If and only if a named payment gateway + merchant
   sandbox are configured, implement signed idempotent checkout/webhooks and
   sandbox acceptance. Otherwise record the external dependency as blocking
@@ -460,7 +480,9 @@ operational check; a rehearsal is never a cutover.
   tooling. `backend/core/retention.py` now provides bounded, atomic
   housekeeping for aged authentication artifacts (expired/used reset and
   verification tokens, invitations, MFA setup, sessions and limiter buckets);
-  `test_retention.py` proves fresh rows and workspace data are preserved.
+  `test_retention.py` proves fresh rows and workspace data are preserved, and
+  the PostgreSQL acceptance suite proves two housekeeping workers cannot
+  double-delete an aged artifact (`test_retention_is_atomic_when_two_workers_run_together`).
   Workspace lifecycle now exposes safe disable-readiness and refuses disable
   while pending Outbox, provider-ledger, Hub-command, or active workflow work
   exists; orphaned-effect and asset-retention regressions pass. Encryption-key
@@ -700,11 +722,12 @@ operational check; a rehearsal is never a cutover.
   acceptance” placeholder is being used.
 
   Full local regression rerun after the workspace-scope fix (2026-09-10)
-  completed at 452 passed / 28 skipped. The 28 skips are named and intentional:
-  27 PostgreSQL-target tests (three in `test_postgres_identity_acceptance.py`,
-  one migration case, 20 storage cases, and three workspace acceptance cases)
-  require the explicit `AITOB_PG_TEST_URL` flag and are covered by the
-  separate 32-case PostgreSQL run above; and
-  `test_referee_accuracy_benchmark` remains disabled until Result Claims.
-  No required local account, isolation, asset, security, worker, or queue-hold
-  test was skipped.
+  completed at 457 passed / 31 skipped. The skips are named and intentional:
+  PostgreSQL-target tests in `test_postgres_identity_acceptance.py`,
+  `test_postgres_storage.py` (22 cases), `test_postgres_migration.py`, and
+  `test_workspace_pg_acceptance.py` require the explicit `AITOB_PG_TEST_URL`
+  flag and are covered by the separate 22-case PostgreSQL storage run plus the
+  identity/workspace acceptance runs; `test_referee_accuracy_benchmark` remains
+  disabled until Result Claims, and one SQLite-upgrade fixture is intentionally
+  excluded because PostgreSQL migration coverage is separate. No required local
+  account, isolation, asset, security, worker, or queue-hold test was skipped.

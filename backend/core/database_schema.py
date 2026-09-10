@@ -742,6 +742,7 @@ TABLE_SCHEMAS = [
     '''
     CREATE TABLE IF NOT EXISTS pending_verifications (
         discord_id   TEXT PRIMARY KEY,
+        workspace_id TEXT,
         startgg_slug TEXT NOT NULL,
         code         TEXT NOT NULL,
         expires_at   TIMESTAMP NOT NULL,
@@ -813,6 +814,7 @@ MIGRATIONS = [
     "ALTER TABLE ai_usage_ledger ADD COLUMN workspace_id TEXT",
     "ALTER TABLE provider_api_usage ADD COLUMN workspace_id TEXT",
     "ALTER TABLE provider_api_usage ADD COLUMN provider_account_id TEXT",
+    "ALTER TABLE pending_verifications ADD COLUMN workspace_id TEXT",
     # active_matches new columns
     "ALTER TABLE active_matches ADD COLUMN is_stream_match BOOLEAN DEFAULT FALSE",
     "ALTER TABLE active_matches ADD COLUMN called_at TIMESTAMP",
