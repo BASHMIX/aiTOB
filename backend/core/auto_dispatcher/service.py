@@ -15,8 +15,14 @@ from backend.core.match_state import call_match_core
 
 
 class AutoDispatcherService:
-    def __init__(self, *, policy: DispatchPolicy | None = None):
+    def __init__(self, *, policy: DispatchPolicy | None = None,
+                 workspace_id: str | None = None):
         self._policy = policy or DispatchPolicy()
+        # A live worker is bound to the workspace selected by its durable
+        # integration account.  ``None`` remains available only for explicit
+        # single-tenant tests/migration tooling; it must not be used by the
+        # multi-tenant bot runtime.
+        self.workspace_id = workspace_id
 
     async def run_once(self, *, now: datetime | None = None) -> list[DispatchDecision]:
         """Evaluate every armed event and dispatch only selected local matches."""
@@ -25,7 +31,7 @@ class AutoDispatcherService:
             return []
 
         all_decisions: list[DispatchDecision] = []
-        for scope in await database.get_dispatch_eligible_events():
+        for scope in await database.get_dispatch_eligible_events(self.workspace_id):
             event_id = str(scope.get("event_id") or "")
             workspace_id = scope.get("workspace_id")
             tournament = await database.get_tournament(scope["slug"], workspace_id)

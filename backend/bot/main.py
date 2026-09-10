@@ -856,7 +856,7 @@ async def auto_dispatch_pool_matches():
 
     # Lets the Hub distinguish a saved ON setting from a running dispatcher.
     await set_setting("auto_dispatcher_last_seen", datetime.now(UTC).isoformat())
-    await AutoDispatcherService().run_once()
+    await AutoDispatcherService(workspace_id=ACTIVE_DISCORD_WORKSPACE_ID).run_once()
 
 
 # ── Hub-command drain (event-driven outbox) ──────────────────────────────

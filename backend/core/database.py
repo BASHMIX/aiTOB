@@ -313,7 +313,10 @@ async def list_players_for_workspace(workspace_id: str | None = None) -> list[di
         query = "SELECT * FROM players"
         params: list = []
         if workspace_id is not None:
-            query += " WHERE workspace_id = ? OR workspace_id IS NULL"
+            # A tenant projection must never include legacy/unowned rows. Those
+            # rows remain visible only to explicit migration/owner tooling until
+            # the controlled backfill assigns them an owner.
+            query += " WHERE workspace_id = ?"
             params.append(workspace_id)
         query += " ORDER BY discord_id"
         async with db.execute(query, params) as cursor:
@@ -353,7 +356,7 @@ async def get_tournament_player_links(tournament_slug: str, workspace_id: str | 
               AND (CAST(? AS TEXT) IS NULL OR EXISTS (
                     SELECT 1 FROM tournaments t
                     WHERE t.slug = l.tournament_slug
-                      AND (t.workspace_id = ? OR t.workspace_id IS NULL)
+                      AND t.workspace_id = ?
               ))
               AND (CAST(? AS TEXT) IS NULL OR l.workspace_id = ?)
             """,
@@ -2798,11 +2801,12 @@ async def get_available_stream_station(event_id: str | None, workspace_id: str |
             WHERE s.is_stream_station = TRUE
               AND COALESCE(s.event_id, '') = ?
               AND COALESCE(s.hidden, FALSE) = FALSE
-              AND s.id NOT IN (
+            AND s.id NOT IN (
                 SELECT station_id FROM active_matches
                 WHERE station_id IS NOT NULL
                   AND status IN ('called', 'in_progress')
-              )
+                  AND (workspace_id = s.workspace_id OR (workspace_id IS NULL AND s.workspace_id IS NULL))
+            )
             ORDER BY s.id
             LIMIT 1
             """
@@ -3155,7 +3159,8 @@ async def update_provider_command_state_v2(command_id: str, state: str, *, reaso
 
 
 async def claim_due_provider_commands_v2(
-    now: str, lease_until: str, *, limit: int = 20, lease_owner: str = "legacy"
+    now: str, lease_until: str, *, limit: int = 20, lease_owner: str = "legacy",
+    workspace_id: str | None = None,
 ) -> list[dict]:
     """Lease due remote commands without executing them.
 
@@ -3169,19 +3174,21 @@ async def claim_due_provider_commands_v2(
         # BEGIN IMMEDIATE with BEGIN. SKIP LOCKED lets another worker continue
         # with unrelated work instead of racing the same command.
         claim_lock = " FOR UPDATE SKIP LOCKED" if is_postgres() else ""
+        workspace_scope = " AND workspace_id = ?" if workspace_id is not None else ""
         async with db.execute(
             """
             SELECT id FROM provider_command_ledger
-            WHERE (
+            WHERE ((
                 state IN ('pending', 'retryable')
                 AND (next_retry_at IS NULL OR next_retry_at <= ?)
             ) OR (
                 state = 'sending' AND lease_until IS NOT NULL AND lease_until <= ?
-            )
+            ))
+            """ + workspace_scope + """
             ORDER BY created_at
             LIMIT ?
             """ + claim_lock,
-            (now, now, int(limit)),
+            (now, now, *((workspace_id,) if workspace_id is not None else ()), int(limit)),
         ) as cursor:
             command_ids = [str(row[0]) for row in await cursor.fetchall()]
         if command_ids:
@@ -3189,15 +3196,15 @@ async def claim_due_provider_commands_v2(
             await db.execute(
                 f"UPDATE provider_command_ledger SET state = 'sending', lease_owner = ?, lease_until = ?, "
                 f"attempt_count = attempt_count + 1, updated_at = CURRENT_TIMESTAMP "
-                f"WHERE id IN ({placeholders})",
-                [lease_owner, lease_until, *command_ids],
+                f"WHERE id IN ({placeholders})" + workspace_scope,
+                [lease_owner, lease_until, *command_ids, *((workspace_id,) if workspace_id is not None else ())],
             )
         rows: list[dict] = []
         if command_ids:
             placeholders = ", ".join("?" for _ in command_ids)
             async with db.execute(
-                f"SELECT * FROM provider_command_ledger WHERE id IN ({placeholders})",
-                command_ids,
+                f"SELECT * FROM provider_command_ledger WHERE id IN ({placeholders})" + workspace_scope,
+                [*command_ids, *((workspace_id,) if workspace_id is not None else ())],
             ) as cursor:
                 rows = [dict(row) for row in await cursor.fetchall()]
         await db.commit()
@@ -3248,7 +3255,7 @@ async def enqueue_workflow_outbox_v2(event: dict) -> dict:
 
 
 async def update_hub_workflow_and_enqueue_outbox_v2(
-    match_id: str, hub_status: str, event: dict
+    match_id: str, hub_status: str, event: dict, *, workspace_id: str | None = None
 ) -> dict:
     """Atomically write V2 Hub state and its later local side effect.
 
@@ -3263,8 +3270,10 @@ async def update_hub_workflow_and_enqueue_outbox_v2(
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         await db.execute("BEGIN IMMEDIATE")
+        match_scope = " AND workspace_id = ?" if workspace_id is not None else ""
         update = await db.execute(
-            "UPDATE active_matches SET hub_status = ? WHERE set_id = ?", (hub_status, match_id)
+            "UPDATE active_matches SET hub_status = ? WHERE set_id = ?" + match_scope,
+            (hub_status, match_id, *((workspace_id,) if workspace_id is not None else ())),
         )
         if update.rowcount != 1:
             await db.rollback()
@@ -3273,14 +3282,15 @@ async def update_hub_workflow_and_enqueue_outbox_v2(
         # The audit row is deliberately best-effort for legacy unowned rows;
         # owned Workspace matches always carry the durable scope.
         match_row = await (await db.execute(
-            "SELECT workspace_id, tournament_slug FROM active_matches WHERE set_id = ?", (match_id,)
+            "SELECT workspace_id, tournament_slug FROM active_matches WHERE set_id = ?" + match_scope,
+            (match_id, *((workspace_id,) if workspace_id is not None else ())),
         )).fetchone()
         outbox_insert = await db.execute(
             """
             INSERT INTO workflow_outbox (
                 event_id, match_id, event_type, payload_json, deduplication_key,
-                status, attempts, next_attempt_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                status, attempts, next_attempt_at, workspace_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(deduplication_key) DO NOTHING
             """,
             (
@@ -3288,6 +3298,7 @@ async def update_hub_workflow_and_enqueue_outbox_v2(
                 json.dumps(event.get("payload", {})), event["deduplication_key"],
                 event.get("status", "pending"), int(event.get("attempts", 0)),
                 event.get("next_attempt_at"),
+                str(match_row[0]) if match_row else workspace_id,
             ),
         )
         if outbox_insert.rowcount == 1 and match_row and match_row[0]:
@@ -3313,7 +3324,8 @@ async def update_hub_workflow_and_enqueue_outbox_v2(
 
 
 async def claim_due_workflow_outbox_v2(
-    now: str, lease_until: str, *, limit: int = 20, lease_owner: str = "legacy"
+    now: str, lease_until: str, *, limit: int = 20, lease_owner: str = "legacy",
+    workspace_id: str | None = None,
 ) -> list[dict]:
     """Claim local-effect records for a future outbox worker; does not dispatch."""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -3321,11 +3333,12 @@ async def claim_due_workflow_outbox_v2(
         await db.execute("BEGIN IMMEDIATE")
         # A crashed sender may already have reached the receiver. A new lease
         # must not turn uncertainty into permission to send again.
+        workspace_scope = " AND workspace_id = ?" if workspace_id is not None else ""
         await db.execute(
             """UPDATE workflow_outbox SET status='needs_review', lease_owner=NULL, lease_until=NULL,
                       updated_at=CURRENT_TIMESTAMP
-               WHERE status='sending' AND effect_started_at IS NOT NULL AND lease_until <= ?""",
-            (now,),
+               WHERE status='sending' AND effect_started_at IS NOT NULL AND lease_until <= ?""" + workspace_scope,
+            (now, *((workspace_id,) if workspace_id is not None else ())),
         )
         # See the remote-command claim above: the persisted lease and row lock
         # together prevent two workers from dispatching one effect.
@@ -3333,27 +3346,29 @@ async def claim_due_workflow_outbox_v2(
         async with db.execute(
             """
             SELECT event_id FROM workflow_outbox
-            WHERE (
+            WHERE ((
                 status IN ('pending', 'retryable')
                 AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
             ) OR (
                 status = 'sending' AND lease_until IS NOT NULL AND lease_until <= ?
-            )
+            ))
+            """ + workspace_scope + """
             ORDER BY created_at
             LIMIT ?
             """ + claim_lock,
-            (now, now, int(limit)),
+            (now, now, *((workspace_id,) if workspace_id is not None else ()), int(limit)),
         ) as cursor:
             event_ids = [str(row[0]) for row in await cursor.fetchall()]
         if event_ids:
             placeholders = ", ".join("?" for _ in event_ids)
             await db.execute(
                 f"UPDATE workflow_outbox SET status = 'sending', lease_owner = ?, lease_until = ?, attempts = attempts + 1, "
-                f"updated_at = CURRENT_TIMESTAMP WHERE event_id IN ({placeholders})",
-                [lease_owner, lease_until, *event_ids],
+                f"updated_at = CURRENT_TIMESTAMP WHERE event_id IN ({placeholders})" + workspace_scope,
+                [lease_owner, lease_until, *event_ids, *((workspace_id,) if workspace_id is not None else ())],
             )
             async with db.execute(
-                f"SELECT * FROM workflow_outbox WHERE event_id IN ({placeholders})", event_ids
+                f"SELECT * FROM workflow_outbox WHERE event_id IN ({placeholders})" + workspace_scope,
+                [*event_ids, *((workspace_id,) if workspace_id is not None else ())]
             ) as cursor:
                 rows = [dict(row) for row in await cursor.fetchall()]
         else:

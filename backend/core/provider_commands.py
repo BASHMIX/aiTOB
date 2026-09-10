@@ -79,10 +79,11 @@ class ProviderCommandRecoveryWorker:
     """
 
     def __init__(self, verify: CommandVerifier, *, lease_seconds: int = 60,
-                 lease_owner: str | None = None):
+                 lease_owner: str | None = None, workspace_id: str | None = None):
         self._verify = verify
         self._lease_seconds = lease_seconds
         self.lease_owner = lease_owner or f"command:{uuid4()}"
+        self.workspace_id = workspace_id
 
     async def run_once(self, *, now: str | None = None, limit: int = 20) -> int:
         instant = now or datetime.now(UTC).isoformat()
@@ -91,7 +92,8 @@ class ProviderCommandRecoveryWorker:
             + timedelta(seconds=self._lease_seconds)
         ).isoformat()
         commands = await database.claim_due_provider_commands_v2(
-            instant, lease_until, limit=limit, lease_owner=self.lease_owner
+            instant, lease_until, limit=limit, lease_owner=self.lease_owner,
+            workspace_id=self.workspace_id,
         )
         recovered = 0
         for command in commands:

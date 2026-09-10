@@ -173,14 +173,22 @@ async def configured_secret_types(owner_id: str, *, owner_kind: str = "account")
 
 
 async def add_integration_destination(account_id: str, destination_type: str, external_id: str, display_name: str = "", *, workspace_id: str | None = None) -> dict[str, Any]:
-    if not await get_integration_account(account_id, workspace_id=workspace_id):
+    account = await get_integration_account(account_id, workspace_id=workspace_id)
+    if not account:
         raise IntegrationError("Active integration account was not found.")
+    # Destinations inherit the account's durable owner.  A direct service
+    # caller cannot accidentally create an unowned destination by omitting the
+    # optional compatibility scope, and a supplied scope must match it.
+    account_workspace = account.get("workspace_id")
+    if account_workspace and workspace_id not in (None, account_workspace):
+        raise IntegrationError("Integration account is unavailable in this workspace.")
+    destination_workspace = account_workspace or workspace_id
     destination_id = str(uuid.uuid4())
     async with aiosqlite.connect(_db_path()) as db:
         db.row_factory = aiosqlite.Row
         await db.execute(
             "INSERT INTO integration_destinations (id, account_id, workspace_id, destination_type, external_id, display_name) VALUES (?, ?, ?, ?, ?, ?)",
-            (destination_id, account_id, workspace_id, destination_type, external_id, display_name),
+            (destination_id, account_id, destination_workspace, destination_type, external_id, display_name),
         )
         await _audit(db, account_id, "destination_added", {"destination_type": destination_type})
         await db.commit()
@@ -189,12 +197,16 @@ async def add_integration_destination(account_id: str, destination_type: str, ex
 
 
 async def get_destination(account_id: str, destination_type: str, *, workspace_id: str | None = None) -> dict[str, Any] | None:
+    account = await get_integration_account(account_id, workspace_id=workspace_id, active_only=False)
+    if not account:
+        return None
     async with aiosqlite.connect(_db_path()) as db:
         db.row_factory = aiosqlite.Row
         clauses = "account_id=? AND destination_type=? AND status='active'"
         params: list[str] = [account_id, destination_type]
-        if workspace_id is not None:
-            clauses += " AND workspace_id=?"; params.append(workspace_id)
+        effective_workspace = account.get("workspace_id") or workspace_id
+        if effective_workspace is not None:
+            clauses += " AND workspace_id=?"; params.append(effective_workspace)
         row = await (await db.execute(
             f"SELECT * FROM integration_destinations WHERE {clauses} ORDER BY created_at DESC LIMIT 1",
             params,
@@ -203,11 +215,15 @@ async def get_destination(account_id: str, destination_type: str, *, workspace_i
 
 
 async def list_integration_destinations(account_id: str, *, workspace_id: str | None = None) -> list[dict[str, Any]]:
+    account = await get_integration_account(account_id, workspace_id=workspace_id, active_only=False)
+    if not account:
+        return []
     async with aiosqlite.connect(_db_path()) as db:
         db.row_factory = aiosqlite.Row
         clauses = "account_id=?"; params: list[str] = [account_id]
-        if workspace_id is not None:
-            clauses += " AND workspace_id=?"; params.append(workspace_id)
+        effective_workspace = account.get("workspace_id") or workspace_id
+        if effective_workspace is not None:
+            clauses += " AND workspace_id=?"; params.append(effective_workspace)
         rows = await (await db.execute(
             f"SELECT id, account_id, destination_type, display_name, status, created_at FROM integration_destinations WHERE {clauses} ORDER BY destination_type, display_name",
             params,

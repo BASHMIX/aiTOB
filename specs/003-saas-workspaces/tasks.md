@@ -286,7 +286,10 @@ operational check; a rehearsal is never a cutover.
   commands/ledger/outbox, caches/budgets, proposals, Dispatcher and audit.
   PostgreSQL acceptance now exercises colliding workspace/station/tournament
   scopes, worker claims, snapshots and WebSocket subscriptions; the latest
-  workspace/worker/WS run passes 54 cases. Final non-null ownership enforcement
+  workspace/worker/WS run passes 54 cases. Focused PostgreSQL ownership
+  acceptance adds 3 cases for unowned-player/link exclusion, foreign workflow
+  mutation rejection, and the two-workspace claim boundary (26 focused cases
+  including existing V2 repository coverage). Final non-null ownership enforcement
   for every legacy row remains gated by the controlled cutover backfill.
 - [~] **T021 / FR-001, FR-009–010** The current operational SQLite file was
   inspected read-only on 2026-09-09. It contains exactly one active Owner
@@ -311,7 +314,12 @@ operational check; a rehearsal is never a cutover.
   manual queue paths carry the session workspace. Legacy unowned rows are not
   exposed to a tenant session. MatchCommandService and Discord Ready/Outbox
   handling now carry the durable match workspace into provider, tournament,
-  station and command lookups. Remaining work is to remove the compatibility
+  station and command lookups. The tenant player projection no longer admits
+  `workspace_id IS NULL` rows, entrant-link reads require an owned tournament,
+  and V2 Hub workflow updates accept an explicit workspace predicate so a known
+  set ID cannot mutate another tenant. Background provider-command and Outbox
+  claims now apply the worker's durable workspace to row locking, updates and
+  returned projections. Remaining work is to remove the compatibility
   bridge after repository parity and finish unowned bot service-heartbeat /
   initial-registration contexts.
   The legacy assistant player projection is no longer an unscoped tenant read:
@@ -335,7 +343,9 @@ operational check; a rehearsal is never a cutover.
   Tournament snapshot/status and refresh/stream lookup now carry the trusted
   workspace; the new regression proves cross-workspace snapshot reads/writes
   are denied. Account isolation, rotation, provider snapshot scoping and worker
-  claim acceptance pass on PostgreSQL; the remaining gap is migration of the
+  claim acceptance pass on PostgreSQL. Destination creation now inherits the
+  owning account workspace, and destination reads verify the account owner as
+  well as the requested workspace. The remaining gap is migration of the
   final service identity and durable ownership constraints.
 
 ## D. Integrations, assets and overlays
