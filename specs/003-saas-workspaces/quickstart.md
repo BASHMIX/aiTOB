@@ -352,6 +352,14 @@ candidate database. The Vite process remains the sole listener on
 PostgreSQL is the `aitob_postgres` container on host port 5433. No connection
 strings or secrets are recorded here.
 
+The managed launcher loads `.env` followed by `.env.production`, applies the
+ignored `AITOB_RUNTIME_DATABASE_NAME` selector to the PostgreSQL URL, and
+forces the local Bot Hub URL unless an external URL is explicitly opted in.
+After a clean `run.py` restart, `.pids.json` contains one managed API, Bot,
+and Vite entry; the proxy login and tournament listing were rechecked through
+5173. The API reload worker and Vite child process are lifecycle children of
+those entries, not additional service launches.
+
 The new API process was started with background workers enabled and provider
 startup probes disabled; `/health` and `/readiness` returned 200 with
 `database=postgresql`, owner login succeeded, and the two candidate tournaments
