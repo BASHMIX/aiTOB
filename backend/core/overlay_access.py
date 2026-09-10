@@ -40,13 +40,22 @@ async def issue_overlay_access(
     token_id = str(uuid.uuid4())
     async with aiosqlite.connect(database.DB_PATH) as db:
         await db.execute("BEGIN IMMEDIATE")
-        await db.execute(
-            """UPDATE overlay_access_tokens
-               SET revoked_at=CURRENT_TIMESTAMP
-               WHERE workspace_id=? AND station_id=? AND revoked_at IS NULL
-                 AND ((overlay_name IS NULL AND ? IS NULL) OR overlay_name=?)""",
-            (workspace_id, station["storage_id"], overlay_name, overlay_name),
-        )
+        if overlay_name is None:
+            await db.execute(
+                """UPDATE overlay_access_tokens
+                   SET revoked_at=CURRENT_TIMESTAMP
+                   WHERE workspace_id=? AND station_id=? AND revoked_at IS NULL
+                     AND overlay_name IS NULL""",
+                (workspace_id, station["storage_id"]),
+            )
+        else:
+            await db.execute(
+                """UPDATE overlay_access_tokens
+                   SET revoked_at=CURRENT_TIMESTAMP
+                   WHERE workspace_id=? AND station_id=? AND revoked_at IS NULL
+                     AND overlay_name=?""",
+                (workspace_id, station["storage_id"], overlay_name),
+            )
         await db.execute(
             """INSERT INTO overlay_access_tokens
                (id, workspace_id, station_id, token_hash, created_by, overlay_name)

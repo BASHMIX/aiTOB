@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from collections import defaultdict
 from backend.core.database import (
     get_stations, create_station, update_station, delete_station,
@@ -104,7 +104,7 @@ async def api_delete_station(id: str, principal: SessionPrincipal = Depends(requ
 @router.post("/{id}/overlay-access", summary="Rotate a revocable station or slide Browser Source link")
 async def api_issue_overlay_access(
     id: str,
-    body: IssueOverlayAccessRequest | None = None,
+    body: IssueOverlayAccessRequest | None = Body(default=None),
     principal: SessionPrincipal = Depends(require_permission("overlay.manage")),
 ):
     from backend.core.overlay_access import issue_overlay_access
