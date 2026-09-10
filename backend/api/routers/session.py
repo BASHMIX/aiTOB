@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field, field_validator
 
 from backend.api.auth import current_session_principal, require_permission
+from backend.core import database
+from backend.core.storage import dbapi as aiosqlite
 from backend.core.workspace_auth import (
     SESSION_COOKIE, SessionPrincipal, accept_workspace_invitation, authenticate_password,
     begin_totp_setup, disable_totp, enable_totp,
@@ -20,8 +23,23 @@ from backend.core.workspace_auth import (
     enforce_auth_rate_limit, enforce_public_registration_rate_limit,
 )
 from backend.core.entitlements import EntitlementLimitExceeded, require_workspace_capacity
+from backend.core.email_delivery import send_email
 
 router = APIRouter(tags=["session"])
+
+
+async def _deliver_account_email(*, recipient: str, subject: str, text: str) -> bool:
+    """Best-effort delivery without changing enumeration-safe API responses."""
+    try:
+        return await send_email(recipient=recipient, subject=subject, text=text)
+    except Exception:
+        # Provider failures must not disclose account existence or credentials.
+        return False
+
+
+def _public_url(path: str, token: str) -> str:
+    base = os.getenv("APP_PUBLIC_URL", "http://127.0.0.1:5173").rstrip("/")
+    return f"{base}{path}?token={quote(token)}"
 
 
 class SessionLoginRequest(BaseModel):
@@ -178,6 +196,13 @@ async def create_invitation(body: InvitationRequest, principal: SessionPrincipal
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     # The delivery service receives this one-time token later; the API returns
     # it only in this creation response and no server log/audit stores it.
+    await _deliver_account_email(
+        recipient=invite["email"],
+        subject="You are invited to an aiTOB workspace",
+        text=(f"You have been invited to join {principal.workspace_id} as {invite['role']}.\n"
+              f"Use this one-time acceptance token: {token}\n"
+              f"Acceptance endpoint: {_public_url('/accept-invitation', token)}"),
+    )
     return {"invitation": invite, "acceptance_token": token}
 
 
@@ -287,7 +312,15 @@ async def password_reset_request(body: PasswordResetRequest, request: Request):
             "password_reset", f"{request.client.host if request.client else 'unknown'}:{body.email}",
             limit=5, window_seconds=3600,
         )
-        await create_password_reset(body.email)
+        token = await create_password_reset(body.email)
+        if token:
+            await _deliver_account_email(
+                recipient=body.email.strip().lower(),
+                subject="Reset your aiTOB password",
+                text=(f"A password reset was requested for this account.\n"
+                      f"Use this one-time token: {token}\n"
+                      f"Reset endpoint: {_public_url('/reset-password', token)}"),
+            )
     except PermissionError:
         # Enumeration-safe: a limited request has the same public response.
         pass
@@ -304,7 +337,19 @@ async def password_reset(body: PasswordResetCompletion):
 
 @router.post("/session/email-verification/request", status_code=202)
 async def email_verification_request(principal: SessionPrincipal = Depends(current_session_principal)):
-    await create_email_verification(principal)
+    token = await create_email_verification(principal)
+    # The token is delivered only to the account address; it is never returned
+    # by this API or written to logs.  The POST confirmation endpoint remains
+    # the mutation boundary for clients that consume the link.
+    async with aiosqlite.connect(database.DB_PATH) as db:
+        row = await (await db.execute("SELECT email FROM users WHERE id=?", (principal.user_id,))).fetchone()
+    if row:
+        await _deliver_account_email(
+            recipient=str(row[0]),
+            subject="Verify your aiTOB email",
+            text=(f"Verify this account with the one-time token: {token}\n"
+                  f"Confirmation endpoint: {_public_url('/api/session/email-verification/confirm', token)}"),
+        )
     return {"accepted": True, "delivery": "email_if_configured"}
 
 

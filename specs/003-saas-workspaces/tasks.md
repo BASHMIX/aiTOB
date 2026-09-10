@@ -264,7 +264,17 @@ operational check; a rehearsal is never a cutover.
   PG HTTP acceptance covers TOTP enable, missing-code rejection, one-use
   recovery login, post-reset session revocation and password replacement; the
   reset token is supplied by an in-process test delivery sink, not SMTP. Live
-  SMTP/provider delivery remains an explicit deployment dependency.
+  SMTP/provider delivery remains an explicit deployment dependency. The
+  account delivery adapter now supports Resend (preferred) and explicit SMTP,
+  exposes redacted platform-admin status/test endpoints, and delivers
+  verification, reset and invitation tokens without exposing them in API
+  responses or logs. `test_email_delivery.py` passes 3/3 with in-process sinks;
+  tests make no provider calls. Platform Admin configures delivery through the
+  ignored service profile (`RESEND_API_KEY` + `EMAIL_FROM`, or the complete
+  `SMTP_HOST`/`SMTP_PORT`/`SMTP_USERNAME`/`SMTP_PASSWORD`/`SMTP_FROM` set), not
+  through database fields. System → Account email delivery shows only safe
+  status and offers an explicit test-recipient action; live sending remains a
+  separate deployment check.
 - [x] **T012 / FR-003** Canonical Owner / TO / Stream operator / Moderator /
   Viewer permission matrix is now present in `workspace_auth.py`, with legacy
   aliases retained only for staged data migration; session and WebSocket
@@ -291,7 +301,8 @@ operational check; a rehearsal is never a cutover.
   rejection, Owner role change, non-Owner role-change denial, cancellation
   invalidation, and last-Owner deletion protection. Email delivery remains a
   deployment dependency; acceptance uses the returned one-time test token and
-  does not claim that SMTP sent it.
+  does not claim that SMTP sent it. Invitation delivery now uses the same
+  explicit adapter when configured; invitation listings remain token-free.
 
 ## C. Ownership and tenant isolation
 
@@ -694,10 +705,11 @@ operational check; a rehearsal is never a cutover.
   players, no duplicate after restart, managed Cloudinary uploads through the
   participant and Discord paths, reference-guarded deletion, and overlay data
   recovery across API restart. Old held queues and legacy images were not
-  touched. T053 remains open only for a human Discord Ready-button click,
-  native OBS Studio visual confirmation of the already-verified Browser Source
-  (OBS WebSocket is not used), and live SMTP delivery; these are explicit
-  external/session prerequisites.
+  touched. The user then explicitly confirmed the full station link and
+  single-slide Overlay link rendered and updated inside OBS; this closes the
+  native OBS visual row only and does not claim Ready, provider, or SMTP
+  acceptance. T053 remains open for the human Discord Ready-button click and
+  live SMTP delivery; these are explicit external/session prerequisites.
   On 2026-09-10 the independent Challonge result gate was exercised on fresh
   match `challonge:fnc-jo:18449397:471045163` (not one of the held legacy
   rows). The organizer workflow performed a freshness preflight, one remote
