@@ -53,6 +53,7 @@ def test_launcher_fails_before_starting_services_without_database_url(tmp_path: 
     env.pop("DATABASE_URL", None)
     env.pop("AITOB_TESTING", None)
     env.pop("AITOB_SQLITE_MIGRATION_TOOL", None)
+    env["AITOB_SKIP_ENV_FILES"] = "1"
     result = subprocess.run(
         [sys.executable, "run.py", "--no-frontend"],
         cwd=Path(__file__).resolve().parents[2], env=env,

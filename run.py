@@ -16,8 +16,11 @@ from dotenv import load_dotenv
 # The desktop launcher is the service boundary. Load the ignored local
 # development values first (including the integration key), then the explicit
 # runtime profile. Child API/Bot processes inherit this single environment.
-load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
-load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env.production"), override=True)
+# Tests that deliberately verify a missing DATABASE_URL set
+# ``AITOB_SKIP_ENV_FILES=1`` so dotenv cannot mask the failure.
+if os.getenv("AITOB_SKIP_ENV_FILES", "").strip() != "1":
+    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env.production"), override=True)
 
 runtime_database_name = os.getenv("AITOB_RUNTIME_DATABASE_NAME", "").strip()
 database_url = os.getenv("DATABASE_URL", "").strip()
