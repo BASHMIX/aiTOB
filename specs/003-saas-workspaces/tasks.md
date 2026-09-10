@@ -250,7 +250,10 @@ operational check; a rehearsal is never a cutover.
   the final live acceptance gates are open; no setup endpoint or default
   credential bypass was added. The frontend regression suite also passes
   42/42 (`npm run test -- --run`, 2026-09-11), preserving the Account Settings
-  rendering and protected-save behavior.
+  rendering and protected-save behavior. The complete backend suite remains
+  green after this route was added: 459 passed / 31 intentionally skipped in
+  159.05s (`.venv\\Scripts\\python.exe -m pytest -q backend/tests`,
+  2026-09-11).
 - [~] **T011 / FR-003–005** Email verification, password change/reset, TOTP
   recovery codes, session revocation and auth rate limits are implemented and
   covered by session tests; account UI is present. Email delivery remains
