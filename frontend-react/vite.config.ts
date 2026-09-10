@@ -30,6 +30,13 @@ export default defineConfig({
         target: apiTarget,
         changeOrigin: true,
       },
+      // The public OBS viewer is rendered by Vite, but its station telemetry
+      // lives on the API. Keep the Browser Source URL on :5173 while routing
+      // only the data/redirect requests to the same backend service.
+      '/obs/': {
+        target: apiTarget,
+        changeOrigin: true,
+      },
       '/ws': {
         target: wsTarget,
         ws: true,
