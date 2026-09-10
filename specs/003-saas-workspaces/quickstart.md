@@ -438,6 +438,27 @@ restart/restore gate. T053 remains open only for the explicitly listed
 human/external evidence. SMTP is deferred, payment remains deferred by
 decision, and DQ/AI-DQ/Auto-DQ flags remain disabled.
 
+Live-result follow-up (2026-09-10): a fresh Challonge match
+`challonge:fnc-jo:18449397:471045163` was used instead of the held legacy
+queue targets. The command path performed freshness preflight, exactly one
+remote 2–1 mutation, and a targeted read that returned COMPLETE with the
+expected winner and scores; its provider ledger is `snapshot_verified`. The
+new local effects remain paused and are separate from the eight held rows.
+The Start.gg acceptance bracket currently has six COMPLETE sets. Its known
+test set `107467304` rejected the reset/re-report attempt upstream, so the
+projection was reconciled and no duplicate score mutation was sent; a fresh
+mutable Start.gg target is required for that provider gate.
+
+The existing Discord Call message is available at
+https://discord.com/channels/1501687561288941650/1547528022029111357/1547528025078366260
+and contains one Ready component plus both verified test-player mentions.
+The bot is connected, but neither user-session button click was simulated.
+OBS Studio is installed and running; no existing scene or source was changed.
+The native inspection surface is unavailable in this acceptance environment,
+so visual OBS confirmation is explicitly blocked rather than inferred from
+the already-passing HTTP overlay/restart check. SMTP remains the only live
+service dependency; payment is deferred by decision.
+
 Worker evidence from the same run: Dispatcher heartbeat was fresh and the
 organizer console reported `service_alive=true` (the Challonge tournament is
 paused at its configured scope, while the Start.gg tournament is not). The Bot

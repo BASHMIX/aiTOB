@@ -620,3 +620,23 @@ operational check; a rehearsal is never a cutover.
   touched. T053 remains open only for a human Discord Ready-button click, a
   visual OBS Browser Source session (OBS WebSocket is not used), and live SMTP
   delivery; these are explicit external/session prerequisites.
+  On 2026-09-10 the independent Challonge result gate was exercised on fresh
+  match `challonge:fnc-jo:18449397:471045163` (not one of the held legacy
+  rows). The organizer workflow performed a freshness preflight, one remote
+  score mutation (2–1), and targeted verification; a new provider ledger row
+  reached `snapshot_verified`, the fresh provider read returned COMPLETE,
+  winner `303608384`, and scores 2/1. The generated local Outbox effects stay
+  paused in the acceptance window and were not confused with the eight held
+  rows. The Start.gg test bracket has no fresh mutable set: all six sets in
+  `tournament/testfnc` read COMPLETE; the attempted reset was rejected by the
+  provider and the local projection was immediately reconciled. No second
+  Start.gg score mutation was sent.
+  The Discord call message for the existing Start.gg acceptance set remains
+  readable with both verified entrant mentions and one Ready component. The
+  bot is connected in the candidate process, but button clicks by the two
+  user sessions are not simulated; the human gate is therefore still open.
+  OBS Studio is installed and was launched without changing any existing scene
+  or Browser Source, but this environment exposes no native OBS inspection
+  surface, so visual Browser Source confirmation remains open rather than
+  being inferred from the HTTP overlay check. SMTP remains deferred pending
+  service fields; payment remains deferred by decision.
