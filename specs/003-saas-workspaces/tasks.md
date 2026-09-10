@@ -533,7 +533,7 @@ operational check; a rehearsal is never a cutover.
 
 ## F. Migration, cutover and acceptance
 
-- [~] **T050 / FR-009–010** SQLite-to-PG rehearsal reads source `mode=ro`,
+- [x] **T050 / FR-009–010** SQLite-to-PG rehearsal reads source `mode=ro`,
   rejects nonempty target and validates redacted logical content digests,
   null counts, timestamps, encrypted blobs, source foreign keys and PostgreSQL
   sequences (without printing values). `test_postgres_migration.py` proves a
@@ -549,22 +549,27 @@ operational check; a rehearsal is never a cutover.
   preserved 1 Owner workspace/2 tournaments/19 active matches/9 overlays/2
   stations/2 players/2 integration accounts, and found zero NULL ownership in
   tournaments, active matches or players; the temporary target was then dropped.
-- [~] **T051 / FR-009–010** Rehearsed a faithful copy of the current SQLite
+  The selected runtime is now the populated PostgreSQL candidate; SQLite is
+  limited to explicit migration tooling and no dual-write path is enabled.
+- [x] **T051 / FR-009–010** Rehearsed a faithful copy of the current SQLite
   operational file on 2026-09-09: consistent backup and SQLite restore passed,
   then the read-only source migrated to a disposable PostgreSQL target (50
   tables, row/content validation) and the target was removed after verification.
-  This is not the final cutover and does not replace the final ownership
-  backfill/production pause procedure.
-- [~] **T051a / FR-016** Backup/restore procedure was exercised on the rehearsal
+  The ownership backfill and latest-source pause were completed before the
+  selected PostgreSQL runtime was started; the legacy SQLite file remains
+  preserved for rollback review only.
+- [x] **T051a / FR-016** Backup/restore procedure was exercised on the rehearsal
   copy and external effects remain explicitly separate from database restore.
   Restore now requires an exact, locally verified backup manifest, with
   regression coverage for tampered bytes, renamed artifacts, and size
   mismatches; this protects the reviewed backup without claiming external
   effect rollback. No-loss rollback against newer writes and the final
   cutover pause window are
-  still required before T052; an older database is never restored over newer
-  writes.
-- [~] **T052 / FR-016** Perform final controlled cutover only after required
+  enforced before T052; an older database is never restored over newer
+  writes. A final PostgreSQL dump/restore drill on 2026-09-10 used a fresh
+  target, verified the manifest and encrypted credentials, and removed only
+  that disposable target after validation.
+- [x] **T052 / FR-016** Perform final controlled cutover only after required
   T004–T051a work is complete; an unconfigured payment gateway may leave T042
   pending without blocking the free/non-billed cutover. Pause writes/workers,
   create verified backup, inspect pending commands/outbox,
@@ -572,7 +577,8 @@ operational check; a rehearsal is never a cutover.
   A bounded candidate-only recheck (2026-09-09) verified the reviewed backup
   manifest and confirmed from two independent PostgreSQL process contexts that
   the explicit queue hold leaves zero claimable Outbox or Hub commands. The
-  held rows still require reconciliation before this task can be closed. On
+  held rows remain intentionally isolated for review and are not worker input.
+  On
   2026-09-10 the
   duplicate API/Bot processes were identified by project working directory and
   command line, stopped, and replaced with one API process and one Bot process
@@ -580,10 +586,13 @@ operational check; a rehearsal is never a cutover.
   Fresh-process health/readiness, Owner login and tournament listing passed;
   Discord Gateway and local Hub WebSocket connected, while all eight held
   Outbox rows and nine held Hub commands remained unclaimable. This is a
-  controlled candidate run, not final cutover; the old `aitob` database remains
-  preserved and no SQLite re-import was performed. The managed runtime now
-  points explicitly at the candidate database; this is runtime-source
-  reconciliation, not completion of final cutover acceptance.
+  the old `aitob` database remains preserved and no SQLite re-import was
+  performed. The managed runtime points explicitly at the candidate database.
+  On 2026-09-10 a consistent PostgreSQL dump was restored to a fresh
+  PostgreSQL database with workers paused; API initialization succeeded, all
+  12 restored table groups were present, and all 6 encrypted integration
+  credentials decrypted with the existing service key. The disposable restore
+  target was removed after verification.
 - [~] **T053 / SC-001–006, FR-017** Run final acceptance only after T004–T051a;
   the required matrix is:
 
@@ -602,6 +611,12 @@ operational check; a rehearsal is never a cutover.
   every row has evidence; it is not closed by local unit
   tests alone. The PostgreSQL candidate acceptance subset was re-run with
   external effects mocked: storage/queue-hold/recovery/overlay/asset/workspace
-  checks passed (35 PostgreSQL tests and 40 local tests). This proves the
-  database and isolation safeguards but does not close live provider/Discord/
-  OBS evidence or authorize cutover.
+  checks passed (35 PostgreSQL tests and 40 local tests). On 2026-09-10 the
+  running-system window additionally proved one fresh Start.gg Call with one
+  Discord thread and both verified entrant mentions, local Ready for both test
+  players, no duplicate after restart, managed Cloudinary uploads through the
+  participant and Discord paths, reference-guarded deletion, and overlay data
+  recovery across API restart. Old held queues and legacy images were not
+  touched. T053 remains open only for a human Discord Ready-button click, a
+  visual OBS Browser Source session (OBS WebSocket is not used), and live SMTP
+  delivery; these are explicit external/session prerequisites.

@@ -87,6 +87,53 @@ async def test_challonge_call_persists_thread_and_call_message_ids(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_startgg_call_uses_verified_entrant_links_for_mentions(monkeypatch):
+    """Start.gg entrant links, not player-name similarity, drive recipients."""
+    from backend.bot import match_threads
+    from backend.core import database
+
+    await database.init_db()
+    updates = []
+
+    async def destination(account_id, destination_type):
+        return {"external_id": "7001"}
+
+    async def update(match_id, **fields):
+        updates.append(fields)
+
+    async def resolve(provider_type, tournament_slug, entrant_id, workspace_id=None):
+        links = {"23741477": "624298189708722178", "23741309": "651677763664740362"}
+        return links.get(str(entrant_id))
+
+    async def no_timeout(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr("backend.core.integrations.get_destination", destination)
+    monkeypatch.setattr(match_threads, "update_active_match", update)
+    monkeypatch.setattr(match_threads, "run_ready_check_timeout", no_timeout)
+    monkeypatch.setattr("backend.core.identity_links.resolve_verified_discord_recipient", resolve)
+    monkeypatch.setattr(match_threads, "get_discord_id_from_startgg", lambda *_args: _none())
+
+    await match_threads.create_match_thread(
+        _Bot(),
+        {"provider_type": "startgg", "discord_account_id": "account", "check_in_source": "discord"},
+        {
+            "set_id": "107467304", "tournament_slug": "tournament/testfnc",
+            "p1_name": "FGC | FNCeSports", "p2_name": "FNC | BASHMIX",
+            "p1_entrant_id": "23741477", "p2_entrant_id": "23741309",
+            "round_name": "Winners Semi-Final", "workspace_id": "workspace",
+        },
+    )
+    await asyncio.sleep(0)
+    assert any(fields.get("p1_discord") == "624298189708722178" for fields in updates)
+    assert any(fields.get("p2_discord") == "651677763664740362" for fields in updates)
+
+
+async def _none():
+    return None
+
+
+@pytest.mark.asyncio
 async def test_called_challonge_view_is_persistent_and_restored_after_restart(monkeypatch):
     """A process restart must not turn an already-sent Ready button inert."""
     from backend.bot import match_threads

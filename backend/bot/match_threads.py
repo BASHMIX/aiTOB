@@ -68,12 +68,19 @@ async def create_match_thread(bot, tournament, set_data):
         p2_discord = set_data.get('p2_discord')
     else:
         workspace_id = set_data.get("workspace_id")
-        p1_discord = set_data.get('p1_discord') or await get_discord_id_from_startgg(
-            set_data.get('p1_id') or set_data.get('p1_entrant_id'), workspace_id
-        )
-        p2_discord = set_data.get('p2_discord') or await get_discord_id_from_startgg(
-            set_data.get('p2_id') or set_data.get('p2_entrant_id'), workspace_id
-        )
+        # Entrant-scoped organizer links are the authoritative recipient
+        # source.  The older player.startgg_id lookup remains a compatibility
+        # fallback for migrated rows, but must never override an explicit
+        # verified link or infer a mention from a display name.
+        from backend.core.identity_links import resolve_verified_discord_recipient
+        p1_entrant = set_data.get('p1_id') or set_data.get('p1_entrant_id')
+        p2_entrant = set_data.get('p2_id') or set_data.get('p2_entrant_id')
+        p1_discord = set_data.get('p1_discord') or await resolve_verified_discord_recipient(
+            "startgg", set_data.get("tournament_slug") or "", str(p1_entrant or ""), workspace_id
+        ) or await get_discord_id_from_startgg(p1_entrant, workspace_id)
+        p2_discord = set_data.get('p2_discord') or await resolve_verified_discord_recipient(
+            "startgg", set_data.get("tournament_slug") or "", str(p2_entrant or ""), workspace_id
+        ) or await get_discord_id_from_startgg(p2_entrant, workspace_id)
 
     # ── Dual-mode check-in: 'startgg' hands check-in + DQ to start.gg ──────
     # The bot still opens the thread and pings players, but with a "go to start.gg"

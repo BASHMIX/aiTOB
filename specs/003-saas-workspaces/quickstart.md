@@ -389,6 +389,55 @@ configured in the local profiles; no legacy image URLs were changed. OBS uses
 the existing Browser Source/overlay URL path only; no OBS WebSocket control
 dependency is part of this runtime.
 
+## Final running-system acceptance (2026-09-10)
+
+The selected PostgreSQL candidate is the sole source used by the running API,
+Bot and workers. The legacy SQLite file and the historical held queues remain
+preserved and are not read by those services. A consistent PostgreSQL dump was
+restored into a newly created disposable PostgreSQL database with workers
+paused; API initialization succeeded, the restored owner/workspace and
+operational tables were present, and all six encrypted integration credential
+rows decrypted successfully using the existing service key. That disposable
+restore target was removed after verification.
+
+The live Discord acceptance used only the approved test channel and verified
+entrant identity links. A new Call created exactly one thread/message with the
+two verified test-player mentions; local Ready was recorded for both players,
+and a service restart left one call message with no duplicate. No historical
+Outbox or Hub command was drained. Synthetic 640x640 images uploaded through
+both the participant endpoint and Discord registration used managed Cloudinary
+storage. The managed asset reference guard rejected deletion while referenced,
+then allowed it after the test reference was removed. Existing images and URLs
+were not modified.
+
+An acceptance station and synthetic active match were used to query overlay
+data before and after an API restart. Names, scores, status, station binding and
+set identity were unchanged. This validates Browser Source data recovery over
+the aiTOB HTTP path; OBS WebSocket was neither required nor implemented, and a
+live OBS window was not available for a screenshot.
+
+The running Vite UI was then opened at `http://localhost:5173/login`; the
+owner session completed successfully and `/admin/hub` rendered the selected
+tournament, its colored tournament card, On-Stream Match Live card, stations,
+and Match Dashboard. The browser check used the same API proxy and PostgreSQL
+runtime; no second API was created.
+
+Validation results:
+
+* `pytest backend/tests --postgres -q`: **474 passed, 5 skipped**. The five
+  skips are explicitly gated live/external targets; PostgreSQL identity tests
+  ran with `--postgres` and disposable databases. A prior invocation without
+  `--postgres` produced false login failures and was corrected before the final
+  run.
+* `npm.cmd test -- --run`: **42 passed** across 8 files.
+* `npm.cmd run build`: passed (`tsc` and Vite build).
+* `git diff --check`: passed.
+
+T052 is closed for the selected PostgreSQL runtime source and verified
+restart/restore gate. T053 remains open only for the explicitly listed
+human/external evidence. SMTP is deferred, payment remains deferred by
+decision, and DQ/AI-DQ/Auto-DQ flags remain disabled.
+
 Worker evidence from the same run: Dispatcher heartbeat was fresh and the
 organizer console reported `service_alive=true` (the Challonge tournament is
 paused at its configured scope, while the Start.gg tournament is not). The Bot

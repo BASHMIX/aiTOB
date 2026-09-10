@@ -161,7 +161,25 @@ class RegistrationManager:
             # Process + store (Cloudinary when configured, local fallback otherwise).
             p = await get_player(discord_id)
             filename_id = (p or {}).get('startgg_id') or discord_id
-            return await store_avatar(image_bytes, filename_id)
+            saved = await store_avatar(image_bytes, filename_id)
+            # Keep Discord uploads in the same managed-asset ledger as the
+            # participant page.  This gives the workspace a durable ownership
+            # record and lets the guarded deletion path inspect live references;
+            # it does not alter existing avatar URLs or re-upload old assets.
+            workspace_id = (p or {}).get("workspace_id")
+            if workspace_id:
+                from backend.core.database import record_media_asset
+                await record_media_asset(
+                    workspace_id=workspace_id,
+                    asset_type="player_avatar",
+                    owner_type="player",
+                    owner_id=discord_id,
+                    storage_url=saved,
+                    storage_key=saved.rsplit("/", 1)[-1] if saved else None,
+                    mime_type=getattr(attachment, "content_type", None),
+                    byte_size=len(image_bytes),
+                )
+            return saved
 
         except Exception as e:
             print(f"Registration Avatar Error: {e}")

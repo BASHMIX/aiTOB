@@ -2181,7 +2181,11 @@ async def update_active_match(match_id: str, *, workspace_id: str | None = None,
             return False
 
         keys = ", ".join([f"{k} = ?" for k in filtered_kwargs.keys()])
-        values = list(filtered_kwargs.values())
+        # PostgreSQL boolean columns reject SQLite's legacy 0/1 integers.
+        # Normalize at the repository boundary so bot workflow updates (for
+        # example ``auto_dq_disarmed=0`` during Call) remain portable while
+        # preserving the existing SQLite test/tool representation.
+        values = [_database_value(key, value) for key, value in filtered_kwargs.items()]
         values.append(match_id)
         scope = ""
         if workspace_id is not None:

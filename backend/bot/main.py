@@ -1631,6 +1631,21 @@ async def handle_ws_command(cmd_text: str, *, workspace_id: str | None = None):
             match = await get_active_match(set_id, workspace_id)
             if match:
                 t = await get_tournament(match['tournament_slug'], workspace_id)
+                # Manual Hub calls can race the reconciliation pass that normally
+                # enriches entrant-scoped Discord identities.  Resolve the
+                # organizer-verified links here, immediately before creating the
+                # thread, so a stale local row can never produce an unmentioned
+                # call when the authoritative links already exist.
+                if (t or {}).get("provider_type") == "startgg":
+                    from backend.core.identity_links import resolve_verified_discord_recipient
+                    match = dict(match)
+                    for side in ("p1", "p2"):
+                        if not match.get(f"{side}_discord"):
+                            entrant_id = match.get(f"{side}_entrant_id")
+                            if entrant_id:
+                                match[f"{side}_discord"] = await resolve_verified_discord_recipient(
+                                    "startgg", match.get("tournament_slug") or "", str(entrant_id), workspace_id
+                                )
                 from bot.match_threads import create_match_thread
                 await create_match_thread(bot, t, match)
                 await ws_add_bot_feed(f"🤖 Created match thread for {match.get('p1_name')} vs {match.get('p2_name')}", "success")

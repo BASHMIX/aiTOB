@@ -103,6 +103,22 @@ async def test_concurrent_approval_locks_one_proposal_and_one_command():
 
 
 @pytest.mark.asyncio
+async def test_active_match_boolean_updates_bind_as_postgres_booleans():
+    """Bot Call updates must not send SQLite 0/1 into PostgreSQL BOOLEAN columns."""
+    await database.upsert_tournament("pg/bool", "PG", "Bracket", "event", "Game", "{}")
+    await database.upsert_active_match(
+        "pg-bool", tournament_slug="pg/bool", p1_name="One", p2_name="Two",
+        p1_entrant_id="1", p2_entrant_id="2", status="not_started",
+    )
+    assert await database.update_active_match("pg-bool", auto_dq_disarmed=0)
+    async with database.aiosqlite.connect(database.DB_PATH) as db:
+        row = await (await db.execute(
+            "SELECT auto_dq_disarmed FROM active_matches WHERE set_id=?", ("pg-bool",)
+        )).fetchone()
+    assert row[0] is False
+
+
+@pytest.mark.asyncio
 async def test_concurrent_outbox_claim_dispatches_one_effect_and_retry_is_idempotent():
     """Two independent workers may observe work, but only one owns its lease."""
     await database.enqueue_workflow_outbox_v2({

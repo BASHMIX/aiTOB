@@ -9,7 +9,7 @@ import json
 import signal
 import subprocess
 import threading
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from dotenv import load_dotenv
 
@@ -26,6 +26,17 @@ runtime_database_name = os.getenv("AITOB_RUNTIME_DATABASE_NAME", "").strip()
 database_url = os.getenv("DATABASE_URL", "").strip()
 if runtime_database_name and database_url.lower().startswith(("postgres://", "postgresql://")):
     parsed_database_url = urlsplit(database_url)
+    # Local Docker development keeps the role password in the service-level
+    # POSTGRES_PASSWORD variable.  A stale password embedded in an older
+    # DATABASE_URL must not silently send the API to an unauthenticated/empty
+    # target.  Align only the explicitly selected local Docker endpoint; an
+    # externally managed PostgreSQL URL remains untouched.
+    service_password = os.getenv("POSTGRES_PASSWORD", "").strip()
+    if service_password and parsed_database_url.hostname in {"127.0.0.1", "localhost"} and parsed_database_url.port == 5433:
+        host = parsed_database_url.hostname
+        parsed_database_url = parsed_database_url._replace(
+            netloc=f"aitob:{quote(service_password, safe='')}@{host}:5433"
+        )
     os.environ["DATABASE_URL"] = urlunsplit(
         (parsed_database_url.scheme, parsed_database_url.netloc,
          "/" + runtime_database_name, parsed_database_url.query,

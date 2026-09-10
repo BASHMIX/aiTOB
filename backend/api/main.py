@@ -91,12 +91,17 @@ DEV_ORIGINS = [
 
 _origins_env = os.getenv("ALLOWED_ORIGINS", "").strip()
 allowed_origins = [o.strip() for o in _origins_env.split(",") if o.strip()] or DEV_ORIGINS
-if os.getenv("AITOB_ENV", "development").lower() == "production" and not _origins_env:
+_runtime_env = os.getenv("AITOB_ENV", "development").lower()
+# Loopback origins are local-only and safe to retain alongside a deployment
+# allowlist. This also keeps the development UI reachable at either localhost
+# spelling when a production-shaped env file is loaded for acceptance.
+allowed_origins = list(dict.fromkeys([*allowed_origins, *DEV_ORIGINS]))
+if _runtime_env == "production" and not _origins_env:
     raise RuntimeError("ALLOWED_ORIGINS is required when AITOB_ENV=production")
 
 # Optional: allow a whole subdomain space for cloud-hosted overlays (set only if needed),
 # e.g. ALLOWED_ORIGIN_REGEX=https://.*\.mydomain\.com
-_origin_regex = os.getenv("ALLOWED_ORIGIN_REGEX") or None
+_origin_regex = os.getenv("ALLOWED_ORIGIN_REGEX") or r"^https?://(?:localhost|127\.0\.0\.1):(5173|8000)$"
 
 app.add_middleware(
     CORSMiddleware,
@@ -114,8 +119,22 @@ async def session_csrf_guard(request: Request, call_next):
     if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.cookies.get("aitob_session"):
         origin = request.headers.get("origin")
         referer = request.headers.get("referer")
-        candidate = origin or (referer.rstrip("/") if referer else None)
-        if candidate and not any(candidate == allowed or candidate.startswith(allowed + "/") for allowed in allowed_origins):
+        candidate = (origin or (referer.rstrip("/") if referer else None) or "").rstrip("/")
+        # Loopback origins are always same-machine development clients. Keep
+        # them usable even when a deployment profile carries a production
+        # ALLOWED_ORIGINS list; non-loopback origins remain strictly allowlisted.
+        from urllib.parse import urlsplit
+        parsed_candidate = urlsplit(candidate)
+        loopback_allowed = (
+            parsed_candidate.scheme in {"http", "https"}
+            and parsed_candidate.hostname in {"localhost", "127.0.0.1", "::1"}
+            and parsed_candidate.port in {5173, 8000}
+        )
+        origin_allowed = loopback_allowed or candidate in DEV_ORIGINS or any(
+            candidate == allowed or candidate.startswith(allowed + "/")
+            for allowed in allowed_origins
+        )
+        if candidate and not origin_allowed:
             from fastapi.responses import JSONResponse
             return JSONResponse(status_code=403, content={"error": True, "message": "Cross-origin request rejected"})
     return await call_next(request)

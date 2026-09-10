@@ -210,9 +210,11 @@ def test_totp_recovery_and_password_reset_use_postgres_and_fake_delivery():
         json={
             "email": "pg-owner@example.test",
             "password": "pg-owner-new-password",
-            # Enabling TOTP records the current counter as used; use the next
-            # 30-second counter for the post-reset login.
-            "totp_code": _totp_at(secret, _totp_counter(dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=31))),
+            # Enabling TOTP records the current counter as used; use exactly
+            # the next counter.  Adding a fixed 31 seconds can cross two
+            # windows when the test starts near a boundary and would create
+            # a legitimately invalid code.
+            "totp_code": _totp_at(secret, _totp_counter(dt.datetime.now(dt.timezone.utc)) + 1),
         },
     )
     assert final_login.status_code == 200
