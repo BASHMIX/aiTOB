@@ -16,6 +16,7 @@ from backend.core.workspace_auth import (
     change_password, create_password_reset, consume_password_reset,
     create_email_verification, consume_email_verification,
     list_workspace_members, list_workspace_invitations, cancel_workspace_invitation,
+    update_account_profile,
     enforce_auth_rate_limit, enforce_public_registration_rate_limit,
 )
 from backend.core.entitlements import EntitlementLimitExceeded, require_workspace_capacity
@@ -78,6 +79,13 @@ class PasswordResetRequest(BaseModel):
 class PasswordResetCompletion(BaseModel):
     token: str = Field(min_length=20, max_length=512)
     new_password: str = Field(min_length=10, max_length=1024)
+
+
+class ProfileUpdateRequest(BaseModel):
+    """Signed-in profile fields; workspace rename is Owner-only server-side."""
+
+    display_name: str | None = Field(default=None, min_length=1, max_length=120)
+    workspace_name: str | None = Field(default=None, min_length=1, max_length=120)
 
 
 class TokenRequest(BaseModel):
@@ -254,6 +262,19 @@ async def cancel_invitation(invitation_id: str, principal: SessionPrincipal = De
 async def password_change(body: PasswordChangeRequest, principal: SessionPrincipal = Depends(current_session_principal)):
     try:
         await change_password(principal, body.password, body.new_password)
+    except (PermissionError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.patch("/session/profile")
+async def profile_update(body: ProfileUpdateRequest, principal: SessionPrincipal = Depends(current_session_principal)):
+    """Update account display name and, for Owners, the current workspace name."""
+    try:
+        return await update_account_profile(
+            principal,
+            display_name=body.display_name,
+            workspace_name=body.workspace_name,
+        )
     except (PermissionError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

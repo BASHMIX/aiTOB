@@ -903,6 +903,64 @@ async def change_password(principal: SessionPrincipal, current_password: str, ne
             await db.rollback(); raise
 
 
+async def update_account_profile(
+    principal: SessionPrincipal,
+    *,
+    display_name: str | None = None,
+    workspace_name: str | None = None,
+) -> dict[str, object]:
+    """Update the signed-in account's profile without accepting tenant IDs.
+
+    A member may edit their own display name.  Renaming the workspace is an
+    Owner-only operation and is checked again inside the transaction so a
+    role change racing this request cannot grant the capability.  The update
+    is intentionally separate from password/MFA changes and records a
+    redacted audit event in the same transaction.
+    """
+    if display_name is None and workspace_name is None:
+        raise ValueError("At least one profile field is required.")
+    normalized_display = display_name.strip() if display_name is not None else None
+    normalized_workspace = workspace_name.strip() if workspace_name is not None else None
+    if normalized_display is not None and not normalized_display:
+        raise ValueError("Display name cannot be empty.")
+    if normalized_workspace is not None and not normalized_workspace:
+        raise ValueError("Workspace name cannot be empty.")
+    async with aiosqlite.connect(database.DB_PATH) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            await _require_account_session(db, principal)
+            changed: list[str] = []
+            if normalized_workspace is not None:
+                await _require_current_owner(db, principal)
+                await db.execute(
+                    "UPDATE workspaces SET name=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='active'",
+                    (normalized_workspace[:120], principal.workspace_id),
+                )
+                changed.append("workspace_name")
+            if normalized_display is not None:
+                await db.execute(
+                    "UPDATE users SET display_name=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='active'",
+                    (normalized_display[:120], principal.user_id),
+                )
+                changed.append("display_name")
+            await db.execute(
+                """INSERT INTO audit_events
+                   (id, workspace_id, actor_id, action, target_type, target_id,
+                    outcome, detail_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    str(uuid.uuid4()), principal.workspace_id, principal.user_id,
+                    "account.profile_updated", "workspace", principal.workspace_id,
+                    "accepted", json.dumps({"fields": changed}, separators=(",", ":")),
+                ),
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+    return await session_public_profile(principal)
+
+
 async def create_password_reset(email: str, *, now=None) -> str | None:
     """Create a delivery token; callers must return a generic response publicly."""
     issued = now or _utcnow()

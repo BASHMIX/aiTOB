@@ -239,7 +239,16 @@ operational check; a rehearsal is never a cutover.
   profile, session-derived workspace (client workspace spoof ignored), logout,
   and durable revocation in `test_postgres_identity_acceptance.py` (3/3 PG
   cases, 2026-09-10). The one-time bootstrap remains environment-gated and no
-  default credential is created.
+  default credential is created. The protected Account Settings path now has
+  `PATCH /api/session/profile`: it updates the signed-in user's display name,
+  permits workspace-name changes only after an in-transaction Owner check,
+  ignores client-supplied workspace identifiers, and records a redacted audit
+  event. `test_signed_in_profile_update_is_owner_scoped_and_audited` and
+  `test_profile_http_route_uses_session_and_rejects_client_workspace_selection`
+  pass (2/2, 2026-09-11), and `npm run build` passes. T010 remains partial only
+  because public registration is deliberately still configuration-closed while
+  the final live acceptance gates are open; no setup endpoint or default
+  credential bypass was added.
 - [~] **T011 / FR-003–005** Email verification, password change/reset, TOTP
   recovery codes, session revocation and auth rate limits are implemented and
   covered by session tests; account UI is present. Email delivery remains

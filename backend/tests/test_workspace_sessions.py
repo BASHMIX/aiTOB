@@ -19,7 +19,7 @@ from backend.core.workspace_auth import (
     legacy_owner_principal, permission_allowed,
     accept_workspace_invitation, create_workspace_invitation, cancel_workspace_invitation, disable_workspace_member,
     _totp_at, begin_totp_setup, disable_totp, enable_totp, hash_password,
-    register_workspace_owner, set_workspace_member_role,
+    register_workspace_owner, set_workspace_member_role, update_account_profile,
 )
 
 
@@ -190,6 +190,51 @@ def test_invitation_projection_and_cancellation_are_owner_scoped(isolated_worksp
         assert invitation["email"] == "one@example.test"
 
     run(verify())
+
+
+def test_signed_in_profile_update_is_owner_scoped_and_audited(isolated_workspace_db: Path):
+    """The account UI has a protected profile path, not a client workspace switch."""
+    async def verify():
+        _, owner = await authenticate_password(OWNER_EMAIL, OWNER_PASSWORD)
+        updated = await update_account_profile(
+            owner, display_name="Renamed Owner", workspace_name="Renamed Workspace",
+        )
+        assert updated["display_name"] == "Renamed Owner"
+        assert updated["workspace_name"] == "Renamed Workspace"
+
+        _, token = await create_workspace_invitation(owner, "profile-member@example.test", "viewer")
+        await accept_workspace_invitation(token, "member-password", "Member")
+        _, member = await authenticate_password("profile-member@example.test", "member-password")
+        member_updated = await update_account_profile(member, display_name="Member Updated")
+        assert member_updated["display_name"] == "Member Updated"
+        with pytest.raises(PermissionError, match="Owner"):
+            await update_account_profile(member, workspace_name="Unauthorized Rename")
+
+        async with aiosqlite.connect(isolated_workspace_db) as db:
+            rows = await (await db.execute(
+                "SELECT action, detail_json FROM audit_events WHERE workspace_id=? ORDER BY created_at",
+                (owner.workspace_id,),
+            )).fetchall()
+        assert any(row[0] == "account.profile_updated" and "workspace_name" in row[1] for row in rows)
+
+    run(verify())
+
+
+def test_profile_http_route_uses_session_and_rejects_client_workspace_selection(isolated_workspace_db: Path):
+    client = TestClient(app)
+    assert client.post(
+        "/api/session/login",
+        json={"email": OWNER_EMAIL, "password": OWNER_PASSWORD},
+    ).status_code == 200
+    changed = client.patch(
+        "/api/session/profile",
+        json={"display_name": "HTTP Owner", "workspace_name": "HTTP Workspace", "workspace_id": "foreign"},
+    )
+    assert changed.status_code == 200
+    profile = client.get("/api/session").json()
+    assert profile["display_name"] == "HTTP Owner"
+    assert profile["workspace_name"] == "HTTP Workspace"
+    assert profile["workspace_id"] != "foreign"
 
 
 def test_stale_owner_principal_cannot_invite_after_membership_disabled(isolated_workspace_db: Path):

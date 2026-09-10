@@ -12,6 +12,9 @@ export function AccountSettings() {
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [profileName, setProfileName] = useState('');
+  const [workspaceName, setWorkspaceName] = useState('');
+  const [profileBusy, setProfileBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [mfaPassword, setMfaPassword] = useState('');
   const [mfaSecret, setMfaSecret] = useState('');
@@ -31,6 +34,8 @@ export function AccountSettings() {
     ]).then(([session, memberResponse, invitationResponse]) => {
       if (!alive) return;
       setProfile(session.data);
+      setProfileName(session.data.display_name || '');
+      setWorkspaceName(session.data.workspace_name || '');
       setMembers(memberResponse.data.members || []);
       setInvitations(invitationResponse.data.invitations || []);
       axios.get(`/api/platform/workspaces/${encodeURIComponent(session.data.workspace_id)}/subscription`)
@@ -39,6 +44,29 @@ export function AccountSettings() {
     }).catch(() => alive && setNotice('Account settings could not be loaded.'));
     return () => { alive = false; };
   }, []);
+
+  const saveProfile = async () => {
+    if (!profile || profileBusy) return;
+    const displayChanged = profileName.trim() !== profile.display_name;
+    const workspaceChanged = workspaceName.trim() !== profile.workspace_name;
+    if (!displayChanged && !workspaceChanged) {
+      setNotice('No profile changes to save.');
+      return;
+    }
+    setProfileBusy(true); setNotice('');
+    try {
+      const response = await axios.patch('/api/session/profile', {
+        ...(displayChanged ? { display_name: profileName.trim() } : {}),
+        ...(workspaceChanged && profile.role === 'owner' ? { workspace_name: workspaceName.trim() } : {}),
+      });
+      setProfile(response.data);
+      setProfileName(response.data.display_name || '');
+      setWorkspaceName(response.data.workspace_name || '');
+      setNotice('Profile updated.');
+    } catch (error) {
+      setNotice(axios.isAxiosError(error) ? (error.response?.data?.detail || 'Profile update failed.') : 'Profile update failed.');
+    } finally { setProfileBusy(false); }
+  };
 
   const changePassword = async () => {
     setNotice('');
@@ -122,6 +150,11 @@ export function AccountSettings() {
     <div className="space-y-5">
       <section className="rounded-xl border border-white/10 bg-cardDark p-5">
         <h2 className="text-base font-bold text-white">Account & workspace</h2>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <label className="space-y-1.5"><span className="text-[10px] font-mono uppercase tracking-wider text-textDim">Display name</span><input value={profileName} onChange={(event) => setProfileName(event.target.value)} maxLength={120} className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white" /></label>
+          <label className="space-y-1.5"><span className="text-[10px] font-mono uppercase tracking-wider text-textDim">Workspace name {profile.role !== 'owner' && <span>(Owner only)</span>}</span><input value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} disabled={profile.role !== 'owner'} maxLength={120} className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-50" /></label>
+        </div>
+        <button type="button" onClick={saveProfile} disabled={profileBusy || !profileName.trim() || (profile.role === 'owner' && !workspaceName.trim())} className="mt-3 rounded-lg border border-accentYellow/50 px-4 py-2 text-xs font-bold text-accentYellow disabled:cursor-not-allowed disabled:opacity-40">{profileBusy ? 'Saving…' : 'Save profile'}</button>
         <dl className="mt-4 grid gap-3 text-xs sm:grid-cols-2">
           <div><dt className="text-textDim">Signed in as</dt><dd className="mt-1 font-semibold text-white">{profile.display_name} · {profile.email}</dd></div>
           <div><dt className="text-textDim">Workspace</dt><dd className="mt-1 font-semibold text-white">{profile.workspace_name}</dd></div>
