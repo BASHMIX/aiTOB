@@ -726,18 +726,17 @@ operational check; a rehearsal is never a cutover.
   readable with both verified entrant mentions and one Ready component. The
   bot is connected in the candidate process, but button clicks by the two
   user sessions are not simulated; the human gate is therefore still open.
-  OBS Studio is installed and was launched without changing any existing scene
-  or Browser Source, but this environment exposes no native OBS inspection
-  surface, so visual Browser Source confirmation remains open rather than
-  being inferred from the HTTP overlay check. SMTP remains deferred pending
-  service fields; payment remains deferred by decision.
+  The user confirmed the full station Browser Source and the single-slide
+  Overlay link rendered and updated inside OBS without changing any existing
+  scene or source. This is visual OBS evidence only; SMTP remains deferred
+  pending service delivery proof and payment remains deferred by decision.
   On 2026-09-10 the Vite dev proxy was corrected to forward only
   `/obs/{station}/data` and `/obs/{station}` requests to the API while keeping
   the React `/obs` page on 5173. A freshly issued revocable acceptance link
   loaded the T073 station in a new browser tab and visibly rendered the two
   participant names, avatar layers, round and 0–0 telemetry; the page emitted
-  no overlay fetch errors. This is browser evidence, not a substitute for the
-  still-open native OBS Studio visual gate.
+  no overlay fetch errors. Together with the user's OBS confirmation, this
+  closes the Browser Source visual gate without introducing OBS WebSocket.
 
   Queue classification is now recorded against the running candidate rather
   than inferred from counts. The eight legacy Outbox rows remain
