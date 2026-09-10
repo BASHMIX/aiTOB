@@ -68,9 +68,8 @@ operational check; a rehearsal is never a cutover.
   bootstrap, approvals, reservations, claims and ledger operations, avoiding
   serialization of unrelated organizations. Full local regression after the
   identity-link, overlay-isolation, retention, worker-scope and WebSocket
-  authorization fixes: 445 passed, 21 skipped (2026-09-10; additional
-  acceptance and recovery-safety assertions were added after the earlier
-  388-pass run). The two bot SQLite
+  authorization fixes: 447 passed, 27 skipped (2026-09-10; the skips are
+  explicitly documented test-environment/live-dependency cases). The two bot SQLite
   reads were replaced with
   repository calls and are guarded by `test_runtime_bot_paths_do_not_open_sqlite_directly`.
   Player listing and platform-admin checks now use repository functions and are
@@ -187,7 +186,7 @@ operational check; a rehearsal is never a cutover.
   A broad `--postgres` sweep exposed 36 legacy fixture/harness incompatibilities
   during the first run; these were not suppressed. After the targeted fixes and
   explicit SQLite-source marker, the complete PostgreSQL-targeted regression
-  passes 461/461 with five intentional skips (three source-migration cases,
+  passes 469/469 with five intentional skips (three source-migration cases,
   the disabled AI Referee benchmark, and one live-network test). The remaining
   T004 work is limited to documented compatibility contexts, not runtime
   SQLite fallback or unscoped transactions.
@@ -385,7 +384,9 @@ operational check; a rehearsal is never a cutover.
   checks every owning-workspace overlay JSON value (including nested image
   `src` and `background_url`) and rejects a referenced asset; SQLite focused
   and disposable-PostgreSQL regressions pass. Legacy unowned preset backfill
-  remains a cutover concern.
+  remains a cutover concern. `test_assets_workspace_scope.py` now proves the
+  HTTP listing never enumerates shared legacy files: 1 local and 1 PostgreSQL
+  case pass after explicitly isolating this SQLite fixture from the PG harness.
 - [~] **T033 / FR-008** Revocable hashed workspace-station Browser Source tokens
   and least-privilege `/obs/{station}/data` plus authenticated overlay WebSocket
   are implemented; issuance/revocation and cross-workspace tests pass. Existing
