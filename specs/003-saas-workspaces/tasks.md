@@ -278,7 +278,7 @@ operational check; a rehearsal is never a cutover.
 
 ## C. Ownership and tenant isolation
 
-- [~] **T020 / FR-001–003, FR-006** Preparatory nullable `workspace_id`
+- [x] **T020 / FR-001–003, FR-006** Preparatory nullable `workspace_id`
   migrations now cover core operational tables. The current legacy Hub rows
   were backfilled to the designated BASHMIX Owner workspace only after a
   successful copy rehearsal and integrity check; service/query scoping remains
@@ -292,7 +292,8 @@ operational check; a rehearsal is never a cutover.
   acceptance adds 3 cases for unowned-player/link exclusion, foreign workflow
   mutation rejection, and the two-workspace claim boundary (26 focused cases
   including existing V2 repository coverage). Final non-null ownership enforcement
-  for every legacy row remains gated by the controlled cutover backfill.
+  for every legacy row was completed on the selected PostgreSQL candidate;
+  the preserved SQLite source remains read-only rollback material.
   On 2026-09-10, after a fresh candidate backup, the remaining nullable
   operational rows were checked for foreign-workspace conflicts and backfilled
   transactionally to the sole active Owner workspace: 2 planned streams, 10
@@ -307,7 +308,7 @@ operational check; a rehearsal is never a cutover.
   chooses an Owner or assigns rows. A PostgreSQL regression proves a NULL row
   aborts the gate, while a fully backfilled candidate applies the constraints
   successfully (4/4 workspace acceptance cases pass).
-- [~] **T021 / FR-001, FR-009–010** The current operational SQLite file was
+- [x] **T021 / FR-001, FR-009–010** The current operational SQLite file was
   inspected read-only on 2026-09-09. It contains exactly one active Owner
   workspace (`bashmix-tournament-hub`), one Owner membership, and zero NULL
   `workspace_id` values across tournaments, active matches, players, stations,
@@ -420,11 +421,12 @@ operational check; a rehearsal is never a cutover.
   (`test_tournament_progression_and_state_axes.py`, 9/9), and an unbound
   Start.gg integration now returns explicit HTTP 409 setup state rather than a
   500 or global-credential fallback (`test_verify_stream.py`, 7/7).
-- [~] **T033 / FR-008** Revocable hashed workspace-station Browser Source tokens
+- [x] **T033 / FR-008** Revocable hashed workspace-station Browser Source tokens
   and least-privilege `/obs/{station}/data` plus authenticated overlay WebSocket
-  are implemented; issuance/revocation and cross-workspace tests pass. Existing
-  legacy overlay presets still need an explicit ownership backfill before this
-  task can close.
+  are implemented; issuance/revocation and cross-workspace tests pass. The
+  selected candidate now has zero unowned stations, overlays, access tokens or
+  media assets and rejects future unowned operational overlay rows. Native OBS
+  visual confirmation remains an external T053 gate, not an ownership gap.
 
 ## E. Security, plans and operations
 
