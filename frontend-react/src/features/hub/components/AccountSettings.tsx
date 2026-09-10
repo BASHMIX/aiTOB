@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
 
-type Profile = { email: string; display_name: string; role: string; workspace_id: string; workspace_name: string; mfa_enabled?: boolean };
+type Profile = { email: string; display_name: string; role: string; workspace_id: string; workspace_name: string; email_verified?: boolean; mfa_enabled?: boolean };
 type Subscription = { plan_key: string; status: string; billing_state: string; expires_at?: string | null };
 type Member = { id: string; email: string; display_name: string; role: string; status: string };
 type Invitation = { id: string; email: string; role: string; expires_at: string; accepted_at?: string | null; cancelled_at?: string | null };
@@ -15,6 +15,7 @@ export function AccountSettings() {
   const [profileName, setProfileName] = useState('');
   const [workspaceName, setWorkspaceName] = useState('');
   const [profileBusy, setProfileBusy] = useState(false);
+  const [verificationBusy, setVerificationBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [mfaPassword, setMfaPassword] = useState('');
   const [mfaSecret, setMfaSecret] = useState('');
@@ -76,6 +77,19 @@ export function AccountSettings() {
     } catch (error) {
       setNotice(axios.isAxiosError(error) ? (error.response?.data?.detail || 'Password update failed.') : 'Password update failed.');
     }
+  };
+
+  const requestEmailVerification = async () => {
+    if (verificationBusy) return;
+    setVerificationBusy(true); setNotice('');
+    try {
+      const response = await axios.post('/api/session/email-verification/request');
+      setNotice(response.data?.delivery === 'email_if_configured'
+        ? 'Verification request accepted. Check the configured email delivery service.'
+        : 'Verification request accepted.');
+    } catch (error) {
+      setNotice(axios.isAxiosError(error) ? (error.response?.data?.detail || 'Verification request failed.') : 'Verification request failed.');
+    } finally { setVerificationBusy(false); }
   };
 
   const beginMfa = async () => {
@@ -159,6 +173,7 @@ export function AccountSettings() {
           <div><dt className="text-textDim">Signed in as</dt><dd className="mt-1 font-semibold text-white">{profile.display_name} · {profile.email}</dd></div>
           <div><dt className="text-textDim">Workspace</dt><dd className="mt-1 font-semibold text-white">{profile.workspace_name}</dd></div>
           <div><dt className="text-textDim">Role</dt><dd className="mt-1 font-semibold text-white">{profile.role}</dd></div>
+          <div><dt className="text-textDim">Email verification</dt><dd className="mt-1 flex flex-wrap items-center gap-2 font-semibold text-white"><span>{profile.email_verified ? 'Verified' : 'Not verified'}</span>{!profile.email_verified && <button type="button" onClick={requestEmailVerification} disabled={verificationBusy} className="rounded border border-accentYellow/50 px-2 py-1 text-[10px] font-bold text-accentYellow disabled:opacity-40">{verificationBusy ? 'Sending…' : 'Send verification'}</button>}</dd></div>
           <div><dt className="text-textDim">Two-factor authentication</dt><dd className="mt-1 font-semibold text-white">{profile.mfa_enabled ? 'Enabled' : 'Not enabled'}</dd></div>
         </dl>
       </section>

@@ -253,7 +253,10 @@ operational check; a rehearsal is never a cutover.
   rendering and protected-save behavior. The complete backend suite remains
   green after this route was added: 459 passed / 31 intentionally skipped in
   159.05s (`.venv\\Scripts\\python.exe -m pytest -q backend/tests`,
-  2026-09-11).
+  2026-09-11). Account Settings also now exposes the existing email-verification
+  request route with an explicit unverified/verified state; it never displays a
+  token and reports SMTP as delivery-dependent. `npm run build` passes after
+  this linkage (2026-09-11).
 - [~] **T011 / FR-003–005** Email verification, password change/reset, TOTP
   recovery codes, session revocation and auth rate limits are implemented and
   covered by session tests; account UI is present. Email delivery remains
