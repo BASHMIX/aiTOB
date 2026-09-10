@@ -20,6 +20,11 @@ def run(coro):
 def asset_scope_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     db_path = tmp_path / "asset-scope.sqlite"
     monkeypatch.setattr(database, "DB_PATH", str(db_path))
+    # This test intentionally exercises the SQLite asset fixture.  When the
+    # PostgreSQL suite is invoked with ``--postgres``, conftest injects a
+    # DATABASE_URL for every test; remove it here so the fixture cannot write
+    # into an unrelated PostgreSQL database.
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("AITOB_TESTING", "1")
     monkeypatch.setattr(assets_router, "ASSETS_DIR", str(tmp_path / "shared-assets"))
     Path(assets_router.ASSETS_DIR).mkdir()
