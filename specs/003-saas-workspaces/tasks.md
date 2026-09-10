@@ -617,9 +617,10 @@ operational check; a rehearsal is never a cutover.
   players, no duplicate after restart, managed Cloudinary uploads through the
   participant and Discord paths, reference-guarded deletion, and overlay data
   recovery across API restart. Old held queues and legacy images were not
-  touched. T053 remains open only for a human Discord Ready-button click, a
-  visual OBS Browser Source session (OBS WebSocket is not used), and live SMTP
-  delivery; these are explicit external/session prerequisites.
+  touched. T053 remains open only for a human Discord Ready-button click,
+  native OBS Studio visual confirmation of the already-verified Browser Source
+  (OBS WebSocket is not used), and live SMTP delivery; these are explicit
+  external/session prerequisites.
   On 2026-09-10 the independent Challonge result gate was exercised on fresh
   match `challonge:fnc-jo:18449397:471045163` (not one of the held legacy
   rows). The organizer workflow performed a freshness preflight, one remote
