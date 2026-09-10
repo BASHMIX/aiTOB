@@ -564,8 +564,8 @@ operational check; a rehearsal is never a cutover.
   A bounded candidate-only recheck (2026-09-09) verified the reviewed backup
   manifest and confirmed from two independent PostgreSQL process contexts that
   the explicit queue hold leaves zero claimable Outbox or Hub commands. The
-  candidate remains isolated and is not the runtime source; the held rows still
-  require reconciliation before this task can be closed. On 2026-09-10 the
+  held rows still require reconciliation before this task can be closed. On
+  2026-09-10 the
   duplicate API/Bot processes were identified by project working directory and
   command line, stopped, and replaced with one API process and one Bot process
   using the candidate database; Vite stayed on 5173 and proxied to API 8000.
@@ -573,7 +573,9 @@ operational check; a rehearsal is never a cutover.
   Discord Gateway and local Hub WebSocket connected, while all eight held
   Outbox rows and nine held Hub commands remained unclaimable. This is a
   controlled candidate run, not final cutover; the old `aitob` database remains
-  preserved and no SQLite re-import was performed.
+  preserved and no SQLite re-import was performed. The managed runtime now
+  points explicitly at the candidate database; this is runtime-source
+  reconciliation, not completion of final cutover acceptance.
 - [ ] **T053 / SC-001–006, FR-017** Run final acceptance only after T004–T051a;
   the required matrix is:
 

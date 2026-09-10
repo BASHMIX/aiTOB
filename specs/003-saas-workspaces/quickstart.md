@@ -366,7 +366,9 @@ startup probes disabled; `/health` and `/readiness` returned 200 with
 were returned. The Bot connected to Discord and the local Hub WebSocket; the
 reviewed eight Outbox rows and nine held Hub commands remained unchanged and
 unclaimable. The old `aitob` database remains preserved and is not consumed by
-any current API or Bot process.
+any current API or Bot process. The managed runtime now points explicitly at
+the populated candidate database; this does not by itself close final cutover
+acceptance.
 
 For a cutover review window, set `AITOB_DISABLE_BACKGROUND_WORKERS=true` before
 starting the API. It initializes the database and accepts read-only checks but
