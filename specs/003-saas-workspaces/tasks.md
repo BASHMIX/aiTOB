@@ -281,9 +281,8 @@ operational check; a rehearsal is never a cutover.
 - [x] **T020 / FR-001–003, FR-006** Preparatory nullable `workspace_id`
   migrations now cover core operational tables. The current legacy Hub rows
   were backfilled to the designated BASHMIX Owner workspace only after a
-  successful copy rehearsal and integrity check; service/query scoping remains
-  incomplete and is deliberately not enforced until Owner backfill validates
-  the data: tournaments, matches,
+  successful copy rehearsal and integrity check; service/query scoping is now
+  enforced for tournaments, matches,
   players/identities/assets, stations/overlays, integrations/destinations,
   commands/ledger/outbox, caches/budgets, proposals, Dispatcher and audit.
   PostgreSQL acceptance now exercises colliding workspace/station/tournament
