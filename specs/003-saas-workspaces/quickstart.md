@@ -383,6 +383,12 @@ account types (Start.gg, Challonge and Discord); both candidate tournaments
 reported `provider_sync_status=ready` after reconciliation. No credential value
 is recorded here.
 
+No SMTP/Mail configuration keys are present in the local profiles, so live
+email delivery remains an external deployment dependency. `CLOUDINARY_URL` is
+configured in the local profiles; no legacy image URLs were changed. OBS uses
+the existing Browser Source/overlay URL path only; no OBS WebSocket control
+dependency is part of this runtime.
+
 Worker evidence from the same run: Dispatcher heartbeat was fresh and the
 organizer console reported `service_alive=true` (the Challonge tournament is
 paused at its configured scope, while the Start.gg tournament is not). The Bot

@@ -564,7 +564,7 @@ operational check; a rehearsal is never a cutover.
   cutover pause window are
   still required before T052; an older database is never restored over newer
   writes.
-- [ ] **T052 / FR-016** Perform final controlled cutover only after required
+- [~] **T052 / FR-016** Perform final controlled cutover only after required
   T004–T051a work is complete; an unconfigured payment gateway may leave T042
   pending without blocking the free/non-billed cutover. Pause writes/workers,
   create verified backup, inspect pending commands/outbox,
@@ -584,7 +584,7 @@ operational check; a rehearsal is never a cutover.
   preserved and no SQLite re-import was performed. The managed runtime now
   points explicitly at the candidate database; this is runtime-source
   reconciliation, not completion of final cutover acceptance.
-- [ ] **T053 / SC-001–006, FR-017** Run final acceptance only after T004–T051a;
+- [~] **T053 / SC-001–006, FR-017** Run final acceptance only after T004–T051a;
   the required matrix is:
 
   | SC | Scenario and data | Steps | Expected result | Evidence |
