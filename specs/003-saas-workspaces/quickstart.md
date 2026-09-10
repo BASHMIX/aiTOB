@@ -459,6 +459,13 @@ so visual OBS confirmation is explicitly blocked rather than inferred from
 the already-passing HTTP overlay/restart check. SMTP remains the only live
 service dependency; payment is deferred by decision.
 
+Runtime status after the gate: API workers were resumed against the same
+candidate PostgreSQL after the allow-list hold was rechecked. `/readiness` is
+200 with `database=postgresql`, `/api/status` reports Start.gg, Discord and
+WebSocket connectivity, and the bot Gateway/Hub WebSocket are connected.
+The eight held Outbox rows remain `needs_review`, the nine held Hub commands
+remain `needs_review`, and a fresh claim still returns none of those rows.
+
 Worker evidence from the same run: Dispatcher heartbeat was fresh and the
 organizer console reported `service_alive=true` (the Challonge tournament is
 paused at its configured scope, while the Start.gg tournament is not). The Bot
