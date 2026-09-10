@@ -565,3 +565,18 @@ workspace and are not provider mutations; no external notification was sent.
 The scoped workspace repair changed only their missing ownership fields and
 added redacted audit records. This backlog is distinct from the historical
 held rows and will not be drained as part of rollback or recovery.
+
+The complete local backend regression was rerun after the workspace-scope
+repair: 452 passed / 28 skipped. The skipped tests are not hidden failures:
+27 PostgreSQL-target cases are gated on the explicit `AITOB_PG_TEST_URL`
+(three identity, one migration, 20 storage and three workspace-acceptance
+tests) and pass in the separate PostgreSQL run; the only non-PostgreSQL skip is
+the disabled legacy AI Referee benchmark, pending Result Claims. No required
+local account, isolation, asset, security, worker or queue-hold test was
+skipped.
+
+The candidate runtime enables `AITOB_ENFORCE_WORKSPACE_NOT_NULL=true`. The
+startup gate fails closed if any operational table still contains a NULL
+`workspace_id`, and applies PostgreSQL constraints only after the explicit
+backfill; it never selects or creates an Owner implicitly. The focused
+PostgreSQL regression covers both the rejecting and fully-backfilled paths.

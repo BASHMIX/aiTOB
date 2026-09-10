@@ -293,6 +293,20 @@ operational check; a rehearsal is never a cutover.
   mutation rejection, and the two-workspace claim boundary (26 focused cases
   including existing V2 repository coverage). Final non-null ownership enforcement
   for every legacy row remains gated by the controlled cutover backfill.
+  On 2026-09-10, after a fresh candidate backup, the remaining nullable
+  operational rows were checked for foreign-workspace conflicts and backfilled
+  transactionally to the sole active Owner workspace: 2 planned streams, 10
+  player overrides, 2 provider identity links and 85 provider API usage rows.
+  Four redacted audit events record the exact table counts. The candidate then
+  applied `NOT NULL` to 21 operational `workspace_id` columns; only global
+  telemetry (`bot_feed` and `error_events`) remains intentionally nullable.
+  No tournament, match, provider result, image URL or held queue status was
+  changed.
+  `enforce_postgres_workspace_ownership()` is now an explicit fail-closed
+  startup gate controlled by `AITOB_ENFORCE_WORKSPACE_NOT_NULL=true`; it never
+  chooses an Owner or assigns rows. A PostgreSQL regression proves a NULL row
+  aborts the gate, while a fully backfilled candidate applies the constraints
+  successfully (4/4 workspace acceptance cases pass).
 - [~] **T021 / FR-001, FR-009–010** The current operational SQLite file was
   inspected read-only on 2026-09-09. It contains exactly one active Owner
   workspace (`bashmix-tournament-hub`), one Owner membership, and zero NULL
@@ -304,7 +318,9 @@ operational check; a rehearsal is never a cutover.
   and backfill had already been applied before this pass; no write or repeat
   migration was performed here. `backfill_legacy_workspace.py` remains
   idempotent and requires an explicit active Owner before `--apply`.
-  PostgreSQL `NOT NULL`/unique constraints and two-tenant acceptance remain.
+  The populated candidate now has the PostgreSQL `NOT NULL`/workspace-unique
+  constraints applied after the backfill; two-tenant acceptance remains
+  tracked under T022/T053.
 - [~] **T022 / FR-001–003, FR-006** HTTP match/tournament/station/provider and
   WebSocket hub/overlay paths now derive workspace from trusted session or
   revocable overlay token; worker claims carry durable workspace IDs and
@@ -339,16 +355,20 @@ operational check; a rehearsal is never a cutover.
   enumeration and propagation are scoped to the trusted owner workspace.
   Provider budgets/caches and remaining global bot service contexts still need
   explicit tenant ownership before the temporary compatibility enumeration is
-  removed. In-process budget/backoff state is account-keyed; durable budget/cache
-  schema ownership and the legacy bot service contexts remain open for the
-  repository parity pass.
+  removed. In-process budget/backoff state is account-keyed; the populated
+  candidate now has durable budget/cache/usage ownership constraints. Only the
+  legacy bot service contexts remain open for the repository parity pass.
   Tournament snapshot/status and refresh/stream lookup now carry the trusted
   workspace; the new regression proves cross-workspace snapshot reads/writes
   are denied. Account isolation, rotation, provider snapshot scoping and worker
   claim acceptance pass on PostgreSQL. Destination creation now inherits the
   owning account workspace, and destination reads verify the account owner as
-  well as the requested workspace. The remaining gap is migration of the
-  final service identity and durable ownership constraints.
+  well as the requested workspace. The remaining compatibility gap is the
+  staged service identity used only by initial registration/heartbeat paths.
+  Candidate verification now shows zero NULL ownership for every account/provider/
+  Dispatcher/cache/identity table and the new PostgreSQL constraints reject
+  future unowned operational rows. The two global telemetry tables remain
+  outside tenant data projection by design.
 
 ## D. Integrations, assets and overlays
 
@@ -677,3 +697,13 @@ operational check; a rehearsal is never a cutover.
   external sinks and do not drain either queue. T053 therefore remains open
   only for the explicit human/session gates listed above; no generic “broader
   acceptance” placeholder is being used.
+
+  Full local regression rerun after the workspace-scope fix (2026-09-10)
+  completed at 452 passed / 28 skipped. The 28 skips are named and intentional:
+  27 PostgreSQL-target tests (three in `test_postgres_identity_acceptance.py`,
+  one migration case, 20 storage cases, and three workspace acceptance cases)
+  require the explicit `AITOB_PG_TEST_URL` flag and are covered by the
+  separate 32-case PostgreSQL run above; and
+  `test_referee_accuracy_benchmark` remains disabled until Result Claims.
+  No required local account, isolation, asset, security, worker, or queue-hold
+  test was skipped.

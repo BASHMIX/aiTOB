@@ -7,6 +7,7 @@ This does not repair or reinterpret user data.
 from __future__ import annotations
 
 import hashlib
+import os
 
 from backend.core.database_schema import INDEXES, MIGRATIONS, TABLE_SCHEMAS
 from backend.core.storage import postgres_ddl
@@ -94,7 +95,44 @@ async def apply_postgres_schema(db):
         await db.execute(statement)
         await db.execute("INSERT INTO schema_migration_history (migration_id, phase) VALUES (?, ?)", (migration_id, phase))
     await apply_workspace_constraint_migrations(db)
+    if os.getenv("AITOB_ENFORCE_WORKSPACE_NOT_NULL", "").strip().lower() in {"1", "true", "yes"}:
+        await enforce_postgres_workspace_ownership(db)
     # Caller commits the schema and its receipts in the same transaction.
+
+
+POSTGRES_WORKSPACE_TABLES = (
+    "action_proposals", "active_matches", "ai_usage_ledger", "audit_events",
+    "dispatcher_decisions", "dispatcher_dispatch_claims", "hub_commands",
+    "integration_accounts", "integration_destinations", "media_assets",
+    "overlay_access_tokens", "overlays", "planned_streams", "player_overrides",
+    "players", "provider_api_budgets", "provider_api_usage",
+    "provider_command_ledger", "provider_identity_links",
+    "provider_snapshot_cache", "stations", "tournament_player_links",
+    "tournaments", "user_sessions", "workflow_outbox",
+    "workspace_entitlements", "workspace_invitations", "workspace_memberships",
+)
+
+
+async def enforce_postgres_workspace_ownership(db):
+    """Make the candidate's operational ownership backfill durable.
+
+    This gate is opt-in because legacy databases must be backfilled and
+    reviewed first. It never assigns a workspace; any remaining NULL row fails
+    startup before the transaction commits. Global telemetry tables are
+    intentionally excluded and remain outside tenant projections.
+    """
+    for table in POSTGRES_WORKSPACE_TABLES:
+        async with db.execute(
+            f"SELECT count(*) FROM {table} WHERE workspace_id IS NULL"
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row and int(row[0]) > 0:
+            raise RuntimeError(
+                f"workspace ownership backfill required before enforcing {table}"
+            )
+        await db.execute(
+            f"ALTER TABLE {table} ALTER COLUMN workspace_id SET NOT NULL"
+        )
 
 
 async def apply_workspace_constraint_migrations(db):

@@ -114,3 +114,25 @@ async def test_workspace_bound_workflow_cannot_mutate_foreign_match():
         count = await (await db.execute("SELECT COUNT(*) FROM workflow_outbox")).fetchone()
     assert match[0] is None
     assert count[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_operational_workspace_ownership_gate_fails_closed_then_enforces():
+    from backend.core.schema_migrations import POSTGRES_WORKSPACE_TABLES, enforce_postgres_workspace_ownership
+
+    async with database.aiosqlite.connect(database.DB_PATH) as db:
+        await db.execute("INSERT INTO tournaments (slug, name) VALUES ('unowned-gate', 'Legacy')")
+        await db.commit()
+        with pytest.raises(RuntimeError, match="backfill required"):
+            await enforce_postgres_workspace_ownership(db)
+        await db.execute("DELETE FROM tournaments WHERE slug='unowned-gate'")
+        for table in POSTGRES_WORKSPACE_TABLES:
+            await db.execute(f"UPDATE {table} SET workspace_id='scope-a' WHERE workspace_id IS NULL")
+        await db.commit()
+        await enforce_postgres_workspace_ownership(db)
+        await db.commit()
+        row = await (await db.execute(
+            "SELECT is_nullable FROM information_schema.columns "
+            "WHERE table_schema='public' AND table_name='tournaments' AND column_name='workspace_id'"
+        )).fetchone()
+    assert row[0] == "NO"
