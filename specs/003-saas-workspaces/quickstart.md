@@ -91,8 +91,9 @@ and closing work on cancellation. The focused group then passed all 17 tests.
 The full post-fix rerun completed at 447 passed / 27 skipped (2026-09-10),
 including the Windows uvicorn selector-loop regression.
 After the launcher dotenv-isolation correction, the latest local backend suite
-completed at 449 passed / 27 skipped (2026-09-10); the added gate test now
-fails closed without starting services when `DATABASE_URL` is absent.
+completed at 450 passed / 27 skipped (2026-09-10); the added gate and
+owner-scoped Start.gg migration tests pass. The launcher gate fails closed
+without starting services when `DATABASE_URL` is absent.
 
 The PostgreSQL-enabled full regression uses the same `.venv` interpreter with
 `AITOB_PG_TEST_URL` set to the local PostgreSQL admin DSN; each PostgreSQL test
@@ -208,7 +209,7 @@ The same PostgreSQL run now includes Challonge local workflow (8/8), identity
 and per-event dispatch scoping (20/20), SQL-safety and tournament-removal
 checks (7/7); all are passing against disposable databases. SQLite-only
 migration-fixture tests remain intentionally separate from this runtime proof.
-The post-fix local regression was rerun on 2026-09-10: 449 passed / 27
+The post-fix local regression was rerun on 2026-09-10: 450 passed / 27
 intentionally skipped, with no hanging subprocesses or unhandled task errors.
 The complete PostgreSQL-targeted regression was then rerun with the explicit
 DSN: 469 passed / 5 skipped. The five skips are intentional and named: three
