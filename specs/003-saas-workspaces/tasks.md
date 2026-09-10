@@ -274,7 +274,8 @@ operational check; a rehearsal is never a cutover.
   `SMTP_HOST`/`SMTP_PORT`/`SMTP_USERNAME`/`SMTP_PASSWORD`/`SMTP_FROM` set), not
   through database fields. System → Account email delivery shows only safe
   status and offers an explicit test-recipient action; live sending remains a
-  separate deployment check.
+  separate deployment check. After the adapter and route linkage, the full
+  backend suite passes 462/462 with 31 intentional skips (2026-09-11).
 - [x] **T012 / FR-003** Canonical Owner / TO / Stream operator / Moderator /
   Viewer permission matrix is now present in `workspace_auth.py`, with legacy
   aliases retained only for staged data migration; session and WebSocket
