@@ -805,3 +805,29 @@ operational check; a rehearsal is never a cutover.
   disabled until Result Claims, and one SQLite-upgrade fixture is intentionally
   excluded because PostgreSQL migration coverage is separate. No required local
   account, isolation, asset, security, worker, or queue-hold test was skipped.
+
+  On 2026-09-11 a new acceptance operation was created from the FNCTest2026
+  Challonge dashboard on mutable set
+  `challonge:fnc-jo:18449397:471045166` (the five legacy effects for 471045163
+  were not reused).  The UI Call action persisted `called`, created Discord
+  thread `1547924919759798342` and call message `1547924922318200835`; the
+  organizer Force-to-In-Progress action then persisted `in_progress`.  The
+  organizer score path submitted 2–1 (winner entrant `303608374`) through the
+  Challonge adapter.  Provider read-back returned COMPLETE with scores 2/1,
+  and ledger id `e0d30a05-8cb6-4fb6-83ab-5e546bba638d` reached
+  `snapshot_verified`; one durable score ledger row and five workflow effects
+  were recorded, each outbox effect completed once.  API and Bot were restarted
+  against the same candidate PostgreSQL database; the UI refresh still showed
+  the target as DONE 2–1, and no duplicate ledger or outbox effects appeared.
+  After restart, an organizer edit set `swapped=true`; the API and subsequent
+  UI refresh retained `complete`, 2–1, provider `synced`, and the edit.  The
+  five historical outbox rows for 471045163 remain `needs_review` with no
+  lease/effect marker and were not consumed.
+
+  This acceptance process used only the candidate-process flags: `PROVIDER_V2_CONTRACTS_ENABLED=1`,
+  `PROVIDER_COORDINATOR_ENABLED=1`, `CHALLONGE_READ_ENABLED=1`,
+  `CHALLONGE_LOCAL_WORKFLOW_ENABLED=1`, and
+  `CHALLONGE_SCORE_COMMANDS_ENABLED=1`; `CHALLONGE_DQ_COMMANDS_ENABLED=0`.
+  These enable Challonge read/local workflow/score paths for the acceptance
+  target only.  DQ (including double-DQ), AI DQ, Auto-DQ, and any global rollout
+  remain disabled.
