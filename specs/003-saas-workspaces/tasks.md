@@ -709,9 +709,9 @@ operational check; a rehearsal is never a cutover.
   touched. The user then explicitly confirmed the full station link and
   single-slide Overlay link rendered and updated inside OBS; this closes the
   native OBS visual row only and does not claim Ready, provider, or SMTP
-  acceptance. T053 remains open for the human Discord Ready-button click, a
-  fresh mutable Start.gg acceptance target for score submission/verification,
-  and live SMTP delivery; these are explicit external/session prerequisites.
+  acceptance. T053 remains open for a fresh mutable Start.gg acceptance target
+  for score submission/verification and live SMTP delivery; these are explicit
+  external prerequisites.
   On 2026-09-10 the independent Challonge result gate was exercised on fresh
   match `challonge:fnc-jo:18449397:471045163` (not one of the held legacy
   rows). The organizer workflow performed a freshness preflight, one remote
@@ -724,9 +724,11 @@ operational check; a rehearsal is never a cutover.
   provider and the local projection was immediately reconciled. No second
   Start.gg score mutation was sent.
   The Discord call message for the existing Start.gg acceptance set remains
-  readable with both verified entrant mentions and one Ready component. The
-  bot is connected in the candidate process, but button clicks by the two
-  user sessions are not simulated; the human gate is therefore still open.
+  readable with both verified entrant mentions and one Ready component. On
+  2026-09-11 the user confirmed that both real Discord sessions pressed
+  `I'm Ready` and received the bot response `Both players ready!` with a
+  lobby password. This closes the human Ready gate only; it does not claim a
+  provider score mutation or live SMTP delivery.
   The user confirmed the full station Browser Source and the single-slide
   Overlay link rendered and updated inside OBS without changing any existing
   scene or source. This is visual OBS evidence only; SMTP remains deferred
