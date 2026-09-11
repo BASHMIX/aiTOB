@@ -52,11 +52,16 @@ async def provider_usage(provider_type: str, account_id: str | None = None, prin
 async def challonge_connection_state(principal: SessionPrincipal = Depends(require_permission("workspace.read"))):
     flags = get_provider_feature_flags()
     from backend.core.integrations import configured_secret_types, list_integration_accounts
-    connected = any(
-        bool(await configured_secret_types(account["id"]) & {"access_token", "api_key"})
-        for account in await list_integration_accounts(_workspace(principal))
-        if account["provider_type"] == "challonge" and account["status"] == "active"
-    )
+    # An async generator cannot be consumed by the builtin ``any``.  Resolve
+    # each account explicitly so the connection projection remains reliable in
+    # the running PostgreSQL API (and never leaks credential material).
+    connected = False
+    for account in await list_integration_accounts(_workspace(principal)):
+        if account["provider_type"] != "challonge" or account["status"] != "active":
+            continue
+        if await configured_secret_types(account["id"]) & {"access_token", "api_key"}:
+            connected = True
+            break
     return ChallongeConnectionStateResponse(enabled=flags.challonge_read_enabled, connected=connected)
 
 
