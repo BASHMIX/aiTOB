@@ -9,7 +9,7 @@ router = APIRouter(tags=["organizer-console"])
 
 @router.get("/organizer-console/{tournament_slug:path}")
 async def api_organizer_console(tournament_slug: str, principal: SessionPrincipal = Depends(require_permission("workspace.read"))):
-    """SQLite-only operational projection. It never polls a provider or bot."""
+    """Local-database operational projection. It never polls a provider or bot."""
     try:
         return await read_organizer_console(tournament_slug, principal.workspace_id)
     except ValueError as exc:
