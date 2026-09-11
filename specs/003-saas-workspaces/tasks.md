@@ -754,10 +754,15 @@ operational check; a rehearsal is never a cutover.
   closes the Browser Source visual gate without introducing OBS WebSocket.
 
   Queue classification is now recorded against the running candidate rather
-  than inferred from counts. The eight legacy Outbox rows remain
+  than inferred from counts. The eight legacy Outbox rows for matches
+  471045156/471045157 were classified as test fixtures.
   `needs_review` (four for match 471045156 and four for 471045157) and Hub
-  commands 126–134 remain `needs_review`; all are non-claimable after restart
-  and were not re-sent. The independent Challonge acceptance on match
+  471045156/471045157 and Hub commands 126–134 were deleted after the
+  Owner-authorized fixture cleanup transaction; their prior state is preserved
+  in 17 `queue.cleanup` audit rows, and all identifiers remain absent after
+  API and worker restart. The following historical hold classification is
+  superseded by this cleanup evidence. The independent Challonge acceptance on
+  match
   471045163 already performed and verified its single remote score mutation
   (2–1, winner entrant 303608384). Its five local follow-up effects are
   distinct pending rows, not additional provider mutations: event IDs
