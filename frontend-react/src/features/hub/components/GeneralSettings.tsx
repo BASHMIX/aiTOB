@@ -427,14 +427,20 @@ export function GeneralSettings({ section = 'all', embedded = false }: { section
 
       </div>
 
-      {showSystem && emailStatus && <section className="rounded-xl border border-white/10 bg-cardDark p-5 shadow-sm">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div><h2 className="text-sm font-bold text-white">Account email delivery</h2><p className="mt-1 text-xs text-textDim">Configured through service environment variables; API keys and passwords are never shown here.</p></div>
-          <span className={`rounded-full border px-2 py-1 text-[10px] font-bold uppercase ${emailStatus.configured ? 'border-statusGreen/40 text-statusGreen' : 'border-statusOrange/40 text-statusOrange'}`}>{emailStatus.configured ? `${emailStatus.provider} ready` : 'Not configured'}</span>
-        </div>
-        <p className="mt-3 text-xs text-textDim">From address: <span className="font-semibold text-white">{emailStatus.from_configured ? 'configured' : 'missing'}</span> · {emailStatus.reason}</p>
-        <div className="mt-3 flex flex-wrap gap-2"><input type="email" value={emailRecipient} onChange={(event) => setEmailRecipient(event.target.value)} placeholder="Recipient for a test message" className="min-w-[220px] flex-1 rounded-lg border border-white/10 bg-appDark px-3 py-2 text-sm text-white" /><button type="button" onClick={sendEmailTest} disabled={emailTestBusy || !emailRecipient.includes('@')} className="rounded-lg border border-accentYellow/50 px-3 py-2 text-xs font-bold text-accentYellow disabled:opacity-40">{emailTestBusy ? 'Sending…' : 'Send test email'}</button></div>
-        <p className="mt-2 text-[10px] text-textDim">Resend: set <code>RESEND_API_KEY</code> and <code>EMAIL_FROM</code>. SMTP: set <code>SMTP_HOST</code>, <code>SMTP_PORT</code>, <code>SMTP_USERNAME</code>, <code>SMTP_PASSWORD</code>, and <code>SMTP_FROM</code>.</p>
+      {showSystem && <section className="rounded-xl border border-white/10 bg-cardDark p-5 shadow-sm">
+        {emailStatus ? <>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div><h2 className="text-sm font-bold text-white">Account email delivery</h2><p className="mt-1 text-xs text-textDim">Configured through service environment variables; API keys and passwords are never shown here.</p></div>
+            <span className={`rounded-full border px-2 py-1 text-[10px] font-bold uppercase ${emailStatus.configured ? 'border-statusGreen/40 text-statusGreen' : 'border-statusOrange/40 text-statusOrange'}`}>{emailStatus.configured ? `${emailStatus.provider} ready` : 'Not configured'}</span>
+          </div>
+          <p className="mt-3 text-xs text-textDim">From address: <span className="font-semibold text-white">{emailStatus.from_configured ? 'configured' : 'missing'}</span> · {emailStatus.reason}</p>
+          <div className="mt-3 flex flex-wrap gap-2"><input type="email" value={emailRecipient} onChange={(event) => setEmailRecipient(event.target.value)} placeholder="Recipient for a test message" className="min-w-[220px] flex-1 rounded-lg border border-white/10 bg-appDark px-3 py-2 text-sm text-white" /><button type="button" onClick={sendEmailTest} disabled={emailTestBusy || !emailRecipient.includes('@')} className="rounded-lg border border-accentYellow/50 px-3 py-2 text-xs font-bold text-accentYellow disabled:opacity-40">{emailTestBusy ? 'Sending…' : 'Send test email'}</button></div>
+          <p className="mt-2 text-[10px] text-textDim">Resend: set <code>RESEND_API_KEY</code> and <code>EMAIL_FROM</code>. SMTP: set <code>SMTP_HOST</code>, <code>SMTP_PORT</code>, <code>SMTP_USERNAME</code>, <code>SMTP_PASSWORD</code>, and <code>SMTP_FROM</code>.</p>
+        </> : <>
+          <h2 className="text-sm font-bold text-white">Account email delivery</h2>
+          <p className="mt-1 text-xs leading-relaxed text-textDim">Service-level email configuration and delivery tests are restricted to the Platform Admin (Super Admin). Workspace Owners and tournament roles cannot inspect or change provider secrets.</p>
+          <p className="mt-2 text-[10px] text-textDim">Ask a Platform Admin to open this System section to view the safe status and send an explicit test message. No API key or password is displayed in the interface.</p>
+        </>}
       </section>}
 
       {/* ── Maintenance & Workflows ─────────────────────────────────────── */}
