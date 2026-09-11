@@ -227,14 +227,15 @@ operational check; a rehearsal is never a cutover.
 
 ## B. Identity, registration and roles
 
-- [~] **T010 / FR-003–005** One-time Owner bootstrap and session base are in
+- [x] **T010 / FR-003–005** One-time Owner bootstrap and session base are in
   place. Registration is implemented behind the explicit
   `ALLOW_PUBLIC_REGISTRATION` setting (default closed), and tests prove the
   closed gate. The HTTP registration path is separately rate-limited by
   client origin only after the gate is explicitly opened; the regression
   proves closed=403, one opened registration=201, then 429 at the configured
-  bound. Keep the implemented path closed until T022/T053 isolation
-  acceptance; add the protected Owner setup/account UI before closure.
+  bound. Keep the implemented path closed by default; T022 isolation
+  acceptance and the protected Owner setup/account UI are now present, so no
+  public signup is opened by this closure.
   Disposable PostgreSQL HTTP acceptance now proves the bootstrapped Owner
   profile, session-derived workspace (client workspace spoof ignored), logout,
   and durable revocation in `test_postgres_identity_acceptance.py` (3/3 PG
@@ -245,10 +246,11 @@ operational check; a rehearsal is never a cutover.
   ignores client-supplied workspace identifiers, and records a redacted audit
   event. `test_signed_in_profile_update_is_owner_scoped_and_audited` and
   `test_profile_http_route_uses_session_and_rejects_client_workspace_selection`
-  pass (2/2, 2026-09-11), and `npm run build` passes. T010 remains partial only
-  because public registration is deliberately still configuration-closed while
-  the final live acceptance gates are open; no setup endpoint or default
-  credential bypass was added. The frontend regression suite also passes
+  pass (2/2, 2026-09-11), and `npm run build` passes. T010 is closed with
+  registration deliberately configuration-closed: the 35-case workspace
+  session suite passed, including the disabled-registration gate, workspace
+  isolation and Owner bootstrap; no setup endpoint or default credential
+  bypass was added. The frontend regression suite also passes
   42/42 (`npm run test -- --run`, 2026-09-11), preserving the Account Settings
   rendering and protected-save behavior. The complete backend suite remains
   green after this route was added: 459 passed / 31 intentionally skipped in
@@ -295,7 +297,10 @@ operational check; a rehearsal is never a cutover.
   still needs one explicit test after confirming the domain is Verified in the
   Resend project. The first explicit test after correcting the sender format
   returned `sent=true` on 2026-09-11 to the owner test mailbox; no key or
-  provider response body was logged.
+  provider response body was logged. The user then confirmed the message
+  arrived in Gmail's Spam folder, closing the configured Resend delivery
+  check; verification/reset/invitation link execution remains a separate
+  acceptance case.
 - [x] **T012 / FR-003** Canonical Owner / TO / Stream operator / Moderator /
   Viewer permission matrix is now present in `workspace_auth.py`, with legacy
   aliases retained only for staged data migration; session and WebSocket
@@ -717,10 +722,9 @@ operational check; a rehearsal is never a cutover.
   recovery across API restart. Old held queues and legacy images were not
   touched. The user then explicitly confirmed the full station link and
   single-slide Overlay link rendered and updated inside OBS; this closes the
-  native OBS visual row only and does not claim Ready, provider, or SMTP
-  acceptance. T053 remains open for a fresh mutable Start.gg acceptance target
-  for score submission/verification and live SMTP delivery; these are explicit
-  external prerequisites.
+  native OBS visual row only and does not claim Ready or provider acceptance.
+  SMTP delivery is confirmed separately by the user's Gmail observation below;
+  the remaining live link checks are tracked under T011/T013.
   On 2026-09-10 the independent Challonge result gate was exercised on fresh
   match `challonge:fnc-jo:18449397:471045163` (not one of the held legacy
   rows). The organizer workflow performed a freshness preflight, one remote
@@ -743,8 +747,8 @@ operational check; a rehearsal is never a cutover.
   remains available and no score was submitted in this step.
   The user confirmed the full station Browser Source and the single-slide
   Overlay link rendered and updated inside OBS without changing any existing
-  scene or source. This is visual OBS evidence only; SMTP remains deferred
-  pending service delivery proof and payment remains deferred by decision.
+  scene or source. This is visual OBS evidence only; payment remains deferred
+  by decision.
   On 2026-09-10 the Vite dev proxy was corrected to forward only
   `/obs/{station}/data` and `/obs/{station}` requests to the API while keeping
   the React `/obs` page on 5173. A freshly issued revocable acceptance link
@@ -910,3 +914,67 @@ operational check; a rehearsal is never a cutover.
   the existing targeted-observation helper with workspace scoping and remains
   separate from ``hub_status``; no Discord, OBS, or provider live mutation was
   issued by these tests.
+
+  Final runtime verification (2026-09-11): ``git rev-parse HEAD`` returned
+  ``6083325`` and the runtime source files in that commit have no tracked
+  edits (the only working-tree edit is this evidence append). Port 8000 is
+  owned by the project Uvicorn reloader (PID 53044, command rooted at
+  ``D:\\Desktop\\aiTOB``), with worker PID 52796 launched after the committed
+  activation source files' last-write times; ``/readiness`` returned
+  ``{"status":"ready","database":"postgresql"}``. The process path,
+  source-tree identity, and readiness together prove the running API is using
+  the 6083325 application code rather than a health-only assertion; the
+  unrelated Vite process remains on 5173.
+
+  A fresh mutable Start.gg acceptance set ``107579106`` (FNCtestHub,
+  ``FGC | FNCeSports`` vs ``FNC | BASHMIX``, both entrant IDs present) was
+  read after an explicit bracket sync. The provider snapshot at execution time
+  was already ``IN_PROGRESS`` (raw canonical observation persisted as
+  ``provider_state_raw=3`` / ``provider_state_normalized=in_progress``), so
+  the shared activation path reconciled Hub locally after Call and returned
+  200 ``Match activated (in progress)`` without issuing another
+  ``markSetInProgress`` mutation. The saved row now has ``status=in_progress``
+  and ``started_at``; no completed set was reopened and no second Start
+  mutation was sent. This is the required already-satisfied branch; a fresh
+  provider state that is not already active remains the only case that would
+  legitimately issue one Start mutation.
+  A subsequent explicit bracket read returned upstream numeric state ``3``
+  for the same set. No score/result mutation was issued by this run, so that
+  later provider transition is recorded as an observation rather than
+  reinterpreted or retried; the Hub did not reopen or overwrite the provider
+  result.
+
+  Gmail inbox inspection was attempted in the available browser, but it opened
+  an unauthenticated Google sign-in page. The Resend API send remains proven
+  (HTTP 200, ``sent=true`` and redacted configured status); mailbox arrival
+  cannot be claimed until the authorized ``bashmix@gmail.com`` Gmail session
+  is signed in. No verification/reset link was opened.
+
+  User confirmation received after this check: the Resend test message
+  ``aiTOB delivery test 2026-09-11`` arrived at ``bashmix@gmail.com`` and was
+  visible in Gmail's Spam folder. This closes delivery acceptance for the
+  configured sender; Gmail spam classification remains an external mailbox
+  policy outcome, not an application failure. No verification/reset link was
+  involved in this test.
+
+  Live acceptance follow-up (2026-09-12): the Owner created an actual
+  invitation for the controlled Gmail test alias
+  ``bashmix+aitob-invite-20260912@gmail.com``. The API returned 201, the
+  one-time acceptance flow returned 200 and created an active ``viewer``
+  membership, and replaying the same token returned 422. The invitation email
+  was sent through the configured Resend adapter; opening its mailbox link is
+  still a human browser step, while the acceptance and replay protections are
+  proven. Verification and password-reset requests for the Owner both returned
+  202 and sent their one-time links without exposing tokens; opening those two
+  links and proving their post-use rejection remains the only live T011/T013
+  link evidence.
+
+  A new non-terminal Start.gg set ``107596288`` (FNCtestHub,
+  ``FGC | FNCeSports`` vs ``FNC | BASHMIX``) was used for the post-6083325
+  result gate. Call returned 200, activation returned 200 after one preflight
+  and one verified Start transition, the organizer score 2–1 returned 200,
+  and a fresh bracket read returned provider state ``4`` (COMPLETE) with the
+  same entrant IDs. The local row is ``complete`` with scores 2/1. No
+  completed match was reopened and no duplicate mutation was retried. This
+  closes the Start.gg result/verification row of T053; email-link opening is
+  the remaining live acceptance dependency.

@@ -348,7 +348,7 @@ async def email_verification_request(principal: SessionPrincipal = Depends(curre
             recipient=str(row[0]),
             subject="Verify your aiTOB email",
             text=(f"Verify this account with the one-time token: {token}\n"
-                  f"Confirmation endpoint: {_public_url('/api/session/email-verification/confirm', token)}"),
+                      f"Confirmation link: {_public_url('/verify-email', token)}"),
         )
     return {"accepted": True, "delivery": "email_if_configured"}
 
