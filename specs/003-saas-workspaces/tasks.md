@@ -287,6 +287,13 @@ operational check; a rehearsal is never a cutover.
   variables are documented as optional local settings, but this release has no
   browser-subscription, service-worker, or push-sender path, so they are inert
   and do not count as Web Push acceptance.
+  A read-only Resend domains probe on 2026-09-11 was rejected with the provider
+  message `This API key is restricted to only send emails`, confirming the key
+  is scoped rather than proving domain verification. Public DNS checks found no
+  `_resend.fnc.bashtech.xyz` TXT or `resend._domainkey.fnc.bashtech.xyz` CNAME
+  records, so live delivery remains blocked until the domain is verified in the
+  Resend project and its generated DNS records are published. No delivery
+  retry was issued during this inspection.
 - [x] **T012 / FR-003** Canonical Owner / TO / Stream operator / Moderator /
   Viewer permission matrix is now present in `workspace_auth.py`, with legacy
   aliases retained only for staged data migration; session and WebSocket
