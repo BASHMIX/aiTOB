@@ -62,6 +62,13 @@ async def report_score_to_provider(
         await _schedule_post_result_verification(set_id, provider, workspace_id)
         return result
 
+    # Start.gg's report mutation is not safely interchangeable with a
+    # winner-only write.  A failed/unknown report must be re-read and surfaced
+    # for reconciliation; sending a second mutation could overwrite a result
+    # that was accepted before the response was lost.
+    if getattr(provider, "provider_type", "") == "startgg":
+        return result
+
     # Fallback: winner-only
     fallback = await provider.report_winner_only(set_id, winner_id)
     if not fallback.success:

@@ -226,14 +226,22 @@ class StartGGProvider(ITournamentProvider, ITournamentProviderV2):
             )
             return ProviderSetResult(success=True, set_id=set_id, new_state=ProviderSetState.COMPLETE)
         except Exception as e:
-            return ProviderSetResult(success=False, set_id=set_id, error_message=str(e))
+            diagnostics = getattr(self._client, "last_error", None)
+            return ProviderSetResult(
+                success=False, set_id=set_id, error_message=str(e),
+                diagnostics=diagnostics if isinstance(diagnostics, dict) else None,
+            )
 
     async def report_winner_only(self, set_id: str, winner_id: str) -> ProviderSetResult:
         try:
             await self._client.report_set_winner_only(set_id, winner_id)
             return ProviderSetResult(success=True, set_id=set_id, new_state=ProviderSetState.COMPLETE)
         except Exception as e:
-            return ProviderSetResult(success=False, set_id=set_id, error_message=str(e))
+            diagnostics = getattr(self._client, "last_error", None)
+            return ProviderSetResult(
+                success=False, set_id=set_id, error_message=str(e),
+                diagnostics=diagnostics if isinstance(diagnostics, dict) else None,
+            )
 
     async def mark_in_progress(self, set_id: str) -> ProviderSetResult:
         """Activate a set on start.gg (state -> ACTIVE).
@@ -249,10 +257,22 @@ class StartGGProvider(ITournamentProvider, ITournamentProviderV2):
                 error_message="Preview sets cannot be activated."
             )
         success = await self._client.mark_in_progress(set_id)
+        diagnostics = getattr(self._client, "last_error", None)
+        if not isinstance(diagnostics, dict):
+            diagnostics = None
+        detail = None
+        if diagnostics:
+            operation = diagnostics.get("operation") or "MarkInProgress"
+            message = str(diagnostics.get("message") or "Start.gg rejected the mutation")
+            category = diagnostics.get("category")
+            detail = f"{operation}: {message}"
+            if category:
+                detail += f" (category={category})"
         return ProviderSetResult(
             success=success, set_id=set_id,
             new_state=ProviderSetState.IN_PROGRESS if success else None,
-            error_message=None if success else "markSetInProgress failed (check token scope / upstream bracket state)"
+            error_message=None if success else (detail or "markSetInProgress failed; provider did not accept the transition"),
+            diagnostics=diagnostics,
         )
 
     async def mark_called(self, set_id: str) -> ProviderSetResult:

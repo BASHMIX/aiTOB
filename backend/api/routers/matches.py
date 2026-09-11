@@ -195,14 +195,12 @@ async def api_activate_match(set_id: str, principal: SessionPrincipal = Depends(
 
     current_status = m.get("status", "not_started")
     if current_status == "called":
-        provider = await get_provider_for_tournament(m.get("tournament_slug") or "", _ws(principal))
-        provider_result = await provider.mark_in_progress(set_id)
-        if not provider_result.success:
+        result = await transition_match(set_id, "in_progress", workspace_id=_ws(principal))
+        if result.get("error"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Provider activation failed: {provider_result.error_message}"
+                detail=result["error"],
             )
-        await transition_match(set_id, "in_progress", workspace_id=_ws(principal))
         return MessageResponse(message="Match activated (in progress)", ok=True)
     else:
         await transition_match(set_id, "not_started", workspace_id=_ws(principal))
@@ -233,7 +231,9 @@ async def api_force_in_progress(set_id: str, principal: SessionPrincipal = Depen
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only a called match can be forced to in-progress."
         )
-    result = await transition_match(set_id, "in_progress", workspace_id=_ws(principal))
+    # This explicit local-safe control intentionally skips a remote provider
+    # mutation; /activate owns the Start.gg preflight/mutation/verification path.
+    result = await transition_match(set_id, "in_progress", workspace_id=_ws(principal), skip_provider=True)
     if result.get("error"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result["error"])
     await add_bot_feed(f"⏩ Match forced to in-progress: {m.get('p1_name')} vs {m.get('p2_name')}", "info")

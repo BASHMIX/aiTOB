@@ -847,15 +847,16 @@ operational check; a rehearsal is never a cutover.
   `23741309`) completed the independent live result path: Call command 143
   created thread `1547977207509680221` and message `1547977210852544603`, the
   organizer submitted 2–1, and a new `/sets` read returned provider state 4
-  (COMPLETE) for the same set and entrants.  The provider logged a non-fatal
-  `markSetInProgress` warning during activation, but accepted the final score;
-  this warning is retained as an external lifecycle caveat rather than hidden.
+  (COMPLETE) for the same set and entrants.  The earlier activation warning
+  exposed a duplicate `markSetInProgress` mutation in the `/activate` route.
+  The retained runtime row does not contain the upstream GraphQL response, so
+  it cannot prove which duplicate request was rejected; the remediation and
+  targeted preflight/verification tests are recorded below.
   The two Discord readiness booleans are true for this set and both entrant
-  IDs are verified, but the current run has no independently captured human
-  click receipt; a new human-session Ready confirmation remains the only
-  Discord evidence gate.  Resend status is `provider=resend, configured=true,
-  from_configured=true`; the prior explicit send returned `sent=true`, while
-  live inbox receipt remains outside the API evidence.
+  IDs are verified.  The user subsequently confirmed both human Ready clicks
+  and the bot response, closing that Discord evidence gate.  Resend status is
+  `provider=resend, configured=true, from_configured=true`; an explicit send
+  returned `sent=true`, while live inbox receipt remains outside API evidence.
 
   Manual single-player Challonge DQ was exercised separately from the score
   gate on fresh set `challonge:fnc-jo:18449397:471045165`: p1 was reported as
@@ -864,3 +865,48 @@ operational check; a rehearsal is never a cutover.
   `result_kind=dq`.  A `both` request returned 409 before any provider call.
   `CHALLONGE_DQ_COMMANDS_ENABLED=1` now means organizer-only single-player
   DQ; the endpoint still rejects double-DQ, and AI/Auto-DQ remain unavailable.
+
+  Latest acceptance follow-up (2026-09-11): the user explicitly confirmed that
+  both Discord test accounts completed the Ready interaction and received the
+  bot's ``Both players ready!`` response. This closes the Discord Ready
+  acceptance gate only; it does not infer provider state or email delivery.
+  A Platform Admin email test was sent to ``bashmix@gmail.com`` through the
+  existing Resend endpoint and returned ``sent=true`` with the safe projection
+  ``provider=resend, configured=true, from_configured=true``. Resend acceptance
+  is recorded; inbox arrival remains an external mailbox observation and is not
+  claimed as proven by the API.
+
+  Start.gg activation remediation (2026-09-11) is covered by the focused
+  ``test_startgg_activation_preflight.py`` suite (7 cases) plus the Start.gg
+  parity, sync, workflow, and score suites. The prior running acceptance
+  warning exposed the API route sending ``provider.mark_in_progress`` and then
+  calling ``transition_match`` which sent the same GraphQL mutation a second
+  time; that duplicate path is proven in source, while the old row did not
+  preserve the upstream response. The mutation is a real GraphQL
+  ``markSetInProgress`` field from
+  ``queries.MARK_IN_PROGRESS``; it is not a local status wrapper. The old
+  ``bot_feed`` row retained only a generic failure string, so its original raw
+  GraphQL diagnostic cannot be reconstructed without another live mutation.
+  The client now stores only redacted operation/message/category/path/type
+  diagnostics for future failures (never credentials or variables).
+
+  ``/activate`` now has one owner for the remote operation: a workspace-bound,
+  account-bound single-match snapshot through ``SyncCoordinator`` is persisted
+  before the mutation, and a second targeted snapshot verifies it afterwards.
+  Already-IN_PROGRESS is reconciled without a mutation; COMPLETE/INVALID,
+  changed entrants, missing integration identity, provider rejection, and
+  preflight transport failure become ``needs_review`` and do not advance Hub
+  state. A timeout is re-read before review, allowing a proven remote success
+  to be reconciled without resend. The local ``dm_score_request`` command is
+  queued only after this gate; the explicit Force control remains local-only.
+  Start.gg score reporting no longer falls back to a winner-only mutation after
+  a failed full report, preventing an unsafe second write.
+
+  Evidence: focused Start.gg activation/parity/overlay tests pass 22/22;
+  score/endpoint/sync/command tests pass 28/28; the complete backend suite
+  passes 468 with 31 intentional skips. The new tests cover already-achieved
+  state, terminal state, changed entrants, provider rejection, timeout after
+  remote acceptance, and network failure. Provider state is persisted through
+  the existing targeted-observation helper with workspace scoping and remains
+  separate from ``hub_status``; no Discord, OBS, or provider live mutation was
+  issued by these tests.

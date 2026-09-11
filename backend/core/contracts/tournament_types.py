@@ -97,6 +97,9 @@ class ProviderSetResult:
     set_id: str
     new_state: Optional[ProviderSetState] = None
     error_message: Optional[str] = None
+    # Safe, structured diagnostics from the adapter.  This is deliberately
+    # optional and must never contain credentials or request headers.
+    diagnostics: Optional[Mapping[str, Any]] = None
 
 
 # ── Provider V2 dark-launch contracts ─────────────────────────────────────

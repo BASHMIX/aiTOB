@@ -13,6 +13,32 @@ STARTGG_API_URL = "https://api.start.gg/gql/alpha"
 
 _client_instance: Optional["StartGGClient"] = None
 
+
+class StartGGGraphQLError(RuntimeError):
+    """A redacted, structured GraphQL error from start.gg.
+
+    The adapter exposes only GraphQL's public diagnostic fields.  Authorization
+    headers, variables and response bodies are never retained here.
+    """
+
+    def __init__(self, *, operation: str, message: str, category: str | None = None,
+                 path: list | None = None, error_type: str | None = None):
+        self.operation = operation
+        self.message = message
+        self.category = category
+        self.path = path or []
+        self.error_type = error_type
+        super().__init__(f"Start.gg API Error: {message}")
+
+    def diagnostics(self) -> dict[str, object]:
+        return {
+            "operation": self.operation,
+            "message": self.message[:300],
+            "category": self.category,
+            "path": [str(part)[:80] for part in self.path[:8]],
+            "type": self.error_type,
+        }
+
 def get_client() -> "StartGGClient":
     global _client_instance
     if _client_instance is None:
@@ -30,6 +56,7 @@ class StartGGClient:
         self.request_count = 0
         self.rate_limit_lock = asyncio.Lock()
         self._token_last_fetched: float = 0
+        self.last_error: dict[str, object] | None = None
 
     async def _get_http_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
@@ -101,10 +128,24 @@ class StartGGClient:
                 data = resp.json()
                 
                 if "errors" in data:
-                    print(f"[STARTGG] API Error: {data['errors']}")
-                    # Surface the actual error message if possible
-                    err_msg = data['errors'][0].get('message', 'Unknown Start.gg Error')
-                    raise Exception(f"Start.gg API Error: {err_msg}")
+                    first = (data.get("errors") or [{}])[0] or {}
+                    operation = next(
+                        (line.strip().split("(", 1)[0].split(" ", 1)[-1]
+                         for line in query.splitlines()
+                         if line.strip().startswith(("query ", "mutation "))),
+                        "unknown",
+                    )
+                    extensions = first.get("extensions") or {}
+                    error = StartGGGraphQLError(
+                        operation=operation,
+                        message=str(first.get("message") or "Unknown Start.gg Error"),
+                        category=str(extensions.get("category")) if extensions.get("category") is not None else None,
+                        path=first.get("path") if isinstance(first.get("path"), list) else [],
+                        error_type=str(first.get("type")) if first.get("type") is not None else None,
+                    )
+                    self.last_error = error.diagnostics()
+                    print(f"[STARTGG] {error}")
+                    raise error
                 
                 return data.get("data", {})
             except httpx.HTTPStatusError as e:
@@ -362,10 +403,22 @@ class StartGGClient:
 
     async def mark_in_progress(self, set_id: str) -> bool:
         """Mark a set as In Progress on Start.gg."""
+        self.last_error = None
         try:
             await self.query(queries.MARK_IN_PROGRESS, {"setId": set_id})
             return True
+        except StartGGGraphQLError:
+            # query() has already stored safe diagnostics.  Do not retry a
+            # state/permission validation error as if it were transient.
+            return False
         except Exception as e:
+            self.last_error = {
+                "operation": "MarkInProgress",
+                "message": str(e)[:300],
+                "category": "transport",
+                "path": [],
+                "type": type(e).__name__,
+            }
             print(f"Failed to mark in progress: {e}")
             return False
 

@@ -3132,6 +3132,7 @@ async def record_targeted_snapshot_observation_v2(
     revision: str | None,
     provider_state_raw: str | None = None,
     provider_state: ProviderSetState | None = None,
+    workspace_id: str | None = None,
 ) -> None:
     """Record one included set from a narrow snapshot without completing it.
 
@@ -3142,8 +3143,10 @@ async def record_targeted_snapshot_observation_v2(
     """
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        scope = " AND workspace_id=?" if workspace_id is not None else ""
+        params = (match_id,) + ((workspace_id,) if workspace_id is not None else ())
         async with db.execute(
-            "SELECT provider_revision FROM active_matches WHERE set_id=?", (match_id,)
+            "SELECT provider_revision FROM active_matches WHERE set_id=?" + scope, params
         ) as cursor:
             existing = await cursor.fetchone()
         if not existing:
@@ -3158,8 +3161,9 @@ async def record_targeted_snapshot_observation_v2(
                    provider_state_raw=COALESCE(?, provider_state_raw),
                    provider_state_normalized=COALESCE(?, provider_state_normalized),
                    provider_observed_at=COALESCE(?, provider_observed_at)
-               WHERE set_id=?""",
-            (observed_at, revision, provider_state_raw, normalized, observed_at, match_id),
+               WHERE set_id=?""" + scope,
+            (observed_at, revision, provider_state_raw, normalized, observed_at, match_id)
+            + ((workspace_id,) if workspace_id is not None else ()),
         )
         await db.commit()
 

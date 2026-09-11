@@ -5,6 +5,10 @@ from backend.core.providers.registry import get_provider_for_tournament
 from backend.core.database import get_active_match, upsert_active_match, update_active_match, add_bot_feed
 from backend.api.ws_manager import manager as hub_mgr
 from backend.core.provider_feature_flags import get_provider_feature_flags
+from backend.core.contracts import (
+    ProviderSetState, ProviderSnapshotRequestV2, SnapshotPriority, SnapshotScope,
+)
+from backend.core.sync_coordinator import SyncCoordinator
 
 import json
 import os
@@ -118,6 +122,60 @@ async def _realize_in_progress_overlays(match: dict, update_kwargs: dict) -> Non
                     "warn"
                 )
 
+
+async def _startgg_targeted_snapshot(match: dict, provider):
+    """Read and persist only the target Start.gg set before/after a mutation.
+
+    The provider account and workspace come from the stored tournament row, not
+    request input.  This deliberately uses the existing SyncCoordinator and
+    targeted V2 read contract; it never refreshes the whole tournament.
+    """
+    from backend.core.database import get_tournament, record_targeted_snapshot_observation_v2
+    tournament = await get_tournament(
+        match.get("tournament_slug") or "", match.get("workspace_id")
+    )
+    if not tournament or tournament.get("provider_type") != "startgg":
+        return None
+    account_id = str(tournament.get("provider_account_id") or "")
+    tournament_id = str(tournament.get("provider_tournament_id") or "")
+    if not account_id or not tournament_id:
+        raise RuntimeError("Start.gg integration account or tournament identity is missing")
+    request = ProviderSnapshotRequestV2(
+        provider_type="startgg",
+        provider_account_id=account_id,
+        tournament_id=tournament_id,
+        scope=SnapshotScope.SINGLE_MATCH,
+        entity_ids=frozenset({str(match["set_id"])}),
+        priority=SnapshotPriority.PREFLIGHT_MUTATION,
+        force=True,
+    )
+    snapshot = await SyncCoordinator().run_snapshot(
+        request, lambda: provider.fetch_snapshot_v2(request)
+    )
+    payload = dict(snapshot.payload or {})
+    raw_state = payload.get("state")
+    try:
+        state = ProviderSetState(int(raw_state)) if raw_state is not None else None
+    except (TypeError, ValueError):
+        state = None
+    await record_targeted_snapshot_observation_v2(
+        str(match["set_id"]), observed_at=snapshot.observed_at,
+        revision=snapshot.revision, provider_state_raw=str(raw_state) if raw_state is not None else None,
+        provider_state=state, workspace_id=match.get("workspace_id"),
+    )
+    return {
+        "state": state,
+        "raw_state": raw_state,
+        "entrant_ids": [str(value) for value in (payload.get("entrant_ids") or [])],
+        "snapshot": snapshot,
+    }
+
+
+def _startgg_precondition_matches(match: dict, snapshot: dict) -> bool:
+    expected = {str(match.get("p1_entrant_id") or ""), str(match.get("p2_entrant_id") or "")}
+    actual = {value for value in snapshot.get("entrant_ids", []) if value}
+    return bool(expected - {""}) and actual == expected
+
 def generate_lobby_password() -> str:
     return str(random.randint(1000, 9999))
 
@@ -163,7 +221,8 @@ async def call_match_core(
     }
 
 async def transition_match(
-    set_id: str, to_status: str, *, workspace_id: str | None = None, **kwargs,
+    set_id: str, to_status: str, *, workspace_id: str | None = None,
+    skip_provider: bool = False, **kwargs,
 ) -> dict:
     match = await get_active_match(set_id, workspace_id)
     if not match:
@@ -201,22 +260,104 @@ async def transition_match(
 
     elif to_status == "in_progress":
         update_kwargs["started_at"] = datetime.datetime.utcnow().isoformat()
+        # Push state to start.gg exactly once.  The targeted read is the
+        # precondition check at command execution time (not button time), and
+        # the second read verifies the provider result before local state moves.
+        if not skip_provider:
+            try:
+                provider = await get_provider_for_tournament(
+                    match.get("tournament_slug") or "", match.get("workspace_id")
+                ) if match.get("workspace_id") is not None else await get_provider_for_tournament(
+                    match.get("tournament_slug") or ""
+                )
+                preflight = await _startgg_targeted_snapshot(match, provider)
+                if preflight is not None:
+                    remote_state = preflight.get("state")
+                    if not _startgg_precondition_matches(match, preflight):
+                        reason = "Start.gg match entrants changed or are unresolved; review required"
+                        from backend.core.database import set_match_sync_status_v2
+                        await set_match_sync_status_v2(
+                            set_id, "needs_review", reason=reason,
+                            workspace_id=match.get("workspace_id"),
+                        )
+                        await add_bot_feed(f"⚠️ {set_id}: {reason}", "warn", workspace_id=match.get("workspace_id"))
+                        return {"error": reason, "sync_status": "needs_review"}
+                    if remote_state in {ProviderSetState.COMPLETE, ProviderSetState.INVALID}:
+                        reason = f"Start.gg match is already terminal ({remote_state.name.lower()}); review required"
+                        from backend.core.database import set_match_sync_status_v2
+                        await set_match_sync_status_v2(
+                            set_id, "needs_review", reason=reason,
+                            workspace_id=match.get("workspace_id"),
+                        )
+                        await add_bot_feed(f"⚠️ {set_id}: {reason}", "warn", workspace_id=match.get("workspace_id"))
+                        return {"error": reason, "sync_status": "needs_review"}
+                    # A provider already at the intended state is reconciled;
+                    # never send a duplicate mutation.
+                    if remote_state != ProviderSetState.IN_PROGRESS:
+                        mutation_error = None
+                        result = None
+                        postflight = None
+                        try:
+                            result = await provider.mark_in_progress(set_id)
+                            if not result.success:
+                                mutation_error = result.error_message or "Start.gg rejected markSetInProgress"
+                        except Exception as exc:
+                            # A timeout can happen after the provider applied the
+                            # mutation.  Re-read before deciding whether review
+                            # is required; never blindly retry here.
+                            mutation_error = str(exc)[:300]
+                        if mutation_error:
+                            postflight = None
+                            try:
+                                postflight = await _startgg_targeted_snapshot(match, provider)
+                            except Exception:
+                                postflight = None
+                            if postflight and _startgg_precondition_matches(match, postflight) \
+                                    and postflight.get("state") == ProviderSetState.IN_PROGRESS:
+                                # The remote effect is proven despite an
+                                # uncertain response. Continue without resend.
+                                remote_state = ProviderSetState.IN_PROGRESS
+                            else:
+                                reason = mutation_error
+                                from backend.core.database import set_match_sync_status_v2
+                                await set_match_sync_status_v2(
+                                    set_id, "needs_review", reason=reason,
+                                    workspace_id=match.get("workspace_id"),
+                                )
+                                await add_bot_feed(
+                                    f"⚠️ markSetInProgress failed for {set_id}: {reason}", "error",
+                                    workspace_id=match.get("workspace_id"),
+                                )
+                                return {
+                                    "error": reason, "sync_status": "needs_review",
+                                    "provider_diagnostics": getattr(result, "diagnostics", None),
+                                }
+                        if postflight is None:
+                            postflight = await _startgg_targeted_snapshot(match, provider)
+                        if postflight is None or postflight.get("state") != ProviderSetState.IN_PROGRESS:
+                            reason = "Start.gg activation outcome could not be verified; review required"
+                            from backend.core.database import set_match_sync_status_v2
+                            await set_match_sync_status_v2(
+                                set_id, "needs_review", reason=reason,
+                                workspace_id=match.get("workspace_id"),
+                            )
+                            await add_bot_feed(f"⚠️ {set_id}: {reason}", "error", workspace_id=match.get("workspace_id"))
+                            return {"error": reason, "sync_status": "needs_review"}
+            except Exception as exc:
+                reason = f"Start.gg activation preflight failed: {str(exc)[:300]}"
+                from backend.core.database import set_match_sync_status_v2
+                await set_match_sync_status_v2(
+                    set_id, "needs_review", reason=reason,
+                    workspace_id=match.get("workspace_id"),
+                )
+                await add_bot_feed(f"⚠️ {set_id}: {reason}", "error", workspace_id=match.get("workspace_id"))
+                return {"error": reason, "sync_status": "needs_review"}
+
+        # Queue the local score-request effect only after any remote
+        # precondition/mutation has succeeded (or an explicit local-only force).
         if match.get("bot_enabled", True):
             from backend.core.database import add_hub_command
             await add_hub_command(f"dm_score_request {set_id}", workspace_id=match.get("workspace_id"))
-        # Push state to provider so start.gg viewers see "currently playing"
-        # instead of staying in CALLED until the score report lands. Best-effort
-        # — failures here are non-critical (the score report will mark in_progress
-        # again as a pre-step) but logged so divergence is visible.
-        try:
-            provider = await get_provider_for_tournament(match.get("tournament_slug") or "", match.get("workspace_id"))
-            result = await provider.mark_in_progress(set_id)
-            if not result.success:
-                await add_bot_feed(
-                    f"⚠️ markSetInProgress failed for {set_id}: {result.error_message}", "warn"
-                )
-        except Exception as e:
-            await add_bot_feed(f"⚠️ markSetInProgress error for {set_id}: {e}", "warn")
 
         # Realize any JSON-defined overlay derived from in_progress (e.g.
         # `on_stream`): bind the stream station at this exact transition point.
