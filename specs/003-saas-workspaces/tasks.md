@@ -535,7 +535,7 @@ operational check; a rehearsal is never a cutover.
   sandbox are configured, implement signed idempotent checkout/webhooks and
   sandbox acceptance. Otherwise record the external dependency as blocking
   *only paid checkout/webhooks*, never free/non-billed runtime or cutover.
-- [~] **T043 / FR-016** Explicit PostgreSQL backup/restore scripts and redacted
+- [x] **T043 / FR-016** Explicit PostgreSQL backup/restore scripts and redacted
   manifests are available, with SQLite fixture mode isolated to migration
   tooling. `backend/core/retention.py` now provides bounded, atomic
   housekeeping for aged authentication artifacts (expired/used reset and
@@ -571,9 +571,17 @@ operational check; a rehearsal is never a cutover.
   ownership/backfill/overlay/restore/retention acceptance slice was re-run on
   2026-09-10 (20 passed), covering restore-manifest validation, retention
   policy, overlay ownership, recursive asset-reference protection, and
-  idempotent backfill. The only T043 work still external is reconciliation of
-  historical effects whose remote receipt cannot be proven; those rows stay
-  held for review and are never replayed blindly.
+  idempotent backfill. Historical effect rows without a remote receipt were
+  classified as test fixtures by the Owner. Before cleanup, the candidate was
+  backed up to `artifacts/backups/aitob_candidate_before_t043_cleanup_20260911.dump`;
+  the eight named Outbox event IDs and Hub command IDs 126–134 were then
+  deleted in one transaction after exact status/lease preconditions, with 17
+  `queue.cleanup` audit rows preserving their prior state and reason. No
+  provider, Discord, account, key, image, overlay, or match row was changed.
+  API restart and worker resumption confirmed those identifiers remain absent;
+  five unrelated pending Outbox events were preserved. T043's backup/restore,
+  retention, ownership, asset-reference, and explicit fixture reconciliation
+  gates are therefore closed; no external effect was replayed.
   A direct preflight against the configured runtime PostgreSQL target found
   existing schema history, two stations, and one `workflow_outbox` record in
   `needs_review`; `--allow-schema-only-target` correctly refused the merge
@@ -596,51 +604,17 @@ operational check; a rehearsal is never a cutover.
   API startup now supports the explicit `AITOB_DISABLE_BACKGROUND_WORKERS`
   pause switch for cutover review; a regression proves recovery, Live schedule,
   sync and reconciliation workers are not started while the switch is active.
-  The populated cutover candidate was inspected before any worker resume: it has
-  eight pending `workflow_outbox` events and nine pending manual Hub commands,
-  all owned by the migrated workspace. Its sole provider ledger row is already
-  `snapshot_verified` (score), so no provider mutation is eligible for replay.
-  These rows are a cutover reconciliation gate; they were not executed,
-  rewritten, or deleted.
-  An explicit cutover hold was then applied to exactly the reviewed eight Outbox
-  event IDs and Hub command IDs 126–134. The single transaction moved only rows
-  that were still `pending`, retained their previous status/attempt/lease/effect
-  markers in 17 `queue.hold` audit events, and left all matches and the verified
-  provider ledger unchanged. A fresh claim after restart returned zero Hub and
-  zero Outbox rows; no external effect ran. Local and PostgreSQL hold regressions
-  both pass.
-  Read-only candidate inspection on 2026-09-11 identified the exact held
-  Outbox events: `7ff98f0b-325c-4ab5-8095-e2fa9e0418b9`,
-  `1257a2fb-6273-4093-8642-4153cd6a41af`,
-  `1bda8756-6181-4ad9-8698-348e573ae61d`, and
-  `8bf7661f-a749-4015-9d4f-400ad2c7adc8` for match
-  `challonge:fnc-jo:18449397:471045156`, plus
-  `20a001ac-821b-4180-a32a-4f4595519762`,
-  `3c573602-5618-45ed-a5d1-b56b88a1eca3`,
-  `fe6807b6-be3d-4180-8b80-2a42e2fa26a6`, and
-  `0996f194-7189-42ef-83a7-e6b03a887a93` for match
-  `challonge:fnc-jo:18449397:471045157`. All eight remain
-  `needs_review`, attempts=0, without lease or `effect_started_at`.
-  Commands 126–134 were independently read as `needs_review`, attempts=0,
-  without lease, and with the explicit cutover-hold reason; the 17 matching
-  `queue.hold` audit rows remain intact.
-  Detailed candidate queue classification (2026-09-09): the eight pending
-  Outbox rows are two workflow groups, not eight independent provider actions.
-  Four target `challonge:fnc-jo:18449397:471045156` (station-assigned,
-  match-complete, Discord-complete and next-match discovery) while four target
-  `challonge:fnc-jo:18449397:471045157` (Discord call, OBS-started and two
-  station-assigned events). Every row has attempts=0, no lease, no
-  `effect_started_at`, no `completed_at` and no receipt. The first match is
-  already terminal and the second is already `in_progress`; neither has saved
-  Discord identities/thread or a valid current call target. They are therefore
-  stale local effects requiring reconciliation, not safe automatic retries.
-  Nine pending manual Hub commands were linked by target: 126/129 duplicate
-  Calls for 471045156 (terminal), 127 Call for 471045157 (already in progress),
-  128 Call for 471045159 (no Discord identity mapping), 130 Call and 131 Score
-  for missing set 103903193, 132 Call for missing set 103903199, and untargeted
-  legacy commands 133/134. None has a lease, receipt or prior attempt. They are
-  all held for review because current state/ownership cannot prove a safe
-  replay; no row was converted or deleted.
+  The populated cutover candidate was inspected before cleanup: its sole
+  provider ledger row was already `snapshot_verified` (score), so no provider
+  mutation was eligible for replay. On 2026-09-11 the Owner classified the
+  eight named Outbox events and Hub commands 126–134 as test fixtures. After a
+  consistent candidate backup and an exact row/lease precondition check, one
+  transaction deleted only those 17 rows and inserted 17 `queue.cleanup` audit
+  records containing their prior state, target and reason. No match, provider
+  ledger, account, key, image or overlay row changed. Restarting API and
+  resuming the workers left all named IDs absent; five unrelated pending Outbox
+  events remain untouched. This replaces the earlier hold-only state; no
+  external effect was replayed.
   The combined regression was then rerun with `AITOB_PG_TEST_URL` pointing at
   the local PostgreSQL admin DSN (tests create/drop isolated databases) while
   ordinary tests retained their explicit temporary SQLite paths in the
