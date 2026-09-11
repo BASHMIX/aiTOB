@@ -317,7 +317,7 @@ operational check; a rehearsal is never a cutover.
   Moderator Call with result/DQ denial, and Viewer read access with mutation
   denial. This closes the role-matrix task; broader live multi-membership
   acceptance remains part of T053 rather than an untested claim here.
-- [~] **T013 / FR-003–005** Owner-only invite creation, token acceptance, role
+- [x] **T013 / FR-003–005** Owner-only invite creation, token acceptance, role
   change and membership disable are implemented with last-Owner protection;
   tests cover invitation replay and role/removal safety. Account Settings now
   exposes owner-only role changes and member disable actions, while the API
@@ -329,6 +329,14 @@ operational check; a rehearsal is never a cutover.
   deployment dependency; acceptance uses the returned one-time test token and
   does not claim that SMTP sent it. Invitation delivery now uses the same
   explicit adapter when configured; invitation listings remain token-free.
+  Live UI acceptance was confirmed on 2026-09-12 for the controlled test
+  invitation `bashmix+aitob-invite-ui-20260912@gmail.com`: the public
+  `/accept-invitation` flow displayed “Invitation accepted successfully. You
+  can now sign in”, and the protected Account Settings view shows the created
+  member `Ahmad` as an active `viewer`. The earlier API acceptance already
+  proved one-time replay rejection (HTTP 422); this UI confirmation closes the
+  invitation-link acceptance gate without claiming email verification or
+  password-reset link use (those remain T011 evidence).
 
 ## C. Ownership and tenant isolation
 
@@ -966,8 +974,8 @@ operational check; a rehearsal is never a cutover.
   still a human browser step, while the acceptance and replay protections are
   proven. Verification and password-reset requests for the Owner both returned
   202 and sent their one-time links without exposing tokens; opening those two
-  links and proving their post-use rejection remains the only live T011/T013
-  link evidence.
+  links and proving their post-use rejection remains the only live T011 link
+  evidence.
 
   A new non-terminal Start.gg set ``107596288`` (FNCtestHub,
   ``FGC | FNCeSports`` vs ``FNC | BASHMIX``) was used for the post-6083325
