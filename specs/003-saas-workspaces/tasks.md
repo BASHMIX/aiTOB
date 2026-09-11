@@ -978,3 +978,12 @@ operational check; a rehearsal is never a cutover.
   completed match was reopened and no duplicate mutation was retried. This
   closes the Start.gg result/verification row of T053; email-link opening is
   the remaining live acceptance dependency.
+
+  Commit ``bd48590`` closes the link-routing gap found during this acceptance:
+  ``/verify-email``, ``/reset-password`` and ``/accept-invitation`` now render
+  public one-time-token forms, and verification mail points to the frontend
+  confirmation route instead of a POST-only API URL. Frontend build passes and
+  the full Vitest suite remains 42/42. The actual verification, reset and
+  pending invitation messages have been sent; opening them in the authorized
+  Gmail session is the final human step, after which the same one-time
+  endpoints can be checked for post-use rejection.
