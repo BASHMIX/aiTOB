@@ -281,7 +281,7 @@ operational check; a rehearsal is never a cutover.
   status endpoint now returns 200 with redacted `resend/configured` state and
   the System card renders the recipient field and test action. No test email
   was sent automatically. On 2026-09-11 the local service profile was updated
-  to the supplied Resend sender (`aiTOB no-reply@fnc.bashtech.xyz`) and the
+  to the supplied Resend sender (`aiTOB no-reply@salma.bashtech.xyz`) and the
   restarted candidate API still reports `provider=resend`, `configured=true`,
   and `from_configured=true`; the API exposes no sender address or key. VAPID
   variables are documented as optional local settings, but this release has no
@@ -289,11 +289,11 @@ operational check; a rehearsal is never a cutover.
   and do not count as Web Push acceptance.
   A read-only Resend domains probe on 2026-09-11 was rejected with the provider
   message `This API key is restricted to only send emails`, confirming the key
-  is scoped rather than proving domain verification. Public DNS checks found no
-  `_resend.fnc.bashtech.xyz` TXT or `resend._domainkey.fnc.bashtech.xyz` CNAME
-  records, so live delivery remains blocked until the domain is verified in the
-  Resend project and its generated DNS records are published. No delivery
-  retry was issued during this inspection.
+  is scoped rather than proving domain verification. Public DNS checks found a
+  DKIM TXT record at `resend._domainkey.salma.bashtech.xyz`; the Resend
+  verification status cannot be read with this send-only key, so live delivery
+  still needs one explicit test after confirming the domain is Verified in the
+  Resend project. No delivery retry was issued during this inspection.
 - [x] **T012 / FR-003** Canonical Owner / TO / Stream operator / Moderator /
   Viewer permission matrix is now present in `workspace_auth.py`, with legacy
   aliases retained only for staged data migration; session and WebSocket
