@@ -831,3 +831,36 @@ operational check; a rehearsal is never a cutover.
   These enable Challonge read/local workflow/score paths for the acceptance
   target only.  DQ (including double-DQ), AI DQ, Auto-DQ, and any global rollout
   remain disabled.
+
+  Final focused gates on 2026-09-11: the service profile now persists the
+  provider rollout flags and `AITOB_DISCORD_WORKSPACE_ID`; a normal `run.py
+  --no-frontend` restart loaded them without the acceptance runner.  The
+  authenticated `/api/providers/challonge/connection` projection returned
+  `enabled=true, connected=true` after restart.  A stale station owner from the
+  deleted fixture was handled transactionally: acceptance match
+  `challonge:fnc-jo:18449397:471045165` assigned to `station_1`, emitted one
+  `obs_station_assigned` effect, and then released it; the station is free and
+  the match remains untouched on Challonge.  The stale-owner guard is covered
+  by the PostgreSQL path and the focused local suite remains green (19 tests).
+
+  A fresh mutable Start.gg set `107573505` (FNCtestHub, entrants `23741477` /
+  `23741309`) completed the independent live result path: Call command 143
+  created thread `1547977207509680221` and message `1547977210852544603`, the
+  organizer submitted 2–1, and a new `/sets` read returned provider state 4
+  (COMPLETE) for the same set and entrants.  The provider logged a non-fatal
+  `markSetInProgress` warning during activation, but accepted the final score;
+  this warning is retained as an external lifecycle caveat rather than hidden.
+  The two Discord readiness booleans are true for this set and both entrant
+  IDs are verified, but the current run has no independently captured human
+  click receipt; a new human-session Ready confirmation remains the only
+  Discord evidence gate.  Resend status is `provider=resend, configured=true,
+  from_configured=true`; the prior explicit send returned `sent=true`, while
+  live inbox receipt remains outside the API evidence.
+
+  Manual single-player Challonge DQ was exercised separately from the score
+  gate on fresh set `challonge:fnc-jo:18449397:471045165`: p1 was reported as
+  `-1 / 0`, provider read-back verified COMPLETE, and ledger
+  `ae02ee0c-a4af-4846-9d5c-fe0d76fd83ee` reached `snapshot_verified` with
+  `result_kind=dq`.  A `both` request returned 409 before any provider call.
+  `CHALLONGE_DQ_COMMANDS_ENABLED=1` now means organizer-only single-player
+  DQ; the endpoint still rejects double-DQ, and AI/Auto-DQ remain unavailable.

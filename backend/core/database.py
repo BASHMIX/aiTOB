@@ -3792,7 +3792,23 @@ async def apply_local_workflow_transition_v2(
                     raise ValueError("Station was not found")
                 owner = station["active_match_id"]
                 if owner and owner != match_id:
-                    raise ValueError("Station is already occupied")
+                    # A prior match may have been removed or completed while
+                    # its station pointer remained behind.  Treat only a
+                    # currently live match as an occupation; clear a stale
+                    # owner inside this same transaction so assignment can be
+                    # retried safely after restart.  A live owner (including a
+                    # different workspace) still blocks the operation.
+                    async with db.execute(
+                        "SELECT status, workspace_id FROM active_matches WHERE set_id = ?",
+                        (owner,),
+                    ) as owner_cursor:
+                        owner_row = await owner_cursor.fetchone()
+                    if owner_row and str(owner_row["status"] or "") in {"called", "in_progress"}:
+                        raise ValueError("Station is already occupied")
+                    await db.execute(
+                        "UPDATE stations SET active_match_id = NULL WHERE id = ? AND active_match_id = ?",
+                        (station_id, owner),
+                    )
                 async with db.execute(
                     """SELECT set_id FROM active_matches
                        WHERE station_id = ? AND set_id != ?
