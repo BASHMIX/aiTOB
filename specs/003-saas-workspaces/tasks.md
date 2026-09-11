@@ -281,7 +281,7 @@ operational check; a rehearsal is never a cutover.
   status endpoint now returns 200 with redacted `resend/configured` state and
   the System card renders the recipient field and test action. No test email
   was sent automatically. On 2026-09-11 the local service profile was updated
-  to the supplied Resend sender (`aiTOB no-reply@salma.bashtech.xyz`) and the
+  to the supplied Resend sender (`aiTOB <no-reply@salma.bashtech.xyz>`) and the
   restarted candidate API still reports `provider=resend`, `configured=true`,
   and `from_configured=true`; the API exposes no sender address or key. VAPID
   variables are documented as optional local settings, but this release has no
@@ -293,7 +293,9 @@ operational check; a rehearsal is never a cutover.
   DKIM TXT record at `resend._domainkey.salma.bashtech.xyz`; the Resend
   verification status cannot be read with this send-only key, so live delivery
   still needs one explicit test after confirming the domain is Verified in the
-  Resend project. No delivery retry was issued during this inspection.
+  Resend project. The first explicit test after correcting the sender format
+  returned `sent=true` on 2026-09-11 to the owner test mailbox; no key or
+  provider response body was logged.
 - [x] **T012 / FR-003** Canonical Owner / TO / Stream operator / Moderator /
   Viewer permission matrix is now present in `workspace_auth.py`, with legacy
   aliases retained only for staged data migration; session and WebSocket
