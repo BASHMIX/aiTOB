@@ -276,6 +276,11 @@ operational check; a rehearsal is never a cutover.
   status and offers an explicit test-recipient action; live sending remains a
   separate deployment check. After the adapter and route linkage, the full
   backend suite passes 462/462 with 31 intentional skips (2026-09-11).
+  A fresh candidate API process was reloaded on 2026-09-11 after the browser
+  was found attached to an older process missing the route; the authenticated
+  status endpoint now returns 200 with redacted `resend/configured` state and
+  the System card renders the recipient field and test action. No test email
+  was sent automatically.
 - [x] **T012 / FR-003** Canonical Owner / TO / Stream operator / Moderator /
   Viewer permission matrix is now present in `workspace_auth.py`, with legacy
   aliases retained only for staged data migration; session and WebSocket
@@ -589,6 +594,21 @@ operational check; a rehearsal is never a cutover.
   provider ledger unchanged. A fresh claim after restart returned zero Hub and
   zero Outbox rows; no external effect ran. Local and PostgreSQL hold regressions
   both pass.
+  Read-only candidate inspection on 2026-09-11 identified the exact held
+  Outbox events: `7ff98f0b-325c-4ab5-8095-e2fa9e0418b9`,
+  `1257a2fb-6273-4093-8642-4153cd6a41af`,
+  `1bda8756-6181-4ad9-8698-348e573ae61d`, and
+  `8bf7661f-a749-4015-9d4f-400ad2c7adc8` for match
+  `challonge:fnc-jo:18449397:471045156`, plus
+  `20a001ac-821b-4180-a32a-4f4595519762`,
+  `3c573602-5618-45ed-a5d1-b56b88a1eca3`,
+  `fe6807b6-be3d-4180-8b80-2a42e2fa26a6`, and
+  `0996f194-7189-42ef-83a7-e6b03a887a93` for match
+  `challonge:fnc-jo:18449397:471045157`. All eight remain
+  `needs_review`, attempts=0, without lease or `effect_started_at`.
+  Commands 126–134 were independently read as `needs_review`, attempts=0,
+  without lease, and with the explicit cutover-hold reason; the 17 matching
+  `queue.hold` audit rows remain intact.
   Detailed candidate queue classification (2026-09-09): the eight pending
   Outbox rows are two workflow groups, not eight independent provider actions.
   Four target `challonge:fnc-jo:18449397:471045156` (station-assigned,
