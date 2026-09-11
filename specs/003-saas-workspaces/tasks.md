@@ -280,7 +280,13 @@ operational check; a rehearsal is never a cutover.
   was found attached to an older process missing the route; the authenticated
   status endpoint now returns 200 with redacted `resend/configured` state and
   the System card renders the recipient field and test action. No test email
-  was sent automatically.
+  was sent automatically. On 2026-09-11 the local service profile was updated
+  to the supplied Resend sender (`aiTOB no-reply@fnc.bashtech.xyz`) and the
+  restarted candidate API still reports `provider=resend`, `configured=true`,
+  and `from_configured=true`; the API exposes no sender address or key. VAPID
+  variables are documented as optional local settings, but this release has no
+  browser-subscription, service-worker, or push-sender path, so they are inert
+  and do not count as Web Push acceptance.
 - [x] **T012 / FR-003** Canonical Owner / TO / Stream operator / Moderator /
   Viewer permission matrix is now present in `workspace_auth.py`, with legacy
   aliases retained only for staged data migration; session and WebSocket
