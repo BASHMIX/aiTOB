@@ -729,6 +729,9 @@ operational check; a rehearsal is never a cutover.
   `I'm Ready` and received the bot response `Both players ready!` with a
   lobby password. This closes the human Ready gate only; it does not claim a
   provider score mutation or live SMTP delivery.
+  The same acceptance match was then observed in the running Hub with
+  `Called=1`, `Ready=1`, and `LIVE` status; the organizer `Send Score` action
+  remains available and no score was submitted in this step.
   The user confirmed the full station Browser Source and the single-slide
   Overlay link rendered and updated inside OBS without changing any existing
   scene or source. This is visual OBS evidence only; SMTP remains deferred
