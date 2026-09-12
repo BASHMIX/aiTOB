@@ -964,6 +964,12 @@ operational check; a rehearsal is never a cutover.
   configured sender; Gmail spam classification remains an external mailbox
   policy outcome, not an application failure. No verification/reset link was
   involved in this test.
+  The Owner subsequently confirmed one live password-reset completion and
+  that reusing the consumed reset link was rejected. This closes the live
+  reset-link branch; email-verification link execution remains unconfirmed.
+  A further reset request was issued only to restore the Owner's prior local
+  password after the acceptance run; it is not counted as complete until its
+  new link is opened.
 
   Live acceptance follow-up (2026-09-12): the Owner created an actual
   invitation for the controlled Gmail test alias
