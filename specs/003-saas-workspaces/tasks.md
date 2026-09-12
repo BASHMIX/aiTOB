@@ -259,7 +259,7 @@ operational check; a rehearsal is never a cutover.
   request route with an explicit unverified/verified state; it never displays a
   token and reports SMTP as delivery-dependent. `npm run build` passes after
   this linkage (2026-09-11).
-- [~] **T011 / FR-003–005** Email verification, password change/reset, TOTP
+- [x] **T011 / FR-003–005** Email verification, password change/reset, TOTP
   recovery codes, session revocation and auth rate limits are implemented and
   covered by session tests; account UI is present. Email delivery remains
   deployment-dependent and public registration stays closed. The same isolated
@@ -301,6 +301,14 @@ operational check; a rehearsal is never a cutover.
   arrived in Gmail's Spam folder, closing the configured Resend delivery
   check; verification/reset/invitation link execution remains a separate
   acceptance case.
+  Final live-link verification on 2026-09-12: the latest verification token
+  was consumed in the candidate PostgreSQL database and the Owner row has a
+  non-null `email_verified_at`. Reopening that same URL returned the expected
+  “verification link is invalid or expired” response, proving one-time use.
+  The Owner also confirmed a live password reset and replay rejection, and a
+  login with the restored password succeeded. T011's live verification,
+  reset, replay, session-revocation, MFA and rate-limit gates are therefore
+  closed; the public registration gate remains deliberately closed.
 - [x] **T012 / FR-003** Canonical Owner / TO / Stream operator / Moderator /
   Viewer permission matrix is now present in `workspace_auth.py`, with legacy
   aliases retained only for staged data migration; session and WebSocket
@@ -337,7 +345,6 @@ operational check; a rehearsal is never a cutover.
   proved one-time replay rejection (HTTP 422); this UI confirmation closes the
   invitation-link acceptance gate without claiming email verification or
   password-reset link use (those remain T011 evidence).
-
 ## C. Ownership and tenant isolation
 
 - [x] **T020 / FR-001–003, FR-006** Preparatory nullable `workspace_id`
@@ -704,7 +711,7 @@ operational check; a rehearsal is never a cutover.
   12 restored table groups were present, and all 6 encrypted integration
   credentials decrypted with the existing service key. The disposable restore
   target was removed after verification.
-- [~] **T053 / SC-001–006, FR-017** Run final acceptance only after T004–T051a;
+- [x] **T053 / SC-001–006, FR-017** Run final acceptance only after T004–T051a;
   the required matrix is:
 
   | SC | Scenario and data | Steps | Expected result | Evidence |
@@ -732,7 +739,8 @@ operational check; a rehearsal is never a cutover.
   single-slide Overlay link rendered and updated inside OBS; this closes the
   native OBS visual row only and does not claim Ready or provider acceptance.
   SMTP delivery is confirmed separately by the user's Gmail observation below;
-  the remaining live link checks are tracked under T011/T013.
+  the live-link checks referenced at that point are superseded by the final
+  verification evidence below.
   On 2026-09-10 the independent Challonge result gate was exercised on fresh
   match `challonge:fnc-jo:18449397:471045163` (not one of the held legacy
   rows). The organizer workflow performed a freshness preflight, one remote
@@ -795,9 +803,9 @@ operational check; a rehearsal is never a cutover.
   asset/security/entitlement/retention cases passed (3 intentionally skipped
   live-email cases), and 32 PostgreSQL workspace/worker/overlay/asset cases
   passed (one disabled external benchmark skipped). These runs use mocked
-  external sinks and do not drain either queue. T053 therefore remains open
-  only for the explicit human/session gates listed above; no generic “broader
-  acceptance” placeholder is being used.
+  external sinks and do not drain either queue. At that point T053 remained
+  open only for the explicit human/session gates listed above; no generic
+  “broader acceptance” placeholder was being used.
 
   On 2026-09-10 the executable T053 local matrix was re-run after the
   ownership and test-discovery changes: action proposals, deterministic
@@ -965,11 +973,9 @@ operational check; a rehearsal is never a cutover.
   policy outcome, not an application failure. No verification/reset link was
   involved in this test.
   The Owner subsequently confirmed one live password-reset completion and
-  that reusing the consumed reset link was rejected. This closes the live
-  reset-link branch; email-verification link execution remains unconfirmed.
-  A further reset request was issued only to restore the Owner's prior local
-  password after the acceptance run; it is not counted as complete until its
-  new link is opened.
+  that reusing the consumed reset link was rejected. The subsequent final
+  verification evidence below supersedes the earlier note that email-link
+  execution was unconfirmed.
 
   Live acceptance follow-up (2026-09-12): the Owner created an actual
   invitation for the controlled Gmail test alias
@@ -990,8 +996,8 @@ operational check; a rehearsal is never a cutover.
   and a fresh bracket read returned provider state ``4`` (COMPLETE) with the
   same entrant IDs. The local row is ``complete`` with scores 2/1. No
   completed match was reopened and no duplicate mutation was retried. This
-  closes the Start.gg result/verification row of T053; email-link opening is
-  the remaining live acceptance dependency.
+  closes the Start.gg result/verification row of T053; email-link opening was
+  the remaining live acceptance dependency at that point.
 
   Commit ``bd48590`` closes the link-routing gap found during this acceptance:
   ``/verify-email``, ``/reset-password`` and ``/accept-invitation`` now render
@@ -999,5 +1005,18 @@ operational check; a rehearsal is never a cutover.
   confirmation route instead of a POST-only API URL. Frontend build passes and
   the full Vitest suite remains 42/42. The actual verification, reset and
   pending invitation messages have been sent; opening them in the authorized
-  Gmail session is the final human step, after which the same one-time
-  endpoints can be checked for post-use rejection.
+  Gmail session was the final human step at that point, after which the
+  one-time endpoints were checked for post-use rejection.
+
+  Final acceptance closure (2026-09-12): the candidate PostgreSQL row for
+  `bashmix@gmail.com` has a non-null `email_verified_at`; the latest
+  verification token has a consumed timestamp, and reopening its URL returned
+  the expected invalid/expired response. The Owner confirmed password-reset
+  completion and replay rejection, and login with the restored password
+  succeeded. T013's live invitation acceptance and replay rejection, Discord
+  Ready, OBS Browser Source, Start.gg result read-back, Challonge result/DQ,
+  workspace isolation, role matrix, overlay-token revocation, asset checks,
+  backup/restore, and restart checks are all recorded above. This closes all
+  executable T053 acceptance rows. T042 remains intentionally deferred by
+  decision because no payment gateway/merchant configuration was supplied;
+  manual free/non-billed entitlements remain active and no payment is claimed.
