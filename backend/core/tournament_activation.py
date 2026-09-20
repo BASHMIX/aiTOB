@@ -176,10 +176,12 @@ async def materialize_draft(draft_id: str, workspace_id: str, actor_id: str, *, 
                 slug = f"{slug}-{draft_id[:8]}"
                 tournament_id = slug
             await db.execute(
-                """INSERT INTO tournaments (slug, name, event_name, event_id, game, raw_data, workspace_id, provider_type, provider_tournament_id, provider_account_id, provider_sync_status, auto_dq_enabled)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', FALSE)
-                   ON CONFLICT(slug) DO UPDATE SET name=excluded.name WHERE tournaments.workspace_id=?""",
-                (slug, str(review.get("display_name") or _fact_value(tournament_facts.get("name")) or "Untitled tournament"), _fact_value(selected.get("name")), selected.get("external_id"), _fact_value(selected.get("game")), json.dumps({"draft_id": draft_id, "provider": provider}, ensure_ascii=False), workspace_id, provider.get("provider") or provider.get("provider_type") or "startgg", tournament_facts.get("external_id"), provider.get("account_id") or provider.get("provider_account_id"), workspace_id),
+                """INSERT INTO tournaments (slug, name, event_name, event_id, game, raw_data, workspace_id, provider_type, provider_tournament_id, provider_account_id, provider_sync_status, auto_dq_enabled, provider_dq_timer_seconds)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', FALSE, ?)
+                   ON CONFLICT(slug) DO UPDATE SET name=excluded.name,
+                    provider_dq_timer_seconds=excluded.provider_dq_timer_seconds
+                   WHERE tournaments.workspace_id=?""",
+                (slug, str(review.get("display_name") or _fact_value(tournament_facts.get("name")) or "Untitled tournament"), _fact_value(selected.get("name")), selected.get("external_id"), _fact_value(selected.get("game")), json.dumps({"draft_id": draft_id, "provider": provider}, ensure_ascii=False), workspace_id, provider.get("provider") or provider.get("provider_type") or "startgg", tournament_facts.get("external_id"), provider.get("account_id") or provider.get("provider_account_id"), review.get("provider_dq_timer_seconds") if (provider.get("provider") or provider.get("provider_type") or "startgg") == "startgg" else None, workspace_id),
             )
             await _persist_materialized_settings(db, draft, tournament_id, workspace_id, actor_id, now)
             await db.execute("UPDATE tournament_setup_drafts SET status='materialized', materialized_tournament_id=?, revision=revision+1, updated_by=?, updated_at=? WHERE id=? AND workspace_id=? AND revision=?", (tournament_id, actor_id, now, draft_id, workspace_id, expected_revision))

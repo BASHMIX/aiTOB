@@ -761,6 +761,317 @@ TABLE_SCHEMAS = [
         attempts     INTEGER DEFAULT 0,
         created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
+    ''',
+    # Feature 004 setup/runtime tables. These definitions are deliberately in
+    # the shared additive manifest so a fresh PostgreSQL SaaS deployment and
+    # isolated SQLite tests receive the same schema.
+    '''
+    CREATE TABLE IF NOT EXISTS tournament_setup_drafts (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        created_by TEXT NOT NULL,
+        updated_by TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'editing',
+        current_step TEXT NOT NULL DEFAULT 'provider',
+        revision INTEGER NOT NULL DEFAULT 1,
+        schema_version INTEGER NOT NULL DEFAULT 1,
+        provider_account_id TEXT,
+        provider_type TEXT,
+        external_tournament_id TEXT,
+        external_scope_id TEXT,
+        external_tournament_slug TEXT,
+        external_scope_slug TEXT,
+        provider_observed_at TIMESTAMP,
+        discord_account_id TEXT,
+        ai_account_id TEXT,
+        logo_asset_id TEXT,
+        answers_json TEXT NOT NULL DEFAULT '{}',
+        completion_json TEXT NOT NULL DEFAULT '{}',
+        materialized_tournament_id TEXT UNIQUE,
+        expires_at TIMESTAMP,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS integration_connection_health (
+        account_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'missing',
+        failure_category TEXT,
+        safe_message_code TEXT,
+        credential_revision INTEGER,
+        last_tested_at TIMESTAMP,
+        last_succeeded_at TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS workspace_ai_configs (
+        workspace_id TEXT PRIMARY KEY,
+        selected_account_id TEXT,
+        provider_type TEXT NOT NULL DEFAULT 'gemini',
+        model TEXT NOT NULL DEFAULT 'gemini-2.5-flash',
+        mode TEXT NOT NULL DEFAULT 'disabled',
+        request_limit INTEGER NOT NULL DEFAULT 100,
+        token_limit INTEGER NOT NULL DEFAULT 60000,
+        context_char_limit INTEGER NOT NULL DEFAULT 12000,
+        response_char_limit INTEGER NOT NULL DEFAULT 4000,
+        request_timeout_seconds INTEGER NOT NULL DEFAULT 30,
+        policy_version TEXT NOT NULL DEFAULT '1',
+        updated_by TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS provider_scope_bindings (
+        tournament_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        provider_account_id TEXT NOT NULL,
+        provider_type TEXT NOT NULL,
+        external_tournament_id TEXT NOT NULL,
+        external_scope_kind TEXT NOT NULL,
+        external_scope_id TEXT NOT NULL,
+        external_tournament_slug TEXT,
+        external_scope_slug TEXT,
+        provider_snapshot_json TEXT NOT NULL DEFAULT '{}',
+        observed_at TIMESTAMP,
+        sync_state TEXT NOT NULL DEFAULT 'not_started',
+        start_in_wave_state TEXT NOT NULL DEFAULT 'unknown',
+        wave_monitoring_mode TEXT NOT NULL DEFAULT 'off',
+        wave_confirmed_by TEXT,
+        wave_confirmed_at TIMESTAMP,
+        wave_monitoring_state TEXT NOT NULL DEFAULT 'not_applicable',
+        wave_last_snapshot_id TEXT,
+        wave_last_observed_at TIMESTAMP,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(workspace_id, provider_account_id, provider_type, external_scope_id)
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS match_call_occurrences (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        tournament_id TEXT NOT NULL,
+        match_id TEXT NOT NULL,
+        occurrence_version TEXT NOT NULL,
+        source_first_observed TEXT NOT NULL,
+        called_at TIMESTAMP NOT NULL,
+        delivery_state TEXT NOT NULL DEFAULT 'queued',
+        outbox_command_id TEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(workspace_id, tournament_id, match_id, occurrence_version)
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS tournament_brands (
+        tournament_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        short_name TEXT,
+        logo_asset_id TEXT,
+        accent_color TEXT,
+        updated_by TEXT NOT NULL,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS tournament_operating_profiles (
+        tournament_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        preset_key TEXT NOT NULL DEFAULT 'manual',
+        preset_version INTEGER NOT NULL DEFAULT 1,
+        attendance_source TEXT NOT NULL DEFAULT 'manual',
+        attendance_timeout_seconds INTEGER,
+        reminder_schedule_json TEXT NOT NULL DEFAULT '[]',
+        escalation_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        result_approval_policy TEXT NOT NULL DEFAULT 'human_required',
+        automatic_calls_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+        max_concurrent_bot_matches INTEGER NOT NULL DEFAULT 0,
+        automatic_call_stop_threshold INTEGER NOT NULL DEFAULT 0,
+        stream_match_policy TEXT NOT NULL DEFAULT 'manual',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_by TEXT NOT NULL
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS tournament_discord_bindings (
+        tournament_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        discord_account_id TEXT NOT NULL,
+        guild_id TEXT NOT NULL,
+        match_destination_id TEXT NOT NULL,
+        escalation_destination_id TEXT NOT NULL,
+        moderator_role_external_id TEXT,
+        conversation_mode TEXT NOT NULL DEFAULT 'thread_per_match',
+        status TEXT NOT NULL DEFAULT 'degraded',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS tournament_registration_configs (
+        tournament_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        enabled BOOLEAN NOT NULL DEFAULT FALSE,
+        destination_external_id TEXT,
+        opens_at TIMESTAMP,
+        closes_at TIMESTAMP,
+        display_timezone TEXT NOT NULL DEFAULT 'UTC',
+        require_provider_registration BOOLEAN NOT NULL DEFAULT TRUE,
+        gamertag_verification_policy TEXT NOT NULL DEFAULT 'match_or_set_nickname',
+        startgg_bio_verification_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+        image_policy TEXT NOT NULL DEFAULT 'optional',
+        verified_role_external_id TEXT,
+        announcement_policy_json TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL DEFAULT 'disabled',
+        schedule_version INTEGER NOT NULL DEFAULT 1,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_by TEXT NOT NULL
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS provider_roster_snapshots (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        tournament_id TEXT NOT NULL,
+        provider_account_id TEXT NOT NULL,
+        external_scope_id TEXT NOT NULL,
+        provider_revision TEXT,
+        entrant_fingerprint TEXT NOT NULL,
+        observed_at TIMESTAMP NOT NULL,
+        safe_counts_json TEXT NOT NULL DEFAULT '{}',
+        UNIQUE(workspace_id, tournament_id, external_scope_id, entrant_fingerprint)
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS tournament_player_enrollments (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        tournament_id TEXT NOT NULL,
+        player_identity_id TEXT,
+        discord_user_id TEXT,
+        discord_link_state TEXT NOT NULL DEFAULT 'unlinked',
+        discord_member_observed_at TIMESTAMP,
+        discord_link_updated_by TEXT,
+        discord_link_updated_at TIMESTAMP,
+        provider_identity_link_id TEXT,
+        provider_entrant_id TEXT,
+        provider_user_id TEXT,
+        prefix TEXT,
+        gamertag TEXT,
+        discord_name_observed TEXT,
+        verification_methods TEXT NOT NULL DEFAULT '[]',
+        gamertag_match_state TEXT NOT NULL DEFAULT 'not_checked',
+        nickname_changed_at TIMESTAMP,
+        bio_verified_at TIMESTAMP,
+        membership_state TEXT NOT NULL DEFAULT 'unmatched',
+        membership_observed_at TIMESTAMP,
+        roster_snapshot_id TEXT,
+        image_asset_id TEXT,
+        state TEXT NOT NULL DEFAULT 'awaiting_provider',
+        state_reason_code TEXT,
+        approved_by TEXT,
+        approved_at TIMESTAMP,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        completed_at TIMESTAMP
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS player_identity_verification_challenges (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        tournament_id TEXT NOT NULL,
+        enrollment_id TEXT NOT NULL,
+        provider_type TEXT NOT NULL,
+        external_scope_id TEXT NOT NULL,
+        discord_user_id TEXT NOT NULL,
+        claimed_provider_user_id TEXT NOT NULL,
+        code_hash TEXT NOT NULL,
+        expires_at TIMESTAMP NOT NULL,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        max_attempts INTEGER NOT NULL DEFAULT 5,
+        consumed_at TIMESTAMP,
+        invalidated_at TIMESTAMP,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS bot_experience_profiles (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        tournament_id TEXT,
+        language TEXT NOT NULL DEFAULT 'en',
+        tone TEXT NOT NULL DEFAULT 'concise',
+        templates_json TEXT NOT NULL DEFAULT '{}',
+        guild_nickname TEXT,
+        guild_avatar_asset_id TEXT,
+        guild_banner_asset_id TEXT,
+        guild_bio TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_by TEXT NOT NULL
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS tournament_setup_templates (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        schema_version INTEGER NOT NULL DEFAULT 1,
+        preferences_json TEXT NOT NULL DEFAULT '{}',
+        created_by TEXT NOT NULL,
+        updated_by TEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(workspace_id, name)
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS tournament_readiness_snapshots (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        draft_id TEXT NOT NULL,
+        tournament_id TEXT,
+        revision INTEGER NOT NULL,
+        purpose TEXT NOT NULL,
+        overall_state TEXT NOT NULL,
+        checks_json TEXT NOT NULL DEFAULT '[]',
+        provider_observed_at TIMESTAMP,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS discord_oauth_states (
+        state_hash TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        account_id TEXT,
+        draft_id TEXT,
+        return_step TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        consumed_at TIMESTAMP,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS provider_oauth_states (
+        state_hash TEXT PRIMARY KEY,
+        provider TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        actor_id TEXT,
+        account_id TEXT,
+        draft_id TEXT,
+        return_step TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        consumed_at TIMESTAMP,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
     '''
 ]
 
@@ -843,6 +1154,11 @@ MIGRATIONS = [
     "ALTER TABLE planned_streams ADD COLUMN workspace_id TEXT",
     # tournaments new columns
     "ALTER TABLE tournaments ADD COLUMN dq_timer_seconds INTEGER DEFAULT 600",
+    # Organizer-verified mirror of Start.gg's per-match DQ timer. The public
+    # API does not expose that round setting, so it must never be inferred from
+    # event check-in fields.
+    "ALTER TABLE tournaments ADD COLUMN provider_dq_timer_seconds INTEGER",
+    "ALTER TABLE integration_credentials ADD COLUMN credential_revision INTEGER NOT NULL DEFAULT 1",
     "ALTER TABLE tournaments ADD COLUMN auto_dq_enabled BOOLEAN DEFAULT TRUE",
     # players new columns
     "ALTER TABLE players ADD COLUMN preferred_language TEXT DEFAULT 'ar'",
@@ -922,6 +1238,13 @@ MIGRATIONS = [
     "ALTER TABLE active_matches ADD COLUMN p2_attendance_updated_at TIMESTAMP",
     "ALTER TABLE active_matches ADD COLUMN p1_attendance_source TEXT",
     "ALTER TABLE active_matches ADD COLUMN p2_attendance_source TEXT",
+    # Provider lifecycle and broadcast lifecycle are intentionally separate.
+    # A first confirmed entrant may protect a Start.gg set by moving the remote
+    # set to ACTIVE while the Hub remains called and the broadcast stays queued.
+    "ALTER TABLE active_matches ADD COLUMN attendance_protected_at TIMESTAMP",
+    "ALTER TABLE active_matches ADD COLUMN broadcast_state TEXT NOT NULL DEFAULT 'off_air'",
+    "ALTER TABLE active_matches ADD COLUMN broadcast_started_at TIMESTAMP",
+    "ALTER TABLE active_matches ADD COLUMN broadcast_ended_at TIMESTAMP",
     "ALTER TABLE active_matches ADD COLUMN last_notification_at TIMESTAMP",
     # Local workflow ownership is explicit so completion can never free another
     # match's station after a restart or a repeated reconciliation decision.

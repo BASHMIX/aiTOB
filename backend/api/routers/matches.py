@@ -323,11 +323,16 @@ async def api_player_ready(set_id: str, body: PlayerReadyRequest, principal: Ses
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         await hub_mgr.broadcast({"type": "match_update", "_workspace_id": _ws(principal)})
         return MessageResponse(message="Ready recorded locally.", ok=True)
-    await upsert_active_match(set_id, workspace_id=_ws(principal), **{f"{player}_ready": True})
-    match = await get_active_match(set_id, _ws(principal))
-    if match.get("p1_ready") and match.get("p2_ready"):
-        await transition_match(set_id, "in_progress", workspace_id=_ws(principal))
-    return MessageResponse(message="Ready updated", ok=True)
+    try:
+        result = await AttendanceCommandService(workspace_id=_ws(principal)).set_attendance(
+            set_id, player=player, state="present", source="manual"
+        )
+    except AttendanceCommandError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    await hub_mgr.broadcast({"type": "match_update", "_workspace_id": _ws(principal)})
+    if result["outcome"] == "both_present_started":
+        return MessageResponse(message="Both players are present; match started and broadcast went live when a station was available.", ok=True)
+    return MessageResponse(message="Player present and protected on Start.gg; waiting for the opponent.", ok=True)
 
 
 @router.post(
@@ -355,12 +360,23 @@ async def api_toggle_stream(set_id: str, body: ToggleStreamRequest, principal: S
         if m.get("station_id"):
             # Station already assigned — push onto the provider stream queue too.
             await _sync_provider_stream(set_id, m.get("station_id"), tournament_slug, _ws(principal))
+            if m.get("status") == "in_progress":
+                from datetime import UTC, datetime
+                await upsert_active_match(
+                    set_id, workspace_id=_ws(principal), broadcast_state="live",
+                    broadcast_started_at=datetime.now(UTC).isoformat(),
+                )
         elif m.get("status") == "in_progress":
             station = await get_available_stream_station(m.get("event_id") or "", _ws(principal))
             if station:
-                await upsert_active_match(set_id, workspace_id=_ws(principal), station_id=station["id"])
+                from datetime import UTC, datetime
+                await upsert_active_match(
+                    set_id, workspace_id=_ws(principal), station_id=station["id"],
+                    broadcast_state="live", broadcast_started_at=datetime.now(UTC).isoformat(),
+                )
                 await _sync_provider_stream(set_id, station["id"], tournament_slug, _ws(principal))
             else:
+                await upsert_active_match(set_id, workspace_id=_ws(principal), broadcast_state="ready")
                 await add_bot_feed(
                     f"📺 Match {set_id} flagged for stream but no free stream station "
                     f"for its event — TO to place it via the manual override.", "info"
@@ -372,7 +388,10 @@ async def api_toggle_stream(set_id: str, body: ToggleStreamRequest, principal: S
         await _remove_provider_stream(set_id, tournament_slug, _ws(principal))
         await remove_planned_stream(set_id)
         if m.get("station_id"):
-            await upsert_active_match(set_id, workspace_id=_ws(principal), station_id=None)
+            await upsert_active_match(
+                set_id, workspace_id=_ws(principal), station_id=None,
+                broadcast_state="off_air",
+            )
     await hub_mgr.broadcast({"type": "match_update", "_workspace_id": _ws(principal)})
     return MessageResponse(message="Stream toggle updated", ok=body.is_stream_match)
 
@@ -490,7 +509,7 @@ async def api_set_attendance(
     if not await get_active_match(set_id, _ws(principal)):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found")
     try:
-        await AttendanceCommandService(workspace_id=_ws(principal)).set_attendance(
+        outcome = await AttendanceCommandService(workspace_id=_ws(principal)).set_attendance(
             set_id, player=body.player, state=body.state, source="manual"
         )
     except AttendanceCommandError as exc:
@@ -502,7 +521,11 @@ async def api_set_attendance(
             ok=True,
         )
     return MessageResponse(
-        message="Player attendance recorded. Start.gg remains responsible for the bracket outcome.",
+        message=(
+            "Both players are present; play started and an assigned broadcast went live."
+            if outcome["outcome"] == "both_present_started"
+            else "Player attendance recorded and protected on Start.gg; waiting for the opponent."
+        ),
         ok=True,
     )
 

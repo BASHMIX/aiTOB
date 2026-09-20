@@ -59,6 +59,27 @@ class AttendanceTimerService:
             current = await database.get_active_match(match_id, workspace_id)
             if not current or current.get("hub_status") == "complete" or current.get("provider_state_normalized") == "complete":
                 return
+            tournament = await database.get_tournament(
+                current.get("tournament_slug") or "", workspace_id
+            )
+            if tournament and tournament.get("provider_type") == "startgg":
+                from backend.core.match_attendance import AttendanceCommandError, AttendanceCommandService
+                try:
+                    outcome = await AttendanceCommandService(
+                        workspace_id=workspace_id
+                    ).resolve_deadline(match_id)
+                    if outcome["outcome"] == "provider_double_dq":
+                        outcome = await AttendanceCommandService(
+                            workspace_id=workspace_id
+                        ).reconcile_provider_completion(match_id, delays=(0.0,))
+                    if outcome["outcome"] in {
+                        "single_attendee_dq_verified", "both_present",
+                        "not_called", "provider_already_complete",
+                        "provider_double_dq_reconciled", "already_reconciled",
+                    }:
+                        return
+                except AttendanceCommandError:
+                    pass
             await database.set_match_sync_status_v2(
                 match_id, "needs_review", workspace_id=workspace_id,
                 reason="Attendance deadline elapsed while recovery was active",
@@ -102,10 +123,32 @@ class RecoveryService:
             if result == "scheduled":
                 future.append(match_id)
             elif result == "overdue_review":
-                await database.set_match_sync_status_v2(
-                    match_id, "needs_review", workspace_id=match.get("workspace_id"),
-                    reason="Attendance deadline elapsed while aiTOB was offline",
+                tournament = await database.get_tournament(
+                    match.get("tournament_slug") or "", match.get("workspace_id")
                 )
+                resolved = False
+                if tournament and tournament.get("provider_type") == "startgg":
+                    from backend.core.match_attendance import AttendanceCommandError, AttendanceCommandService
+                    try:
+                        outcome = await AttendanceCommandService(
+                            workspace_id=match.get("workspace_id")
+                        ).resolve_deadline(match_id)
+                        if outcome["outcome"] == "provider_double_dq":
+                            outcome = await AttendanceCommandService(
+                                workspace_id=match.get("workspace_id")
+                            ).reconcile_provider_completion(match_id, delays=(0.0,))
+                        resolved = outcome["outcome"] in {
+                            "single_attendee_dq_verified", "both_present",
+                            "not_called", "provider_already_complete",
+                            "provider_double_dq_reconciled", "already_reconciled",
+                        }
+                    except AttendanceCommandError:
+                        resolved = False
+                if not resolved:
+                    await database.set_match_sync_status_v2(
+                        match_id, "needs_review", workspace_id=match.get("workspace_id"),
+                        reason="Attendance deadline elapsed while aiTOB was offline",
+                    )
                 overdue.append(match_id)
             elif result == "terminal":
                 terminal.append(match_id)

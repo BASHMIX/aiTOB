@@ -8,6 +8,7 @@ interface Tournament {
   event_id?: string | null;
   auto_dq_enabled?: boolean;
   dq_timer_seconds?: number;
+  provider_dq_timer_seconds?: number | null;
   bot_manage_limit?: string;
   bot_manage_finish?: string;
   provider_type?: 'startgg' | 'challonge';
@@ -63,6 +64,8 @@ interface Match {
   p2_avatar?: string;
   // New lifecycle fields
   is_stream_match?: boolean;
+  broadcast_state?: 'off_air' | 'queued' | 'ready' | 'live' | 'ended';
+  attendance_protected_at?: string | null;
   tournament_slug?: string;
   event_id?: string;
   event_name?: string;

@@ -46,7 +46,8 @@ export function ActiveMatchCard({ match }: { match: any }) {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [stationRef]);
 
-  const isLive = !!match.station_id;
+  const broadcastState = match.broadcast_state || (match.station_id && match.status === 'in_progress' ? 'live' : 'off_air');
+  const isLive = broadcastState === 'live';
   const isSwapped = !!match.swapped;
   const trackedMatch = matches.find((item) => item.set_id === match.set_id);
   // The On-Stream card receives a compact match snapshot. Read the mutable
@@ -203,7 +204,9 @@ export function ActiveMatchCard({ match }: { match: any }) {
   // ── Timer Logic ──
   const curTourney = tournaments.find(t => t.name === currentSlug || t.slug === currentSlug);
   const actualTourney = tournaments.find(t => t.slug === currentSlug) || curTourney;
-  const dqTimerSeconds = actualTourney?.dq_timer_seconds ?? 600;
+  const dqTimerSeconds = providerType === 'startgg'
+    ? (actualTourney?.provider_dq_timer_seconds ?? actualTourney?.dq_timer_seconds ?? 600)
+    : (actualTourney?.dq_timer_seconds ?? 600);
 
   const showTimer = match.status === "in_progress" || match.status === "called";
   const [timeDisplay, setTimeDisplay] = useState("00:00");
@@ -367,7 +370,7 @@ export function ActiveMatchCard({ match }: { match: any }) {
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3 h-3">
                 <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
               </svg>
-              STREAM
+              {broadcastState === 'live' ? 'LIVE' : broadcastState === 'ready' ? 'STREAM READY' : 'STREAM QUEUED'}
             </span>
           )}
         </div>

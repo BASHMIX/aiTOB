@@ -27,6 +27,7 @@ class Tournament(BaseModel):
     stream_slot: Optional[str] = None
     raw_data: Optional[str] = None
     dq_timer_seconds: int = 600
+    provider_dq_timer_seconds: Optional[int] = None
     auto_dq_enabled: bool = False
     bot_manage_limit: Optional[str] = "off"
     bot_manage_finish: Optional[str] = "off"
@@ -62,6 +63,10 @@ class ActiveMatch(BaseModel):
     swapped: bool = False
     bot_enabled: bool = True
     status: str = "not_started"
+    broadcast_state: str = "off_air"
+    attendance_protected_at: Optional[datetime] = None
+    broadcast_started_at: Optional[datetime] = None
+    broadcast_ended_at: Optional[datetime] = None
     dq_player: Optional[str] = None
     phase_group: Optional[str] = ""
     is_stream_match: bool = False

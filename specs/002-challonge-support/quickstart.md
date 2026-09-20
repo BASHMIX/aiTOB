@@ -623,9 +623,9 @@ focused changed-area suites and production build are green, but these full-suite
 failures prevent T075 closure.
 
 The public Start.gg schema did not expose a documented per-entrant attendance
-write. Until disposable T073 acceptance proves an authorized contract, aiTOB
-stores the attendance intent with `sync_status=needs_review`, never sends a
-technical winner, and treats the provider snapshot as the only bracket truth.
+write. aiTOB therefore records the decision locally, uses verified
+`markSetInProgress` only to protect the first attendee, never starts Hub play or
+broadcast until both attend, and treats provider snapshots as bracket truth.
 
 ### Start.gg disposable native-wave evidence — 2026-09-20
 
@@ -658,8 +658,25 @@ invent an exact deadline from ambiguous timestamps; it should show an exact
 countdown only after a provider-owned absolute deadline or a verified call
 timestamp is available.
 
-T073 remains open. The same disposable acceptance still needs the **both present**
-score path, the two **exactly one present** directions using real test-player
-check-in, and the live provider-outage/recovery case. These require authenticated
-test-player sessions or an authorized per-entrant Start.gg contract; the public
-schema exposes neither a per-entrant attendance write nor a match deadline.
+The bracket was then reset and the round DQ Timer was changed to one minute.
+aiTOB called two root sets. Set `107982724` received `markSetInProgress` after
+one verified local attendee and remained `IN_PROGRESS` beyond the deadline; set
+`107982725` received no protection and Start.gg completed it natively at about
+66 seconds. aiTOB then issued the agreed single-player DQ for `107982724` with
+attendee `23741309` as winner; Start.gg returned `COMPLETED` and advanced that
+entrant. A separate probe on set `107982733` proved
+`reportBracketSet(isDQ:true)` without `winnerId` leaves the set open, so it is
+not a Double-DQ API.
+
+The implemented runtime now mirrors the organizer-confirmed Start.gg round
+timer in `provider_dq_timer_seconds`, performs fresh entrant/state checks before
+attendance protection and exactly-one-present DQ, and performs two bounded
+reads after a zero-attendance deadline without resending a mutation. Broadcast
+has its own `broadcast_state`; the first attendee cannot make a stream live,
+while the second attendee automatically starts Hub play and makes an assigned,
+verified route live.
+
+T073 remains open for the **both present + score + automatic live** disposable
+path and the live provider-outage/restart case. Phase 11/T075 also remains open
+until the canonical provider gateway/command-ledger migration removes direct
+consumer imports and the full PostgreSQL regression gates are green.

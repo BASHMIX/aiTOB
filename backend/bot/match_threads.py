@@ -1,5 +1,6 @@
 import discord
 import asyncio
+from datetime import UTC, datetime, timedelta
 from backend.core.database import (
     get_player, get_active_match, update_active_match, add_bot_feed,
     get_setting, upsert_active_match, get_active_matches,
@@ -13,20 +14,19 @@ from backend.core.match_state import generate_lobby_password, start_call_timer
 #   1. The reachable player(s) still get a Ready DM.
 #   2. On Ready click, we DM them fallback instructions and stop trying to
 #      coordinate via Discord.
-#   3. Auto-DQ is DISARMED for that set — letting it fire would silently
-#      penalize a player who's actively waiting on start.gg.
-#   4. The sync engine picks up the result whenever both players self-report
-#      on start.gg's web UI.
+#   3. A verified Ready protects the reachable player at Start.gg. If the
+#      opponent remains absent through the mirrored provider deadline, the
+#      documented single-player DQ path advances the attendee.
 FALLBACK_DM_TEXT = (
     "⚠️ **Your opponent has no linked Discord account.**\n\n"
     "We've recorded your readiness, but we can't coordinate the match for you here.\n\n"
     "**Please proceed to your start.gg match dashboard now** to check in and use the site chat. "
     "Once you both finish and self-report on start.gg, the result will sync automatically.\n\n"
-    "No DQ will be issued for this match by the bot."
+    "Your verified Ready protects you from the native no-show timer."
 )
 FALLBACK_THREAD_TEXT = (
     "⚠️ Partial-reach match — opponent has no linked Discord account. "
-    "Auto-DQ is **DISARMED**. Coordinate and report on start.gg directly."
+    "The linked player's verified Ready is protected on Start.gg. Coordinate and report there if the opponent appears."
 )
 
 async def create_match_thread(bot, tournament, set_data):
@@ -119,6 +119,42 @@ async def create_match_thread(bot, tournament, set_data):
         auto_dq_disarmed=(1 if (fully_unreachable or partial or challonge_dq_disarmed) else 0),
     )
 
+    # Discord is the attendance UI, but Start.gg still owns the native no-show
+    # path when nobody attends. Calling the remote set here starts that timer;
+    # the first verified Discord attendee will protect the set by moving only
+    # the provider axis to IN_PROGRESS.
+    if (tournament or {}).get("provider_type", "startgg") == "startgg":
+        try:
+            from backend.core.providers.registry import get_provider_for_tournament
+            provider = await get_provider_for_tournament(
+                set_data.get("tournament_slug") or "", set_data.get("workspace_id")
+            )
+            called = await provider.mark_called(set_id)
+            if called.success:
+                called_at = datetime.now(UTC)
+                timeout_seconds = int(
+                    (tournament or {}).get("provider_dq_timer_seconds")
+                    or (tournament or {}).get("dq_timer_seconds")
+                    or 600
+                )
+                await update_active_match(
+                    set_id, workspace_id=set_data.get("workspace_id"),
+                    called_at=called_at.isoformat(),
+                    attendance_deadline=(called_at + timedelta(seconds=timeout_seconds)).isoformat(),
+                    provider_state_raw="6", provider_state_normalized="called",
+                    sync_status="synced", sync_reason="Start.gg native DQ timer started",
+                )
+            else:
+                await add_bot_feed(
+                    f"Start.gg call failed for {set_id}: {called.error_message or 'provider rejected markSetCalled'}",
+                    "warn", workspace_id=set_data.get("workspace_id"),
+                )
+        except Exception as exc:
+            await add_bot_feed(
+                f"Start.gg call unavailable for {set_id}: {str(exc)[:240]}",
+                "warn", workspace_id=set_data.get("workspace_id"),
+            )
+
     # Initialize the AI-referee state for this thread up front, keyed by the
     # Discord thread id but carrying the REAL start.gg set_id + player Discord
     # IDs + names. Every match — stream or not — uses the single check-in gate
@@ -151,6 +187,16 @@ async def create_match_thread(bot, tournament, set_data):
     if p2_discord: mentions.append(f"<@{p2_discord}>")
     content = " ".join(mentions) if mentions else "Players, your match is ready!"
 
+    timeout_seconds = int(
+        (tournament or {}).get("provider_dq_timer_seconds")
+        or (tournament or {}).get("dq_timer_seconds")
+        or 600
+    )
+    timeout_label = (
+        f"{timeout_seconds // 60} minute(s)"
+        if timeout_seconds % 60 == 0
+        else f"{timeout_seconds} seconds"
+    )
     if is_stream:
         title = f"📺 Stream Match: {round_name}"
         desc = (
@@ -158,11 +204,11 @@ async def create_match_thread(bot, tournament, set_data):
             "🎥 **You've been selected for the Stream Match!**\n"
             "Click **I'm Ready** to check in. The broadcaster's lobby name and "
             "password will be DM'd to you privately **once both players are ready**. "
-            "You have 10 minutes."
+            f"You have {timeout_label}."
         )
         embed = discord.Embed(title=title, description=desc, color=discord.Color.purple())
     else:
-        desc = f"**{p1_name}** vs **{p2_name}**\n\nClick **I'm Ready** to check in. You have 10 minutes."
+        desc = f"**{p1_name}** vs **{p2_name}**\n\nClick **I'm Ready** to check in. You have {timeout_label}."
         embed = discord.Embed(title=f"Match Ready: {round_name}", description=desc, color=discord.Color.green())
 
     view = ReadyCheckView(set_id, p1_discord, p2_discord, is_stream, thread, bot, workspace_id=set_data.get("workspace_id"))
@@ -195,7 +241,10 @@ async def create_match_thread(bot, tournament, set_data):
 
     from backend.core.database import get_tournament
     t = await get_tournament(set_data.get('tournament_slug', ''), set_data.get('workspace_id'))
-    timeout = (t.get('dq_timer_seconds') or 600) if t else 600
+    timeout = (
+        (t.get('provider_dq_timer_seconds') or t.get('dq_timer_seconds') or 600)
+        if t else 600
+    )
     asyncio.create_task(run_ready_check_timeout(bot, thread, set_id, timeout, set_data.get("workspace_id")))
 
 async def _create_startgg_checkin_thread(
@@ -329,11 +378,18 @@ class ReadyCheckView(discord.ui.View):
                 await interaction.followup.send(str(exc), ephemeral=True)
                 return
         else:
-            await update_active_match(
-                self.set_id,
-                workspace_id=self.workspace_id,
-                **{f"{player_key}_ready": True},
-            )
+            from backend.core.match_attendance import AttendanceCommandError, AttendanceCommandService
+            try:
+                service = AttendanceCommandService(workspace_id=self.workspace_id)
+                await service.set_attendance(
+                    self.set_id, player=player_key, state="present", source="discord"
+                )
+            except AttendanceCommandError as exc:
+                await interaction.followup.send(
+                    f"⚠️ حضورك سُجّل، لكن Start.gg لم يؤكد حماية المباراة: {exc}",
+                    ephemeral=True,
+                )
+                return
         await interaction.followup.send(f"✅ {interaction.user.display_name} is ready!", ephemeral=True)
 
         match = await (get_active_match(self.set_id, self.workspace_id)
@@ -365,9 +421,12 @@ class ReadyCheckView(discord.ui.View):
                 service = (MatchCommandService(workspace_id=self.workspace_id)
                            if self.workspace_id is not None else MatchCommandService())
                 await service.start(self.set_id)
-            else:
+            elif match.get("status") != "in_progress":
                 from backend.core.match_state import transition_match
-                await transition_match(self.set_id, "in_progress", workspace_id=self.workspace_id)
+                await transition_match(
+                    self.set_id, "in_progress", workspace_id=self.workspace_id,
+                    skip_provider=bool(match.get("attendance_protected_at")),
+                )
 
             # Arm the AI referee: flip the thread's graph state to 'playing' so
             # chat results are now accepted (they were gated during check-in).
@@ -547,27 +606,62 @@ async def deliver_stream_credentials(bot, thread, set_id, p1_discord, p2_discord
 
 
 async def run_ready_check_timeout(bot, thread, set_id, timeout_seconds: int = 600, workspace_id: str | None = None):
-    warning_at = max(0, timeout_seconds - 180)
+    warning_lead = min(180, max(10, timeout_seconds // 3))
+    warning_at = max(0, timeout_seconds - warning_lead)
     await asyncio.sleep(warning_at)
 
     # Re-fetch each time — the disarm flag can be flipped mid-flight, e.g. by a
     # T.O. manually marking the match safe, or by the partial-reach fallback.
     match = await get_active_match(set_id, workspace_id)
     workspace_id = match.get("workspace_id") if match else None
-    is_challonge = bool(match and str(match.get("tournament_slug") or "").startswith("challonge:"))
     if match and match.get('status') == 'called':
+        remaining_label = (
+            f"{warning_lead // 60} minute(s)"
+            if warning_lead >= 60 and warning_lead % 60 == 0
+            else f"{warning_lead} seconds"
+        )
         await thread.send(
-            "⚠️ **Reminder**: 3 minutes remain in the attendance window. "
-            "An organizer will review any no-show; the bot never disqualifies players automatically."
+            f"⚠️ **Reminder**: {remaining_label} remain in the attendance window."
         )
 
-    await asyncio.sleep(180)
+    await asyncio.sleep(warning_lead)
     match = await get_active_match(set_id, workspace_id)
     if not match or match.get('status') != 'called':
         return
+    from backend.core.database import get_tournament
+    try:
+        tournament = await get_tournament(match.get("tournament_slug") or "", workspace_id)
+    except Exception:
+        tournament = None
+    if tournament and tournament.get("provider_type") == "startgg":
+        from backend.core.match_attendance import AttendanceCommandError, AttendanceCommandService
+        try:
+            outcome = await AttendanceCommandService(workspace_id=workspace_id).resolve_deadline(set_id)
+        except AttendanceCommandError as exc:
+            await thread.send(f"⚠️ **Attendance deadline needs review:** {exc}")
+            await add_bot_feed(
+                f"Attendance deadline for {set_id} needs review: {exc}", "warn",
+                workspace_id=workspace_id,
+            )
+            return
+        if outcome["outcome"] == "single_attendee_dq_verified":
+            await thread.send("⏰ **Attendance window expired.** Start.gg verified the absent player's DQ and advanced the attending player.")
+            return
+        if outcome["outcome"] == "provider_double_dq":
+            await thread.send("⏰ **Attendance window expired with no attendees.** Waiting for Start.gg's native Double-DQ, then aiTOB will read the result back.")
+            reconciled = await AttendanceCommandService(
+                workspace_id=workspace_id
+            ).reconcile_provider_completion(set_id)
+            if reconciled["outcome"] in {"provider_double_dq_reconciled", "already_reconciled"}:
+                await thread.send("✅ **Start.gg result reconciled.** The provider closed the match after the attendance deadline.")
+            else:
+                await thread.send("⚠️ **Start.gg has not closed the match yet.** aiTOB retried the read and flagged it for organizer review; no winner was fabricated.")
+            return
+        if outcome["outcome"] in {"both_present", "not_called", "provider_already_complete"}:
+            return
+
     await thread.send(
-        "⏰ **Attendance window expired.** No automatic disqualification was sent. "
-        "An organizer must review the match and choose any bracket outcome manually."
+        "⏰ **Attendance window expired.** An organizer must review this provider's match outcome."
     )
     try:
         await add_bot_feed(

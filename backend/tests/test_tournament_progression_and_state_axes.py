@@ -15,7 +15,7 @@ def test_four_axes_remain_independent_for_a_called_challonge_open_match():
     })
     assert projection["state_axes"] == {
         "provider": {"raw": "open", "normalized": "not_started"},
-        "hub_status": "called", "sync_status": "local_only",
+        "hub_status": "called", "broadcast_state": "off_air", "sync_status": "local_only",
     }
     assert projection["discord"]["call_sent"] is True
     assert projection["eligibility"]["two_sided"] is True

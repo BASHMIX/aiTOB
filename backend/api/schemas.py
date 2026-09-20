@@ -391,7 +391,19 @@ class PatchTournamentSettingsRequest(BaseModel):
         examples=["#60A5FA"],
     )
     dq_timer_seconds: Optional[int] = Field(default=None, description="Number of seconds players have to check in", examples=[600])
-    auto_dq_enabled: Optional[bool] = Field(default=None, description="Whether players are auto-DQ'd if timer expires", examples=[True])
+    provider_dq_timer_seconds: Optional[int] = Field(
+        default=None, ge=15, le=7200,
+        description=(
+            "Organizer-verified mirror of Start.gg's per-match DQ timer. "
+            "The public Start.gg API does not expose this round setting."
+        ),
+        examples=[60, 600],
+    )
+    auto_dq_enabled: Optional[bool] = Field(
+        default=None,
+        description="Legacy local timer switch. Start.gg bracket outcomes remain provider-owned.",
+        examples=[False],
+    )
     bot_manage_limit: Optional[str] = Field(default=None, description="Which pools or segments are managed by the AI referee", examples=["top8"])
     bot_manage_finish: Optional[str] = Field(default=None, description="Whether matching is finalized automatically", examples=["auto"])
     # Auto-dispatcher controls
@@ -424,9 +436,9 @@ class PatchTournamentSettingsRequest(BaseModel):
     check_in_source: Optional[str] = Field(
         default=None,
         description=(
-            "Who drives match check-in. 'discord' (default): the bot posts I'm-Ready buttons and "
-            "runs its own auto-DQ timer. 'startgg': the bot posts a buttonless 'go to start.gg' "
-            "embed and fires markSetCalled so start.gg owns the check-in wave + DQ."
+            "Where attendance is confirmed. 'discord' lets verified Discord/manual controls record "
+            "each entrant while Start.gg owns the called deadline and bracket outcome. 'startgg' "
+            "uses Start.gg's native check-in surface."
         ),
         examples=["discord", "startgg"],
     )

@@ -8,7 +8,7 @@ export function ActiveMatchStatus() {
   // coverage (is_stream_match) — these are the matches whose data is wired to a stream station
   // and pushed to the OBS overlay. Match lifecycle state (Not Started / Called / In Progress /
   // Complete) lives in the Match Dashboard; this panel is purely the on-stream view.
-  const displayed = matches.filter(m => m.status === 'in_progress' && m.is_stream_match);
+  const displayed = matches.filter(m => m.broadcast_state === 'live');
 
   return (
     <section className="bg-cardDark/50 rounded-lg p-4 shadow-md flex flex-col gap-3 border border-white/10 relative">

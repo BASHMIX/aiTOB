@@ -5,6 +5,7 @@ interface MatchOperationsSettingsProps {
   currentSlug: string;
   initialAutoDqEnabled: boolean;
   initialDqTimerSeconds: number;
+  initialProviderDqTimerSeconds?: number | null;
   initialBotManageLimit?: string;
   initialBotManageFinish?: string;
   initialAutoDispatchEnabled?: boolean;
@@ -22,6 +23,7 @@ export function MatchOperationsSettings({
   currentSlug,
   initialAutoDqEnabled,
   initialDqTimerSeconds,
+  initialProviderDqTimerSeconds = null,
   initialBotManageLimit = "off",
   initialBotManageFinish = "off",
   initialAutoDispatchEnabled = false,
@@ -35,7 +37,9 @@ export function MatchOperationsSettings({
   onSave,
 }: MatchOperationsSettingsProps) {
   const [autoDqEnabled, setAutoDqEnabled] = useState(initialAutoDqEnabled);
-  const [dqTimerMinutes, setDqTimerMinutes] = useState(Math.floor(initialDqTimerSeconds / 60));
+  const [dqTimerMinutes, setDqTimerMinutes] = useState(Math.max(1, Math.floor(
+    (providerType === 'startgg' ? initialProviderDqTimerSeconds : null) ?? initialDqTimerSeconds
+  ) / 60));
   const [botManageLimit, setBotManageLimit] = useState(initialBotManageLimit);
   const [botManageFinish, setBotManageFinish] = useState(initialBotManageFinish);
   const [autoDispatchEnabled, setAutoDispatchEnabled] = useState(initialAutoDispatchEnabled);
@@ -72,7 +76,8 @@ export function MatchOperationsSettings({
     try {
       await axios.patch(`/api/tournaments/${currentSlug}/settings`, {
         auto_dq_enabled: autoDqEnabled,
-        dq_timer_seconds: dqTimerMinutes * 60,
+        dq_timer_seconds: isChallonge ? dqTimerMinutes * 60 : initialDqTimerSeconds,
+        provider_dq_timer_seconds: isChallonge ? null : dqTimerMinutes * 60,
         bot_manage_limit: botManageLimit,
         bot_manage_finish: botManageFinish,
         auto_dispatch_enabled: autoDispatchEnabled,
@@ -117,11 +122,11 @@ export function MatchOperationsSettings({
                   onChange={e => setCheckInSource(e.target.value)}
                   className="w-full bg-black/40 border border-white/10 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500/50"
                 >
-                  <option value="discord" className="text-black">Discord-run (bot buttons + bot auto-DQ)</option>
+                  <option value="discord" className="text-black">Discord attendance + Start.gg bracket resolution</option>
                   <option value="startgg" className="text-black">Start.gg-run (start.gg check-in wave + DQ)</option>
                 </select>
                 <span className="text-[11px] text-textDim leading-snug">
-                  <strong>Discord:</strong> bot posts "I'm Ready" buttons and runs the auto-DQ timer below.{' '}
+                  <strong>Discord:</strong> verified Ready protects the entrant on Start.gg; both Ready starts play, and one attendee advances by verified DQ at the mirrored deadline.{' '}
                   <strong>Start.gg:</strong> bot posts a buttonless "check in on start.gg" notice and lets
                   start.gg own the check-in timer, notifications, and DQ. The Auto-DQ settings below have no
                   effect in Start.gg mode.
@@ -149,7 +154,7 @@ export function MatchOperationsSettings({
           {/* DQ Timer */}
           <div className="flex flex-col gap-2 p-3 rounded-lg bg-black/25 border border-white/5">
             <div className="flex items-center justify-between">
-              <span className="text-sm font-semibold text-gray-200">{isChallonge ? 'Attendance deadline (Minutes)' : 'DQ Timer (Minutes)'}</span>
+              <span className="text-sm font-semibold text-gray-200">{isChallonge ? 'Attendance deadline (Minutes)' : 'Start.gg Match DQ Timer (Minutes)'}</span>
               <input 
                 type="number" 
                 min={1} 
@@ -159,7 +164,7 @@ export function MatchOperationsSettings({
                 className="w-20 bg-black/40 border border-white/10 rounded px-2.5 py-1 text-center text-sm font-medium text-white focus:outline-none focus:border-accentYellow/50"
               />
             </div>
-            <span className="text-xs text-textDim">{isChallonge ? 'Deadline for Discord reminders. It never submits an automatic Challonge DQ.' : 'Grace period before auto-DQ after match is called'}</span>
+            <span className="text-xs text-textDim">{isChallonge ? 'Deadline for Discord reminders. It never submits an automatic Challonge DQ.' : 'Must match the DQ Timer configured for this round in Start.gg. Start.gg does not expose that value through its public API.'}</span>
           </div>
 
           {/* Bot Manage Limit (Till) */}

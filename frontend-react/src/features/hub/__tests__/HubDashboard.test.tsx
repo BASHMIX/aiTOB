@@ -1,6 +1,7 @@
 import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
 import axios from 'axios';
 import { HubDashboard } from '../HubDashboard';
 import { useHubStore } from '@/store/useHubStore';
@@ -47,6 +48,8 @@ vi.mock('@/hooks/useHubSocket', () => ({
 }));
 
 describe('HubDashboard Integration', () => {
+  const renderDashboard = () => render(<MemoryRouter><HubDashboard /></MemoryRouter>);
+
   beforeEach(() => {
     // Reset state before each test
     act(() => {
@@ -82,7 +85,7 @@ describe('HubDashboard Integration', () => {
   });
 
   it('renders successfully and fetches initial data', async () => {
-    render(<HubDashboard />);
+    renderDashboard();
 
     expect(screen.getByText('FNC Tournament Hub')).toBeInTheDocument();
 
@@ -112,7 +115,7 @@ describe('HubDashboard Integration', () => {
       return { data: {} };
     });
 
-    render(<HubDashboard />);
+    renderDashboard();
 
     await waitFor(() => {
       expect(screen.getByText('Start.gg Token Connection Impaired')).toBeInTheDocument();
@@ -139,7 +142,7 @@ describe('HubDashboard Integration', () => {
 
   it('handles tab switching correctly', async () => {
     const user = userEvent.setup();
-    render(<HubDashboard />);
+    renderDashboard();
 
     // Default 'active'
     expect(screen.getByTestId('active-match-status')).toBeInTheDocument();
@@ -158,7 +161,7 @@ describe('HubDashboard Integration', () => {
 
   it('allows manual refresh via Match Dashboard button', async () => {
     const user = userEvent.setup();
-    render(<HubDashboard />);
+    renderDashboard();
 
     await waitFor(() => {
       expect(mockedAxios.get).toHaveBeenCalledWith('/api/tournaments');
@@ -174,7 +177,7 @@ describe('HubDashboard Integration', () => {
   });
 
   it('re-fetches data when receiving socket events', async () => {
-    render(<HubDashboard />);
+    renderDashboard();
 
     await waitFor(() => {
       expect(mockedAxios.get).toHaveBeenCalledWith('/api/tournaments');

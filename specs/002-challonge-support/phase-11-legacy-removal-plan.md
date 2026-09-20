@@ -23,18 +23,23 @@
   `Both Players`, and stopped presenting the local ten-minute value as a
   Start.gg timer. When no provider deadline is available the cards explicitly
   show `Start.gg` as the timer owner.
-- The official public Start.gg schema currently documents `markSetCalled(setId)`
-  and result reporting with required `winnerId`, but no provider-authorized
-  per-entrant attendance mutation was found. Therefore remote attendance
-  propagation and disposable verification remain a T073 release gate; the Hub
-  records the intent as `needs_review` rather than claiming a remote change.
+- The official public Start.gg schema documents `markSetCalled(setId)`,
+  `markSetInProgress(setId)`, and result reporting, but no per-entrant
+  attendance mutation. Live `testfnc` evidence proved that
+  `reportBracketSet(isDQ:true)` without a winner does not close a set. The
+  accepted bridge protects the first verified attendee with a verified
+  `markSetInProgress`, starts Hub play only after both attend, and never
+  fabricates a winner for zero attendance.
 - Live observation of disposable `tournament/testfnc` proved the neither-present
   native path: Start.gg moved two `CALLED` sets to `COMPLETED`, returned
   `displayScore="DQ"`, selected its own `winnerId`, and advanced/completed the
   bracket without any aiTOB timeout mutation. The Event exposed
   `checkInBuffer=900`, matching the organizer-observed 15-minute timer, but no
-  public absolute Set deadline. The remaining present/single-present directions
-  and live outage recovery still keep T073 open.
+  public absolute Set deadline. A reset follow-up with a one-minute round timer
+  proved an unprotected called set auto-completed at about 66 seconds, while a
+  set protected with provider `IN_PROGRESS` remained open. A verified
+  single-player DQ then completed that protected set and advanced its attendee.
+  The both-attendee score/broadcast and live outage recovery still keep T073 open.
 - Focused verification passed: provider/lifecycle, attendance/recovery safety,
   ActiveMatchCard, and production frontend-build checks. The full suites remain
   non-green for pre-existing unrelated fixture/schema and stale frontend-test
@@ -80,8 +85,11 @@ T075 must remain open until every gate below passes.
    2026-09-20. Start.gg called matches accept independent per-entrant attendance
    intents (`present | withdrawn`) from verified Discord self-service or an
    authorized organizer. A withdrawal is not an immediate DQ and does not select
-   a winner. Start.gg owns the deadline and resolves one present entrant as the
-   advancer or neither present as double-DQ. Challonge has no equivalent native
+   a winner. The first `present` is protected remotely with verified
+   `markSetInProgress`, while Hub play/broadcast stay called until the second
+   entrant appears. At the mirrored deadline exactly one present entrant is
+   advanced by a verified single-player DQ; neither present remains native
+   Start.gg double-DQ. Challonge has no equivalent native
    attendance window: it exposes organizer-approved immediate single-player DQ
    only, represented as loser `-1` / advancing player `0`, and every Challonge UI
    surface hides `both`. aiTOB never fabricates bracket progression. Start.gg
@@ -91,16 +99,12 @@ T075 must remain open until every gate below passes.
    an aiTOB mutation. Start.gg still returned a `winnerId`, so that field is
    provider progression data, not evidence that aiTOB selected a technical
    winner.
-   The leading path already present in the repository is `markSetCalled` with
-   Start.gg native check-in enabled: Start.gg owns the attendance timer and may
-   produce single- or double-DQ when it expires. The neither-present direction
-   is now live-proven; T073 must still prove both-present and the two
-   exactly-one-present directions before the complete matrix is accepted. The
-   current entrant-1 technical-winner fallback remains forbidden.
-   Start.gg also owns the timeout duration. `markSetCalled` currently accepts
-   only `setId`; aiTOB must read a provider deadline/duration when exposed and
-   must never present the local `dq_timer_seconds` as Start.gg's value or use a
-   local timer to issue the provider DQ.
+   The live matrix now proves native neither-present and protected
+   exactly-one-present behavior. T073 must still prove both-present score/live
+   behavior and outage recovery. The entrant-1 technical-winner fallback
+   remains forbidden. `markSetCalled` accepts only `setId`; because the public
+   API exposes no round DQ Timer, `provider_dq_timer_seconds` is an explicitly
+   labeled organizer mirror, separate from local/Challonge `dq_timer_seconds`.
    T066, T073, the Phase 10 runbook, capability projection, tests, and deployment
    configuration must be reconciled with this decision before rollout flags are
    removed. AI-DQ and automatic DQ remain prohibited.
@@ -293,9 +297,10 @@ SetAttendance(set_id, entrant_slot = p1 | p2, state = present | withdrawn)
 - Discord self-service requires the actor's verified entrant link; organizer
   manual actions require the corresponding permission. Both sources use the same
   command and audit/ledger path.
-- Start.gg exposes per-entrant `present` and `withdrawn` controls during the
-  called window. It exposes provider-returned single-/double-DQ as outcome, not
-  as an aiTOB-selected winner.
+- Start.gg exposes no documented per-entrant attendance mutation. aiTOB records
+  each decision locally; the first `present` uses verified
+  `markSetInProgress` as a set-level protection bridge. `withdrawn` sends no
+  result by itself.
 - Challonge exposes immediate DQ targets `p1` and `p2`; `both` is absent from
   capability projection and hidden in every client.
 - An acknowledgement means only that the provider accepted the transition.
@@ -308,12 +313,10 @@ SetAttendance(set_id, entrant_slot = p1 | p2, state = present | withdrawn)
   unavailable, rejected, or has an unknown outcome, the command becomes
   failed/`needs_review` and the prior authoritative bracket projection remains
   intact.
-- The Start.gg adapter sends a timeout value only if a documented or
-  provider-authorized contract accepts it. Otherwise it reads the authoritative
-  provider deadline/duration when available. If Start.gg exposes neither, the UI
-  says `Start.gg-managed timer` without a fabricated countdown. The local
-  `dq_timer_seconds` remains applicable only to Hub reminder/escalation workflows
-  and never drives or predicts a Start.gg DQ.
+- The Start.gg adapter does not send a timeout value. The organizer mirrors the
+  round DQ Timer in `provider_dq_timer_seconds`; setup/settings label it as a
+  mirror that cannot modify Start.gg. It drives aiTOB reminders and the agreed
+  exactly-one-present check, while zero attendance remains native provider truth.
 
 ## Implementation sequence
 

@@ -161,7 +161,7 @@ describe('TopNavigation Component', () => {
     const deleteButton = screen.getByTitle('Delete Tournament');
     await userEvent.click(deleteButton);
 
-    expect(confirmSpy).toHaveBeenCalledWith(`Are you sure you want to delete the tournament 'tourney-1'?`);
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('Remove “Tournament 1” from aiTOB?'));
 
     await waitFor(() => {
       expect(mockedAxios.delete).toHaveBeenCalledWith('/api/tournaments/tourney-1');

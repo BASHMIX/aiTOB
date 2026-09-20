@@ -14,7 +14,7 @@ def test_phase7_flags_are_limited_to_challonge_branches_and_leave_startgg_legacy
     thread_source = (root / "bot" / "match_threads.py").read_text(encoding="utf-8")
     assert "provider_feature_flags" in thread_source
     assert "is_challonge_local" in thread_source
-    assert "await transition_match(self.set_id, \"in_progress\", workspace_id=self.workspace_id)" in thread_source
+    assert "skip_provider=bool(match.get(\"attendance_protected_at\"))" in thread_source
     assert "SyncCoordinator" not in thread_source
 
     # Phase 7A adopts flags only at the Challonge-owned local workflow boundary.

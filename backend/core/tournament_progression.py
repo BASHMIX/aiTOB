@@ -60,7 +60,9 @@ def project_match(match: dict[str, Any]) -> dict[str, Any]:
         "legacy_status": match.get("status"),
         "state_axes": {
             "provider": {"raw": raw, "normalized": normalized},
-            "hub_status": match.get("hub_status"), "sync_status": match.get("sync_status"),
+            "hub_status": match.get("hub_status"),
+            "broadcast_state": match.get("broadcast_state") or "off_air",
+            "sync_status": match.get("sync_status"),
         } if has_v2 else None,
         "provider_diagnostics": {"raw_state": raw, "revision": match.get("provider_revision"), "observed_at": match.get("provider_observed_at")} if has_v2 else None,
         "progression": progression,

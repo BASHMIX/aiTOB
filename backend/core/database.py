@@ -2351,13 +2351,21 @@ async def _update_existing_match(
             p1_discord=COALESCE(NULLIF(p1_discord,''), ?),
             p2_discord=COALESCE(NULLIF(p2_discord,''), ?),
             round_name=?, match_number=?, phase_group=?,
-            event_id=?, event_name=?, status=?{', p1_score = 0, p2_score = 0' if reset_scores else ''}
+            event_id=?, event_name=?, status=?,
+            provider_state_raw=?, provider_state_normalized=?,
+            hub_status=?, hub_status_origin='provider_sync',
+            provider_observed_at=CURRENT_TIMESTAMP,
+            sync_status='synced', last_successful_snapshot_at=CURRENT_TIMESTAMP
+            {', p1_score = 0, p2_score = 0' if reset_scores else ''}
         WHERE set_id=?{match_scope}
     """, (p1_name, p2_name, p1_avatar, p2_avatar,
            p1_eid, p2_eid,
            p1_discord, p2_discord,
            round_name, match_num, str(phase_group),
-           ps.event_id or "", ps.event_name or "", new_status, sid) + match_scope_params)
+           ps.event_id or "", ps.event_name or "", new_status,
+           ps.provider_state_raw,
+           ps.state.name.lower() if ps.state else None,
+           new_status, sid) + match_scope_params)
 
     if sid in planned:
         preferred_stream = planned.get(sid)
@@ -2688,15 +2696,24 @@ async def record_startgg_attendance_intent_v2(
                 raise ValueError("Start.gg attendance can only change during the called window")
             if not str(match.get(f"{player}_entrant_id") or "").strip():
                 raise ValueError("Selected player has no provider entrant ID")
+            previous_state = str(match.get(state_column) or "pending")
+            if previous_state in {"present", "withdrawn"} and state != previous_state:
+                raise ValueError(
+                    f"{player} attendance is already {previous_state}; attendance decisions "
+                    "cannot be reversed during the same called window"
+                )
 
             if match.get(state_column) != state or match.get(source_column) != source:
                 update_scope = " AND workspace_id = ?" if workspace_id is not None else ""
+                ready_column = f"{player}_ready"
+                ready_at_column = "player1_ready_at" if player == "p1" else "player2_ready_at"
                 await db.execute(
                     f"""UPDATE active_matches
                            SET {state_column} = ?, {updated_column} = ?, {source_column} = ?,
+                               {ready_column} = ?, {ready_at_column} = ?,
                                sync_status = 'needs_review', sync_reason = ?
                          WHERE set_id = ?{update_scope}""",
-                    (state, now, source, reason, match_id)
+                    (state, now, source, state == "present", now if state == "present" else None, reason, match_id)
                     + ((workspace_id,) if workspace_id is not None else ()),
                 )
                 await db.execute(

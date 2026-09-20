@@ -106,11 +106,35 @@ async def _realize_in_progress_overlays(match: dict, update_kwargs: dict) -> Non
             continue
         if not _overlay_condition_holds(overlay.get("condition", ""), match):
             continue
-        if name == "on_stream" and not match.get("station_id"):
-            from backend.core.database import get_available_stream_station
-            station = await get_available_stream_station(match.get("event_id") or "", match.get("workspace_id"))
+        if name == "on_stream":
+            from backend.core.database import get_available_stream_station, get_station
+            station = (
+                await get_station(match.get("station_id"), match.get("workspace_id"))
+                if match.get("station_id")
+                else await get_available_stream_station(
+                    match.get("event_id") or "", match.get("workspace_id")
+                )
+            )
             if station:
                 update_kwargs["station_id"] = station["id"]
+                route_verified = True
+                stream_id = station.get("startgg_stream_id")
+                if stream_id:
+                    try:
+                        provider = await get_provider_for_tournament(
+                            match.get("tournament_slug") or "", match.get("workspace_id")
+                        )
+                        stream_result = await provider.assign_stream(str(set_id), str(stream_id))
+                        route_verified = bool(stream_result.success)
+                    except Exception as exc:
+                        route_verified = False
+                        await add_bot_feed(
+                            f"📺 Stream assignment failed for {set_id}: {str(exc)[:240]}", "warn",
+                            workspace_id=match.get("workspace_id"),
+                        )
+                update_kwargs["broadcast_state"] = "live" if route_verified else "ready"
+                if route_verified:
+                    update_kwargs["broadcast_started_at"] = datetime.datetime.now(datetime.UTC).isoformat()
                 await add_bot_feed(
                     f"📺 On-stream: bound {station.get('name') or station['id']} to "
                     f"{match.get('p1_name')} vs {match.get('p2_name')}.", "info"
@@ -250,14 +274,33 @@ async def transition_match(
     if not validate_transition(current, to_status):
         return {"error": f"Cannot transition from {current} to {to_status}"}
 
-    update_kwargs = {"status": to_status, **kwargs}
+    update_kwargs = {
+        "status": to_status,
+        "hub_status": to_status,
+        "hub_status_origin": "local_workflow",
+        **kwargs,
+    }
     # Only terminal transitions can advance a station queue.  Initialize this
     # for every branch so called -> in_progress never reads an undefined local.
     station_to_advance = None
 
     if to_status == "called":
-        now = datetime.datetime.utcnow().isoformat()
+        now_dt = datetime.datetime.now(datetime.UTC)
+        now = now_dt.isoformat()
+        provider_timer = (
+            tournament.get("provider_dq_timer_seconds")
+            if tournament and tournament.get("provider_type") == "startgg"
+            else None
+        )
+        timeout_seconds = int(provider_timer or (tournament or {}).get("dq_timer_seconds") or 600)
         update_kwargs["called_at"] = now
+        update_kwargs["attendance_deadline"] = (
+            now_dt + datetime.timedelta(seconds=timeout_seconds)
+        ).isoformat()
+        update_kwargs["attendance_protected_at"] = None
+        update_kwargs["broadcast_state"] = "queued" if match.get("is_stream_match") else "off_air"
+        update_kwargs["broadcast_started_at"] = None
+        update_kwargs["broadcast_ended_at"] = None
         update_kwargs["p1_ready"] = False
         update_kwargs["p2_ready"] = False
         update_kwargs["p1_attendance_state"] = "pending"
@@ -371,12 +414,25 @@ async def transition_match(
         # Realize any JSON-defined overlay derived from in_progress (e.g.
         # `on_stream`): bind the stream station at this exact transition point.
         await _realize_in_progress_overlays(match, update_kwargs)
+        if match.get("is_stream_match"):
+            if update_kwargs.get("broadcast_state"):
+                pass
+            elif update_kwargs.get("station_id") or match.get("station_id"):
+                update_kwargs["broadcast_state"] = "live"
+                update_kwargs["broadcast_started_at"] = datetime.datetime.now(datetime.UTC).isoformat()
+            else:
+                update_kwargs["broadcast_state"] = "ready"
+        else:
+            update_kwargs["broadcast_state"] = "off_air"
 
     elif to_status == "complete":
         # The `on_stream` overlay ends with the match — free the station the
         # instant it completes so it's available for the next stream match.
         station_to_advance = match.get("station_id")
         update_kwargs["station_id"] = None
+        if match.get("is_stream_match") or match.get("broadcast_state") in {"queued", "ready", "live"}:
+            update_kwargs["broadcast_state"] = "ended"
+            update_kwargs["broadcast_ended_at"] = datetime.datetime.now(datetime.UTC).isoformat()
 
     elif to_status == "not_started":
         update_kwargs["p1_score"] = 0
@@ -393,6 +449,10 @@ async def transition_match(
         update_kwargs["p2_attendance_updated_at"] = None
         update_kwargs["p1_attendance_source"] = None
         update_kwargs["p2_attendance_source"] = None
+        update_kwargs["attendance_protected_at"] = None
+        update_kwargs["broadcast_state"] = "queued" if match.get("is_stream_match") else "off_air"
+        update_kwargs["broadcast_started_at"] = None
+        update_kwargs["broadcast_ended_at"] = None
     await upsert_active_match(
         set_id, workspace_id=match.get("workspace_id") or workspace_id, **update_kwargs,
     )

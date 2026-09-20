@@ -165,7 +165,13 @@ function UnreachableBadge() {
   );
 }
 
-function PlayersBlock({ players }: { players: MatchData["players"] }) {
+function PlayersBlock({
+  players,
+  onMarkPresent,
+}: {
+  players: MatchData["players"];
+  onMarkPresent?: (player: 'p1' | 'p2') => void;
+}) {
   return (
     <div className="flex-1 overflow-hidden flex flex-col justify-center rounded-l-md">
       {players.map((p, i) => (
@@ -191,6 +197,16 @@ function PlayersBlock({ players }: { players: MatchData["players"] }) {
               <span className="rounded border border-emerald-500/40 bg-emerald-500/10 px-1 py-0.5 text-[8px] font-black uppercase tracking-wide text-emerald-300">
                 Present
               </span>
+            )}
+            {onMarkPresent && (p.attendanceState || 'pending') === 'pending' && !p.isTBD && (
+              <button
+                type="button"
+                onClick={() => onMarkPresent(i === 0 ? 'p1' : 'p2')}
+                className="rounded border border-emerald-500/35 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold text-emerald-200 transition-colors hover:bg-emerald-500/20"
+                title="Record verified attendance and protect this entrant on Start.gg"
+              >
+                Mark Present
+              </button>
             )}
             {/* Only show the badge once we're sure: hasDiscord is set on local matches; undefined for unsynced bracket rows. */}
             {p.hasDiscord === false && !p.isTBD && <UnreachableBadge />}
@@ -435,7 +451,10 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
       {/* Top Section: Players, Scores, and Match Metadata */}
       <div className="flex items-stretch w-full">
         <PlayersBlock 
-          players={match.players} 
+          players={match.players}
+          onMarkPresent={match.status === 'called' && match.providerType === 'startgg'
+            ? (player) => onAction('attendancePresent', match, player)
+            : undefined}
         />
         
         {/* Match Metadata Column */}

@@ -88,6 +88,7 @@ function TournamentWorkflowSettings() {
     auto_dispatch_on_stream?: boolean;
     ignore_activity_guard?: boolean;
     check_in_source?: string;
+    provider_dq_timer_seconds?: number | null;
   }) | undefined;
 
   const phaseGroups = useMemo(() => Array.from(new Set(
@@ -108,6 +109,7 @@ function TournamentWorkflowSettings() {
           currentSlug={currentSlug}
           initialAutoDqEnabled={tournament?.auto_dq_enabled ?? true}
           initialDqTimerSeconds={tournament?.dq_timer_seconds ?? 600}
+          initialProviderDqTimerSeconds={matchConfiguration?.provider_dq_timer_seconds ?? null}
           initialBotManageLimit={tournament?.bot_manage_limit}
           initialBotManageFinish={tournament?.bot_manage_finish}
           initialAutoDispatchEnabled={Boolean(matchConfiguration?.auto_dispatch_enabled)}

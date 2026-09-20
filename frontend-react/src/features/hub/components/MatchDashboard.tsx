@@ -343,6 +343,15 @@ export function MatchDashboard() {
         }
         reload();
       }
+      else if (action === 'attendancePresent') {
+        if (!setId) { showToast('Cannot record attendance: missing set ID', false); return; }
+        const res = await axios.post(`/api/active-matches/${setId}/attendance`, {
+          player: data,
+          state: 'present',
+        });
+        showToast(res.data.message || 'Attendance recorded');
+        reload();
+      }
       else if (action === 'assignStation') {
         if (!setId) { showToast('Cannot assign: missing set ID', false); return; }
         if (!row.isLocal) {
@@ -439,7 +448,9 @@ export function MatchDashboard() {
   const actualTourney = tournaments.find(t => t.slug === currentSlug) || curTourney;
 
   const autoDqEnabled = actualTourney?.auto_dq_enabled ?? true;
-  const dqTimerSeconds = actualTourney?.dq_timer_seconds ?? 600;
+  const dqTimerSeconds = actualTourney?.provider_type === 'startgg'
+    ? (actualTourney?.provider_dq_timer_seconds ?? actualTourney?.dq_timer_seconds ?? 600)
+    : (actualTourney?.dq_timer_seconds ?? 600);
 
   // ── Main Render ───────────────────────────────────────────────────────
   const filtered = hideTBD ? mappedMatches.filter(m => m.players.every(p => !p.isTBD)) : mappedMatches;
