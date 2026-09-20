@@ -626,3 +626,40 @@ The public Start.gg schema did not expose a documented per-entrant attendance
 write. Until disposable T073 acceptance proves an authorized contract, aiTOB
 stores the attendance intent with `sync_status=needs_review`, never sends a
 technical winner, and treats the provider snapshot as the only bracket truth.
+
+### Start.gg disposable native-wave evidence — 2026-09-20
+
+The organizer authorized live observation of the disposable Start.gg tournament
+`tournament/testfnc` (tournament `917260`), event `FNCtestHub` (`1640502`), and
+phase group `3339325`. No aiTOB score, DQ, or technical-winner mutation was sent
+during this observation.
+
+Start.gg reported first-round sets `107981340` and `107981341` as `CALLED`, each
+with two resolved test entrants and no winner. The organizer observed the native
+15-minute no-show timer. Start.gg then completed both sets autonomously and
+returned `displayScore="DQ"`, `state=COMPLETED`, a provider-selected `winnerId`,
+and provider-owned downstream progression. Subsequent native no-show processing
+completed the remaining bracket and changed the Event and phase group to
+`COMPLETED`.
+
+This proves the required **neither entrant appears** path: aiTOB sends no timeout
+mutation, waits for Start.gg, and reconciles the provider result. It also proves
+that `winnerId` alone cannot distinguish a played result from a provider-created
+DQ; reconciliation must retain the provider's DQ evidence and must not describe
+that field as an aiTOB-selected technical winner.
+
+The live Event response exposed `checkInBuffer=900`, matching the organizer's
+observed 15-minute timer, while `checkInEnabled=false` and `checkInDuration=0`.
+Those latter fields therefore do not describe this match-level native wave. The
+public Set schema exposed no per-set deadline and the exposed `startedAt` and
+`completedAt` interval did not independently reproduce the visible 15-minute
+countdown. aiTOB must treat `checkInBuffer` as provider duration evidence, not
+invent an exact deadline from ambiguous timestamps; it should show an exact
+countdown only after a provider-owned absolute deadline or a verified call
+timestamp is available.
+
+T073 remains open. The same disposable acceptance still needs the **both present**
+score path, the two **exactly one present** directions using real test-player
+check-in, and the live provider-outage/recovery case. These require authenticated
+test-player sessions or an authorized per-entrant Start.gg contract; the public
+schema exposes neither a per-entrant attendance write nor a match deadline.

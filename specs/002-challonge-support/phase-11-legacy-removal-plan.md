@@ -28,6 +28,13 @@
   per-entrant attendance mutation was found. Therefore remote attendance
   propagation and disposable verification remain a T073 release gate; the Hub
   records the intent as `needs_review` rather than claiming a remote change.
+- Live observation of disposable `tournament/testfnc` proved the neither-present
+  native path: Start.gg moved two `CALLED` sets to `COMPLETED`, returned
+  `displayScore="DQ"`, selected its own `winnerId`, and advanced/completed the
+  bracket without any aiTOB timeout mutation. The Event exposed
+  `checkInBuffer=900`, matching the organizer-observed 15-minute timer, but no
+  public absolute Set deadline. The remaining present/single-present directions
+  and live outage recovery still keep T073 open.
 - Focused verification passed: provider/lifecycle, attendance/recovery safety,
   ActiveMatchCard, and production frontend-build checks. The full suites remain
   non-green for pre-existing unrelated fixture/schema and stale frontend-test
@@ -79,12 +86,17 @@ T075 must remain open until every gate below passes.
    only, represented as loser `-1` / advancing player `0`, and every Challonge UI
    surface hides `both`. aiTOB never fabricates bracket progression. Start.gg
    double-DQ must be implemented only through provider-owned behavior proven
-   against a disposable tournament.
+   against a disposable tournament. The 2026-09-20 `testfnc` run proved the
+   neither-present provider-owned DQ closure and downstream progression without
+   an aiTOB mutation. Start.gg still returned a `winnerId`, so that field is
+   provider progression data, not evidence that aiTOB selected a technical
+   winner.
    The leading path already present in the repository is `markSetCalled` with
    Start.gg native check-in enabled: Start.gg owns the attendance timer and may
-   produce single- or double-DQ when it expires. T073 must prove this exact
-   behavior before it is treated as the `both` implementation; the current
-   entrant-1 technical-winner fallback is forbidden.
+   produce single- or double-DQ when it expires. The neither-present direction
+   is now live-proven; T073 must still prove both-present and the two
+   exactly-one-present directions before the complete matrix is accepted. The
+   current entrant-1 technical-winner fallback remains forbidden.
    Start.gg also owns the timeout duration. `markSetCalled` currently accepts
    only `setId`; aiTOB must read a provider deadline/duration when exposed and
    must never present the local `dq_timer_seconds` as Start.gg's value or use a
