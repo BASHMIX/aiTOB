@@ -4,15 +4,15 @@ from __future__ import annotations
 import pytest
 
 from backend.core import database
-from backend.core.storage import dbapi as aiosqlite, is_postgres
+from backend.core.storage import dbapi, is_postgres
 
 
 @pytest.fixture
 async def v2_database(tmp_path, monkeypatch):
-    db_path = tmp_path / "provider-v2.sqlite"
-    monkeypatch.setattr(database, "DB_PATH", str(db_path))
+    database_dsn = tmp_path / "provider-v2.pg"
+    monkeypatch.setattr(database, "DATABASE_DSN", str(database_dsn))
     await database.init_db()
-    return database.DB_PATH
+    return database.DATABASE_DSN
 
 
 @pytest.mark.asyncio
@@ -65,14 +65,14 @@ async def test_workflow_outbox_lease_recovers_durably_without_dispatching_discor
     assert claimed[0]["attempts"] == 1
     assert reclaimed[0]["attempts"] == 2
 
-    async with aiosqlite.connect(v2_database) as db:
+    async with dbapi.connect(v2_database) as db:
         async with db.execute("SELECT COUNT(*) FROM workflow_outbox") as cursor:
             assert (await cursor.fetchone())[0] == 1
 
 
 @pytest.mark.asyncio
 async def test_future_hub_workflow_and_outbox_share_one_transaction_without_touching_legacy_status(v2_database):
-    async with aiosqlite.connect(v2_database) as db:
+    async with dbapi.connect(v2_database) as db:
         await db.execute(
             "INSERT INTO active_matches (set_id, status) VALUES ('match-atomic', 'not_started')"
         )
@@ -85,7 +85,7 @@ async def test_future_hub_workflow_and_outbox_share_one_transaction_without_touc
             "deduplication_key": "call:match-atomic:revision-1",
         },
     )
-    async with aiosqlite.connect(v2_database) as db:
+    async with dbapi.connect(v2_database) as db:
         async with db.execute(
             "SELECT status, hub_status FROM active_matches WHERE set_id = 'match-atomic'"
         ) as cursor:
@@ -112,7 +112,7 @@ async def test_v2_budget_and_snapshot_cache_are_persistence_only(v2_database):
     await database.record_provider_request_telemetry_v2(
         "challonge", "account-1", "tournament-1", "single_match", 80, "started"
     )
-    async with aiosqlite.connect(v2_database) as db:
+    async with dbapi.connect(v2_database) as db:
         async with db.execute("SELECT estimated_used FROM provider_api_budgets") as cursor:
             assert (await cursor.fetchone())[0] == 18
         async with db.execute("SELECT revision FROM provider_snapshot_cache") as cursor:

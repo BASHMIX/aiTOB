@@ -1,15 +1,7 @@
-"""PostgreSQL-only storage acceptance tests.
-
-Run explicitly with AITOB_PG_TEST_URL; ordinary isolated SQLite tests never
-need a reachable PostgreSQL service.
-"""
+"""PostgreSQL-only storage acceptance tests."""
 from __future__ import annotations
 
 import asyncio
-import os
-import uuid
-from urllib.parse import urlsplit, urlunsplit
-
 import pytest
 
 from backend.core import database
@@ -18,65 +10,24 @@ from backend.core.storage import _query
 from backend.core.workflow_outbox import ExternalEffectUnknown, WorkflowOutboxWorker
 
 
-PG_TEST_URL = os.getenv("AITOB_PG_TEST_URL")
-pytestmark = pytest.mark.skipif(not PG_TEST_URL, reason="requires explicit AITOB_PG_TEST_URL")
-
-
-@pytest.fixture(autouse=True)
-async def isolated_postgres(monkeypatch: pytest.MonkeyPatch):
-    import psycopg
-    from psycopg import sql
-    parts = urlsplit(PG_TEST_URL or "")
-    name = "aitob_test_" + uuid.uuid4().hex
-    admin = urlunsplit((parts.scheme, parts.netloc, "/postgres", parts.query, parts.fragment))
-    target = urlunsplit((parts.scheme, parts.netloc, "/" + name, parts.query, parts.fragment))
-    with psycopg.connect(admin, autocommit=True) as db:
-        db.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
-    monkeypatch.setenv("DATABASE_URL", target)
-    try:
-        await database.init_db()
-        yield
-    finally:
-        with psycopg.connect(admin, autocommit=True) as db:
-            db.execute(sql.SQL("DROP DATABASE {}").format(sql.Identifier(name)))
-
-
 def test_placeholders_preserve_sql_literals_and_comments():
     sql = "SELECT '?', \"?\", ? -- ? :ignored\n, :value /* ? :also_ignored */; SELECT $$? :inside$$, :outside"
     assert _query(sql) == "SELECT '?', \"?\", %s -- ? :ignored\n, %(value)s /* ? :also_ignored */; SELECT $$? :inside$$, %(outside)s"
     assert _query("SELECT ?::text, :value::integer") == "SELECT %s::text, %(value)s::integer"
 
 
-def test_sqlite_compatibility_rewrites_are_limited_to_legacy_executable_forms():
-    assert _query("INSERT OR IGNORE INTO player_overrides (id) VALUES (?)") == (
-        "INSERT INTO player_overrides (id) VALUES (%s) ON CONFLICT DO NOTHING"
-    )
-    # Date arithmetic is repository-owned so a compatibility regex can never
-    # rewrite a user-facing literal or SQL comment.
-    assert _query("SELECT datetime('now', '-2 minutes'), '?' /* datetime('now') */") == (
-        "SELECT datetime('now', '-2 minutes'), '?' /* datetime('now') */"
-    )
-    for statement in (
-        "SELECT 'INSERT OR IGNORE INTO sample'",
-        "SELECT 'INSERT OR REPLACE INTO connections (key, value) VALUES (?, ?)'",
-        "SELECT 1 /* INSERT OR IGNORE INTO sample */",
-    ):
-        assert _query(statement) == statement
-
-
 @pytest.mark.asyncio
 async def test_parameterized_sql_preserves_percent_literals_and_modulo():
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
         row = await (await db.execute("SELECT '100%' AS label, ? % 2 AS remainder", (3,))).fetchone()
         assert row["label"] == "100%"
         assert row["remainder"] == 1
 
 
 @pytest.mark.asyncio
-async def test_begin_immediate_compatibility_starts_transaction_without_global_lock():
-    """Legacy syntax starts a transaction; repositories own scoped locking."""
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
-        await db.execute("BEGIN IMMEDIATE")
+async def test_explicit_transaction_can_be_rolled_back():
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute("BEGIN")
         row = await (await db.execute("SELECT 1 AS active")).fetchone()
         assert row["active"] == 1
         await db.rollback()
@@ -97,21 +48,21 @@ async def test_concurrent_approval_locks_one_proposal_and_one_command():
     proposal = await create_action_proposal(tournament_slug="pg/one", action_type="call", match_id="pg-set", reason="concurrency")
     first, second = await asyncio.gather(approve_action_proposal(proposal["id"]), approve_action_proposal(proposal["id"]))
     assert first["command_id"] == second["command_id"]
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
         row = await (await db.execute("SELECT COUNT(*) FROM hub_commands WHERE source='proposal'")).fetchone()
     assert row[0] == 1
 
 
 @pytest.mark.asyncio
 async def test_active_match_boolean_updates_bind_as_postgres_booleans():
-    """Bot Call updates must not send SQLite 0/1 into PostgreSQL BOOLEAN columns."""
+    """Bot Call updates must not send PostgreSQL 0/1 into PostgreSQL BOOLEAN columns."""
     await database.upsert_tournament("pg/bool", "PG", "Bracket", "event", "Game", "{}")
     await database.upsert_active_match(
         "pg-bool", tournament_slug="pg/bool", p1_name="One", p2_name="Two",
         p1_entrant_id="1", p2_entrant_id="2", status="not_started",
     )
     assert await database.update_active_match("pg-bool", auto_dq_disarmed=0)
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
         row = await (await db.execute(
             "SELECT auto_dq_disarmed FROM active_matches WHERE set_id=?", ("pg-bool",)
         )).fetchone()
@@ -149,7 +100,7 @@ async def test_failed_transaction_rolls_back_before_independent_retry():
         payload={"text": "safe"}, reason="rollback",
     )
     # Roll back an explicit, independent transaction after taking the row lock.
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute("BEGIN")
         await db.execute("SELECT id FROM action_proposals WHERE id=? FOR UPDATE", (proposal["id"],))
         await db.execute("UPDATE action_proposals SET approval_status='rejected' WHERE id=?", (proposal["id"],))
@@ -162,10 +113,10 @@ async def test_failed_transaction_rolls_back_before_independent_retry():
 
 @pytest.mark.asyncio
 async def test_postgres_schema_migration_is_tracked_and_reentrant():
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
         before = (await (await db.execute("SELECT count(*) FROM schema_migration_history")).fetchone())[0]
     await asyncio.gather(database.init_db(), database.init_db())
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
         after = (await (await db.execute("SELECT count(*) FROM schema_migration_history")).fetchone())[0]
     assert before == after and before > 0
 
@@ -173,7 +124,7 @@ async def test_postgres_schema_migration_is_tracked_and_reentrant():
 @pytest.mark.asyncio
 async def test_concurrent_station_reservations_lock_one_station_owner():
     await database.upsert_tournament("pg/stations", "PG", "Bracket", "event", "Game", "{}")
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute("UPDATE tournaments SET provider_type='challonge' WHERE slug='pg/stations'")
         await db.commit()
     for match_id in ("pg-station-a", "pg-station-b"):
@@ -245,7 +196,7 @@ async def test_unknown_external_outbox_outcome_requires_review_not_blind_retry()
 
     worker = WorkflowOutboxWorker(uncertain_dispatch, lease_owner="unknown-effect-worker")
     assert await worker.run_once() == 0
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
         row = await (await db.execute(
             "SELECT status FROM workflow_outbox WHERE event_id=?", ("pg-unknown-effect",)
         )).fetchone()
@@ -263,7 +214,7 @@ async def test_concurrent_owner_bootstrap_creates_one_workspace(monkeypatch):
         return_exceptions=True,
     )
     assert sorted(outcomes) == [False, True]
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
         assert (await (await db.execute("SELECT count(*) FROM workspaces")).fetchone())[0] == 1
 
 
@@ -326,7 +277,7 @@ async def test_retention_is_atomic_when_two_workers_run_together():
 
     user_id = str(uuid.uuid4())
     old = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=31)).isoformat()
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute(
             "INSERT INTO users (id,email,display_name,password_hash) VALUES (?,?,?,?)",
             (user_id, f"retention-pg-{user_id}@example.test", "Retention PG", "hash"),
@@ -342,7 +293,7 @@ async def test_retention_is_atomic_when_two_workers_run_together():
         purge_expired_auth_artifacts(retention_days=30),
     )
     assert sum(item["password_reset_tokens"] for item in counts) == 1
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
         remaining = await (await db.execute(
             "SELECT COUNT(*) FROM password_reset_tokens WHERE user_id=?", (user_id,)
         )).fetchone()
@@ -388,7 +339,7 @@ async def test_restart_after_external_effect_does_not_redeliver(monkeypatch):
             await WorkflowOutboxWorker(dispatch, lease_owner="before").run_once(now="2099-01-01T00:00:00+00:00")
     assert await WorkflowOutboxWorker(dispatch, lease_owner="after").run_once(now="2099-01-01T00:02:00+00:00") == 0
     assert delivered == ["crash-effect"]
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
         assert (await (await db.execute("SELECT status FROM workflow_outbox WHERE event_id='crash-effect'")).fetchone())[0] == "needs_review"
 
 
@@ -419,5 +370,5 @@ async def test_concurrent_invite_acceptance_and_last_owner_removal(monkeypatch):
     )
     assert outcomes.count(None) == 1
     assert sum(isinstance(value, ValueError) for value in outcomes) == 1
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
         assert (await (await db.execute("SELECT count(*) FROM workspace_memberships WHERE role='owner' AND status='active'")).fetchone())[0] == 1

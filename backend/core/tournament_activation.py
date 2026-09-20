@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from backend.core import database
-from backend.core.storage import dbapi as aiosqlite, is_postgres
+from backend.core.storage import dbapi, is_postgres
 from backend.core.tournament_readiness import compute_readiness
 from backend.core.tournament_setup import DraftError, DraftRevisionConflict, get_draft
 from backend.core.workflow_outbox import build_initial_sync_event
@@ -167,9 +167,9 @@ async def materialize_draft(draft_id: str, workspace_id: str, actor_id: str, *, 
     # deterministic during the current compatibility period.
     tournament_id = slug
     now = datetime.now(UTC).isoformat()
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
+        await db.execute("BEGIN")
         try:
             existing = await (await db.execute("SELECT slug, workspace_id FROM tournaments WHERE slug=?", (slug,))).fetchone()
             if existing and str(existing["workspace_id"] or "") != str(workspace_id):
@@ -194,9 +194,9 @@ async def materialize_draft(draft_id: str, workspace_id: str, actor_id: str, *, 
 
 async def activate_tournament(workspace_id: str, tournament_id: str, actor_id: str, *, idempotency_key: str = "1") -> dict[str, Any]:
     event = build_initial_sync_event(workspace_id=workspace_id, tournament_id=tournament_id, activation_version=idempotency_key)
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
+        await db.execute("BEGIN")
         try:
             tournament = await (await db.execute("SELECT * FROM tournaments WHERE slug=? AND workspace_id=?", (tournament_id, workspace_id))).fetchone()
             if not tournament:

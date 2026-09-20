@@ -63,7 +63,7 @@ async def test_gemini_adapter_passes_service_timeout_to_sdk(monkeypatch):
 
 @pytest.fixture
 async def ai_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "ai.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "ai.pg"))
     monkeypatch.setenv("AITOB_AI_SERVICE_MASTER_KEY", Fernet.generate_key().decode("ascii"))
     await database.init_db()
     for slug in ("ai/a", "ai/b"):

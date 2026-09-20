@@ -1,11 +1,11 @@
-"""Phase 8: recovery must work from SQLite with fresh service contexts."""
+"""Phase 8: recovery must work from PostgreSQL with fresh service contexts."""
 from __future__ import annotations
 
 import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 import pytest
 
 from backend.core import database
@@ -13,7 +13,7 @@ from backend.core import database
 
 @pytest.fixture
 async def recovery_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "recovery.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "recovery.pg"))
     await database.init_db()
     slug = "challonge:account:recovery:1"
     await database.upsert_tournament(slug, "Recovery", None, None, None, json.dumps({}), provider_type="challonge", provider_tournament_id="1", provider_account_id="account")
@@ -22,7 +22,7 @@ async def recovery_db(tmp_path, monkeypatch):
     await database.upsert_active_match("challonge:future", tournament_slug=slug, status="called", hub_status="called", called_at=datetime.now(UTC).isoformat(), player1_ready_at=datetime.now(UTC).isoformat(), attendance_deadline=future, station_id="station-a", discord_thread_id="thread-a")
     await database.upsert_active_match("challonge:overdue", tournament_slug=slug, status="called", hub_status="called", attendance_deadline=past)
     await database.upsert_active_match("challonge:complete", tournament_slug=slug, status="complete", hub_status="complete", attendance_deadline=future)
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute("INSERT INTO stations (id, name, active_match_id) VALUES ('station-a', 'A', 'challonge:future')")
         await db.commit()
     return slug
@@ -55,7 +55,7 @@ async def test_overdue_timer_requests_review_never_auto_dq(recovery_db):
     assert report.overdue_deadlines == ("challonge:overdue",)
     match = await database.get_active_match("challonge:overdue")
     assert match.get("dq_player") is None
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         async with db.execute("SELECT COUNT(*) FROM provider_command_ledger WHERE set_id='challonge:overdue'") as cursor:
             assert (await cursor.fetchone())[0] == 0
 
@@ -124,7 +124,7 @@ async def test_competing_outbox_workers_claim_once_and_effect_deduplicates_after
     await worker.run_once(now="2099-01-01T00:02:00+00:00")
     await worker.run_once(now="2099-01-01T00:03:00+00:00")
     assert attempts == 1 and external == {"recovery:crash"}
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         row = await (await db.execute("SELECT status FROM workflow_outbox WHERE event_id='e2'")).fetchone()
         assert row[0] == "needs_review"
 
@@ -138,7 +138,7 @@ async def test_command_lease_reclaims_in_new_context_without_resending_mutation(
         match_id="challonge:future", action="score", payload={"score": 2}, expected_result={}, precondition_revision=None,
     )
     # A dead process left an expired sending lease.
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute("UPDATE provider_command_ledger SET state='sending', lease_owner='dead', lease_until='2000-01-01T00:00:00+00:00' WHERE id=?", (command["id"],))
         await db.commit()
     verified: list[str] = []

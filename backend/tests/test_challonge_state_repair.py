@@ -5,12 +5,12 @@ import json
 import pytest
 
 from backend.core import database
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 
 
 @pytest.fixture
 async def repair_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "repair.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "repair.pg"))
     await database.init_db()
     await database.upsert_tournament("challonge:repair", "Repair", None, None, None, json.dumps({}), provider_type="challonge", provider_tournament_id="1")
     await database.upsert_tournament("startgg:protected", "Protected", None, None, None, json.dumps({}))
@@ -19,7 +19,7 @@ async def repair_db(tmp_path, monkeypatch):
     await database.upsert_active_match("challonge:station", tournament_slug="challonge:repair", status="in_progress", provider_state_raw="open", station_id="station-a")
     await database.upsert_active_match("challonge:closed", tournament_slug="challonge:repair", status="in_progress", provider_state_raw="complete")
     await database.upsert_active_match("startgg:testfnc", tournament_slug="startgg:protected", status="in_progress", station_id="station-a")
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute("INSERT INTO stations (id, name, active_match_id) VALUES ('station-a', 'Protected', 'startgg:testfnc')")
         await db.commit()
 
@@ -63,7 +63,7 @@ async def test_apply_requires_exact_report_fingerprint_and_never_changes_startgg
     assert (await database.get_active_match("startgg:testfnc"))["station_id"] == "station-a"
     # A second application cannot alter or re-audit an already repaired row.
     assert await apply_approved(report, ["challonge:eligible"], organizer="organizer") == 0
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         async with db.execute(
             "SELECT before_hub_status, after_hub_status FROM provider_reconciliation_audit "
             "WHERE set_id='challonge:eligible' AND action='state_repair_apply'"

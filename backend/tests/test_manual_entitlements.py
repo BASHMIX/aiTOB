@@ -6,17 +6,17 @@ import pytest
 
 from backend.core import database
 from backend.core.entitlements import apply_manual_subscription, get_workspace_entitlement
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 from backend.core.workspace_auth import hash_password
 
 
 @pytest.fixture
 async def entitlement_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "entitlements.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "entitlements.pg"))
     monkeypatch.setenv("AITOB_BOOTSTRAP_OWNER_EMAIL", "platform@example.test")
     monkeypatch.setenv("AITOB_BOOTSTRAP_OWNER_PASSWORD", "platform-password")
     await database.init_db()
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         owner = await (await db.execute("SELECT id FROM users WHERE email=?", ("platform@example.test",))).fetchone()
         workspace = await (await db.execute("SELECT id FROM workspaces LIMIT 1")).fetchone()
         await db.execute(
@@ -53,7 +53,7 @@ async def test_platform_admin_can_activate_extend_and_suspend_without_payment(en
     )
     assert suspended["status"] == "suspended"
     assert suspended["billing_state"] == "expired"
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         audit = await (await db.execute(
             "SELECT action, outcome FROM audit_events WHERE workspace_id=? AND action='subscription.manual_update'",
             (workspace_id,),
@@ -77,7 +77,7 @@ async def test_non_platform_admin_and_invalid_expiry_are_rejected_without_audit(
         )
     current = await get_workspace_entitlement(workspace_id)
     assert current["plan_key"] == "free"
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         count = await (await db.execute(
             "SELECT COUNT(*) FROM audit_events WHERE workspace_id=? AND action='subscription.manual_update'",
             (workspace_id,),

@@ -45,7 +45,7 @@ async def _install_provider(monkeypatch):
 
 @pytest.fixture
 async def startgg_attendance_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "startgg-attendance.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "startgg-attendance.pg"))
     await database.init_db()
     await database.upsert_tournament(
         "startgg:attendance",

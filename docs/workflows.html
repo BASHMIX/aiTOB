@@ -368,7 +368,7 @@
           sequenceDiagram
               actor Player as Discord Player
               participant Bot as Discord Bot
-              participant DB as SQLite Database
+              participant data in PostgreSQL
               participant API as FastAPI Backend
 
               Player->>Bot: Click "Register" in active channel

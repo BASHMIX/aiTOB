@@ -14,13 +14,13 @@ def run(coro):
 
 @pytest.fixture(autouse=True)
 def isolated_database(tmp_path, monkeypatch):
-    original_path = database.DB_PATH
-    database.DB_PATH = str(tmp_path / "station-queue-test.sqlite")
+    original_path = database.DATABASE_DSN
+    database.DATABASE_DSN = str(tmp_path / "station-queue-test.pg")
     monkeypatch.setenv("AITOB_TESTING", "1")
-    monkeypatch.setenv("DB_PATH", database.DB_PATH)
+    monkeypatch.setenv("DATABASE_DSN", database.DATABASE_DSN)
     run(database.init_db())
     yield
-    database.DB_PATH = original_path
+    database.DATABASE_DSN = original_path
 
 
 def test_station_queue_enqueue_and_order():

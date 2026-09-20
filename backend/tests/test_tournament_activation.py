@@ -6,9 +6,9 @@ from backend.core.tournament_activation import materialize_draft, activate_tourn
 
 @pytest.mark.asyncio
 async def test_materialize_and_activate_are_idempotent(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "activation.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "activation.pg"))
     await database.init_db()
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute("INSERT INTO workspaces(id,slug,name) VALUES ('w','w','W')")
         await db.execute("INSERT INTO users(id,email,display_name,password_hash) VALUES ('u','u@example.com','U','x')")
         await db.commit()
@@ -19,6 +19,6 @@ async def test_materialize_and_activate_are_idempotent(tmp_path, monkeypatch):
     active = await activate_tournament("w", materialized["tournament_id"], "u", idempotency_key="x")
     replay = await activate_tournament("w", materialized["tournament_id"], "u", idempotency_key="x")
     assert active["status"] == replay["status"] == "active"
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
         count = await (await db.execute("SELECT COUNT(*) FROM workflow_outbox WHERE event_type='initial_sync'")).fetchone()
     assert count[0] == 1

@@ -8,8 +8,8 @@ from backend.core import database
 
 @pytest.fixture
 async def feed_test_db(tmp_path, monkeypatch):
-    path = tmp_path / "feed.sqlite"
-    monkeypatch.setattr(database, "DB_PATH", str(path))
+    path = tmp_path / "feed.pg"
+    monkeypatch.setattr(database, "DATABASE_DSN", str(path))
     yield path
 
 from backend.core.database import add_bot_feed, clear_bot_feed, get_bot_feed, init_db

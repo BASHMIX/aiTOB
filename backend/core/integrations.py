@@ -12,15 +12,15 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 from cryptography.fernet import Fernet, InvalidToken
 
 from backend.core import database
 
 
-def _db_path() -> str:
-    """Resolve at call time so test/acceptance contexts never share production DB."""
-    return database.DB_PATH
+def _database_target() -> str:
+    """Resolve the configured PostgreSQL target at call time."""
+    return database.DATABASE_DSN
 
 
 class IntegrationError(RuntimeError):
@@ -203,7 +203,7 @@ def _public_health(row: dict[str, Any], *, configured: bool | None = None, enabl
 
 
 async def _credential_revision(
-    db: aiosqlite.Connection,
+    db: dbapi.Connection,
     owner_id: str,
     secret_type: str | None = None,
     *,
@@ -225,7 +225,7 @@ async def _credential_revision(
 
 
 async def _upsert_connection_health(
-    db: aiosqlite.Connection,
+    db: dbapi.Connection,
     account_id: str,
     workspace_id: str,
     *,
@@ -237,7 +237,7 @@ async def _upsert_connection_health(
     last_succeeded_at: str | None = None,
 ) -> dict[str, Any]:
     """Write health state without accepting upstream text or secret material."""
-    db.row_factory = aiosqlite.Row
+    db.row_factory = dbapi.Row
     state = _validate_health_value(state, CONNECTION_STATES, "health state") or "missing"
     failure_category = _validate_health_value(
         failure_category, CONNECTION_FAILURE_CATEGORIES, "failure category"
@@ -329,8 +329,8 @@ async def get_integration_health(
     if not account:
         return None
     configured = bool(await configured_secret_types(account_id))
-    async with aiosqlite.connect(_db_path()) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(_database_target()) as db:
+        db.row_factory = dbapi.Row
         row = await (await db.execute(
             "SELECT * FROM integration_connection_health WHERE account_id=? AND workspace_id=?",
             (account_id, account.get("workspace_id") or workspace_id),
@@ -381,8 +381,8 @@ async def update_integration_health(
     effective_workspace = account.get("workspace_id") or workspace_id
     if not effective_workspace:
         raise IntegrationError("Integration account has no workspace owner.")
-    async with aiosqlite.connect(_db_path()) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(_database_target()) as db:
+        db.row_factory = dbapi.Row
         value = await _upsert_connection_health(
             db,
             account_id,
@@ -431,7 +431,7 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-async def _audit(db: aiosqlite.Connection, account_id: str | None, action: str, detail: dict[str, Any] | None = None) -> None:
+async def _audit(db: dbapi.Connection, account_id: str | None, action: str, detail: dict[str, Any] | None = None) -> None:
     # Integration audit rows are operational metadata, never a credential
     # sink.  Keep the existing table/API shape while dropping unsafe fields.
     await db.execute(
@@ -449,8 +449,8 @@ async def create_integration_account(
     provider_type = _validate_provider_type(provider_type)
     safe_metadata = _safe_metadata(metadata or {})
     account_id = str(uuid.uuid4())
-    async with aiosqlite.connect(_db_path()) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(_database_target()) as db:
+        db.row_factory = dbapi.Row
         await db.execute(
             """INSERT INTO integration_accounts
                (id, owner_id, workspace_id, provider_type, external_account_id, display_name, metadata_json)
@@ -473,8 +473,8 @@ def _public_account(row: dict[str, Any]) -> dict[str, Any]:
 
 
 async def get_integration_account(account_id: str, *, workspace_id: str | None = None, active_only: bool = True) -> dict[str, Any] | None:
-    async with aiosqlite.connect(_db_path()) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(_database_target()) as db:
+        db.row_factory = dbapi.Row
         clauses = ["id=?"]
         params: list[str] = [account_id]
         if workspace_id is not None:
@@ -516,7 +516,7 @@ async def update_integration_account(
         values.append(json.dumps(_safe_metadata(metadata), sort_keys=True))
     if fields:
         values.extend([account_id, workspace_id])
-        async with aiosqlite.connect(_db_path()) as db:
+        async with dbapi.connect(_database_target()) as db:
             await db.execute(
                 f"UPDATE integration_accounts SET {', '.join(fields)}, updated_at=CURRENT_TIMESTAMP WHERE id=? AND workspace_id=?",
                 values,
@@ -538,7 +538,7 @@ async def get_integration_workspace_id(account_id: str) -> str | None:
     """
     if not account_id:
         return None
-    async with aiosqlite.connect(_db_path()) as db:
+    async with dbapi.connect(_database_target()) as db:
         row = await (await db.execute(
             "SELECT workspace_id FROM integration_accounts WHERE id=?",
             (account_id,),
@@ -547,8 +547,8 @@ async def get_integration_workspace_id(account_id: str) -> str | None:
 
 
 async def list_integration_accounts(workspace_id: str | None) -> list[dict[str, Any]]:
-    async with aiosqlite.connect(_db_path()) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(_database_target()) as db:
+        db.row_factory = dbapi.Row
         if workspace_id is None:
             rows = await (await db.execute(
                 "SELECT * FROM integration_accounts ORDER BY provider_type, display_name"
@@ -607,8 +607,8 @@ async def set_integration_secret(
         raise IntegrationError("Unsupported OAuth application credential type.")
 
     cipher = _box().encrypt(secret.encode("utf-8")).decode("ascii")
-    async with aiosqlite.connect(_db_path()) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(_database_target()) as db:
+        db.row_factory = dbapi.Row
         cursor = await db.execute(
             """
             INSERT INTO integration_credentials
@@ -655,7 +655,7 @@ async def set_integration_secret(
 
 
 async def get_integration_secret(owner_id: str, secret_type: str, *, owner_kind: str = "account") -> str | None:
-    async with aiosqlite.connect(_db_path()) as db:
+    async with dbapi.connect(_database_target()) as db:
         row = await (await db.execute(
             "SELECT ciphertext FROM integration_credentials WHERE owner_kind=? AND owner_id=? AND secret_type=?",
             (owner_kind, owner_id, secret_type),
@@ -669,7 +669,7 @@ async def get_integration_secret(owner_id: str, secret_type: str, *, owner_kind:
 
 
 async def configured_secret_types(owner_id: str, *, owner_kind: str = "account") -> set[str]:
-    async with aiosqlite.connect(_db_path()) as db:
+    async with dbapi.connect(_database_target()) as db:
         rows = await (await db.execute(
             "SELECT secret_type FROM integration_credentials WHERE owner_kind=? AND owner_id=?", (owner_kind, owner_id)
         )).fetchall()
@@ -686,7 +686,7 @@ async def get_integration_secret_revision(
     owner_kind = str(owner_kind or "").strip().lower()
     if owner_kind not in {"account", "application"}:
         raise IntegrationError("Unsupported integration credential owner.")
-    async with aiosqlite.connect(_db_path()) as db:
+    async with dbapi.connect(_database_target()) as db:
         return await _credential_revision(
             db,
             owner_id,
@@ -719,7 +719,7 @@ async def remove_integration_secret(
             raise IntegrationError("Integration account is unavailable in this workspace.")
         _validate_provider_type(account["provider_type"])
 
-    async with aiosqlite.connect(_db_path()) as db:
+    async with dbapi.connect(_database_target()) as db:
         prior_revision = await _credential_revision(
             db, owner_id, secret_type, owner_kind=owner_kind
         )
@@ -778,8 +778,8 @@ async def add_integration_destination(account_id: str, destination_type: str, ex
         raise IntegrationError("Integration account is unavailable in this workspace.")
     destination_workspace = account_workspace or workspace_id
     destination_id = str(uuid.uuid4())
-    async with aiosqlite.connect(_db_path()) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(_database_target()) as db:
+        db.row_factory = dbapi.Row
         await db.execute(
             "INSERT INTO integration_destinations (id, account_id, workspace_id, destination_type, external_id, display_name) VALUES (?, ?, ?, ?, ?, ?)",
             (destination_id, account_id, destination_workspace, destination_type, external_id, display_name),
@@ -794,8 +794,8 @@ async def get_destination(account_id: str, destination_type: str, *, workspace_i
     account = await get_integration_account(account_id, workspace_id=workspace_id, active_only=False)
     if not account:
         return None
-    async with aiosqlite.connect(_db_path()) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(_database_target()) as db:
+        db.row_factory = dbapi.Row
         clauses = "account_id=? AND destination_type=? AND status='active'"
         params: list[str] = [account_id, destination_type]
         effective_workspace = account.get("workspace_id") or workspace_id
@@ -812,8 +812,8 @@ async def list_integration_destinations(account_id: str, *, workspace_id: str | 
     account = await get_integration_account(account_id, workspace_id=workspace_id, active_only=False)
     if not account:
         return []
-    async with aiosqlite.connect(_db_path()) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(_database_target()) as db:
+        db.row_factory = dbapi.Row
         clauses = "account_id=?"; params: list[str] = [account_id]
         effective_workspace = account.get("workspace_id") or workspace_id
         if effective_workspace is not None:
@@ -830,8 +830,8 @@ async def create_oauth_application(owner_id: str, provider_type: str, client_id:
     if not all(isinstance(value, str) and value.strip() for value in (owner_id, provider_type, client_id, redirect_uri, client_secret)):
         raise IntegrationError("OAuth application fields are required.")
     app_id = str(uuid.uuid4())
-    async with aiosqlite.connect(_db_path()) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(_database_target()) as db:
+        db.row_factory = dbapi.Row
         existing = await (await db.execute(
             "SELECT * FROM integration_oauth_applications WHERE owner_id=? AND provider_type=? AND client_id=? AND redirect_uri=?",
             (owner_id, provider_type, client_id, redirect_uri),
@@ -849,8 +849,8 @@ async def create_oauth_application(owner_id: str, provider_type: str, client_id:
 
 
 async def get_oauth_application(application_id: str) -> dict[str, Any] | None:
-    async with aiosqlite.connect(_db_path()) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(_database_target()) as db:
+        db.row_factory = dbapi.Row
         row = await (await db.execute("SELECT * FROM integration_oauth_applications WHERE id=? AND status='active'", (application_id,))).fetchone()
     if not row:
         return None
@@ -882,7 +882,7 @@ async def get_discord_credential(account_id: str) -> str | None:
 
 
 async def disable_integration_account(account_id: str, *, workspace_id: str | None = None) -> None:
-    async with aiosqlite.connect(_db_path()) as db:
+    async with dbapi.connect(_database_target()) as db:
         account = await get_integration_account(account_id, workspace_id=workspace_id, active_only=False)
         if not account:
             raise IntegrationError("Integration account is unavailable in this workspace.")
@@ -922,8 +922,8 @@ async def enable_integration_account(
     effective_workspace = account.get("workspace_id") or workspace_id
     if not effective_workspace:
         raise IntegrationError("Integration account has no workspace owner.")
-    async with aiosqlite.connect(_db_path()) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(_database_target()) as db:
+        db.row_factory = dbapi.Row
         await db.execute(
             "UPDATE integration_accounts SET status='active', updated_at=? WHERE id=? AND workspace_id=?",
             (_now(), account_id, effective_workspace),
@@ -947,12 +947,12 @@ async def enable_integration_account(
     return value
 
 
-async def _legacy_value(db: aiosqlite.Connection, table: str, key: str) -> str | None:
+async def _legacy_value(db: dbapi.Connection, table: str, key: str) -> str | None:
     row = await (await db.execute(f"SELECT value FROM {table} WHERE key=?", (key,))).fetchone()
     return str(row[0]) if row and row[0] else None
 
 
-async def _legacy_account(db: aiosqlite.Connection, provider_type: str, workspace_id: str) -> str | None:
+async def _legacy_account(db: dbapi.Connection, provider_type: str, workspace_id: str) -> str | None:
     row = await (await db.execute(
         "SELECT id FROM integration_accounts WHERE provider_type=? AND external_account_id='legacy' AND workspace_id=?", (provider_type, workspace_id)
     )).fetchone()
@@ -972,8 +972,8 @@ async def migrate_legacy_integrations(workspace_id: str) -> dict[str, Any]:
         "oauth_application_id": None,
         "legacy_retained": True,
     }
-    async with aiosqlite.connect(_db_path()) as db:
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(_database_target()) as db:
+        await db.execute("BEGIN")
         discord_token = await _legacy_value(db, "global_settings", "DISCORD_BOT_TOKEN") or await _legacy_value(db, "connections", "DISCORD_BOT_TOKEN")
         channel = await _legacy_value(db, "connections", "MATCH_CALL_CHANNEL_ID") or await _legacy_value(db, "global_settings", "MATCH_CALL_CHANNEL_ID")
         access = await _legacy_value(db, "connections", "CHALLONGE_OAUTH_ACCESS_TOKEN")

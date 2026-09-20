@@ -12,7 +12,7 @@ from __future__ import annotations
 import datetime as dt
 import os
 
-from backend.core.storage import dbapi as aiosqlite, is_postgres
+from backend.core.storage import dbapi, is_postgres
 from backend.core import database
 
 
@@ -58,8 +58,8 @@ async def purge_expired_auth_artifacts(
     expiry_cutoff = observed.isoformat()
     counts: dict[str, int] = {}
 
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        await db.execute("BEGIN" if is_postgres() else "BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute("BEGIN" if is_postgres() else "BEGIN")
         try:
             statements = {
                 "password_reset_tokens": (

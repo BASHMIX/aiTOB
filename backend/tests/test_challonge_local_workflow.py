@@ -6,12 +6,12 @@ import json
 import pytest
 
 from backend.core import database
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 
 
 @pytest.fixture
 async def local_workflow_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "local-workflow.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "local-workflow.pg"))
     await database.init_db()
     slug = "challonge:account:fnc:1"
     await database.upsert_tournament(
@@ -30,7 +30,7 @@ async def local_workflow_db(tmp_path, monkeypatch):
     )
     await database.upsert_tournament("startgg:legacy", "Legacy", None, None, None, json.dumps({}))
     await database.upsert_active_match("challonge:other", workspace_id="workspace-a", tournament_slug=slug, p1_name="Other A", p2_name="Other B", status="called", station_id="station-b")
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute("INSERT INTO stations (id, name, workspace_id) VALUES ('station-a', 'Station A', 'workspace-a')")
         await db.execute("INSERT INTO stations (id, name, workspace_id) VALUES ('station-b', 'Station B', 'workspace-a')")
         await db.commit()
@@ -59,7 +59,7 @@ async def test_challonge_call_ready_start_and_station_are_atomic_and_provider_si
     assert match["p1_ready"] == match["p2_ready"] == 1
     assert match["station_id"] == "station-a"
 
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         async with db.execute("SELECT COUNT(*) FROM provider_reconciliation_audit WHERE set_id='challonge:m1'") as cursor:
             assert (await cursor.fetchone())[0] == 5
         async with db.execute("SELECT event_type, COUNT(*) FROM workflow_outbox WHERE match_id='challonge:m1' GROUP BY event_type") as cursor:
@@ -81,7 +81,7 @@ async def test_challonge_stream_station_assignment_marks_the_local_match_on_stre
     """The local station workflow must not bypass the stream-panel projection."""
     from backend.core.match_commands import MatchCommandService
 
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute("UPDATE stations SET is_stream_station=TRUE WHERE id='station-a'")
         await db.commit()
 
@@ -93,7 +93,7 @@ async def test_challonge_stream_station_assignment_marks_the_local_match_on_stre
     match = await database.get_active_match("challonge:m1")
     assert match["station_id"] == "station-a"
     assert match["is_stream_match"] == 1
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         async with db.execute("SELECT active_match_id FROM stations WHERE id='station-a'") as cursor:
             assert (await cursor.fetchone())[0] == "challonge:m1"
 
@@ -103,7 +103,7 @@ async def test_completion_effects_inherit_match_workspace(local_workflow_db):
     await database.complete_match_and_enqueue_effects_v2(
         "challonge:m1", "score", p1_score=2, p2_score=1,
     )
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         async with db.execute(
             "SELECT DISTINCT workspace_id FROM workflow_outbox WHERE match_id='challonge:m1'"
         ) as cursor:
@@ -151,7 +151,7 @@ async def test_hub_routes_use_the_local_challonge_service_without_provider_lifec
     assert (await matches.api_player_ready("challonge:m1", PlayerReadyRequest(player="p2"))).ok is True
     assert (await matches.api_activate_match("challonge:m1")).ok is True
 
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute("UPDATE stations SET is_stream_station=TRUE WHERE id='station-a'")
         await db.commit()
     assert (await matches.api_patch_active_match(

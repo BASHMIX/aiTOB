@@ -2,25 +2,24 @@ import pytest
 import os
 import json
 import asyncio
-import aiosqlite
 
 from backend.core.match_state import validate_transition, transition_match, VALID_TRANSITIONS
-from backend.core.database import init_db, upsert_active_match, get_active_match, get_bot_feed, DB_PATH
+from backend.core.database import init_db, upsert_active_match, get_active_match, get_bot_feed, DATABASE_DSN
 
 # Use a test database path
-TEST_DB_PATH = ""
+TEST_DATABASE_DSN = ""
 
 @pytest.fixture
 async def setup_test_db(tmp_path):
-    # Override DB_PATH with test db
+    # Override DATABASE_DSN with test db
     import backend.core.database
     import backend.core.match_state
     
-    global TEST_DB_PATH
-    TEST_DB_PATH = str(tmp_path / "workflow.sqlite")
-    orig_db_path = backend.core.database.DB_PATH
-    backend.core.database.DB_PATH = TEST_DB_PATH
-    backend.core.match_state.DB_PATH = TEST_DB_PATH
+    global TEST_DATABASE_DSN
+    TEST_DATABASE_DSN = str(tmp_path / "workflow.pg")
+    orig_database_dsn = backend.core.database.DATABASE_DSN
+    backend.core.database.DATABASE_DSN = TEST_DATABASE_DSN
+    backend.core.match_state.DATABASE_DSN = TEST_DATABASE_DSN
     
     # Initialize the test database
     await init_db()
@@ -28,8 +27,8 @@ async def setup_test_db(tmp_path):
     yield
     
     # Restore original paths
-    backend.core.database.DB_PATH = orig_db_path
-    backend.core.match_state.DB_PATH = orig_db_path
+    backend.core.database.DATABASE_DSN = orig_database_dsn
+    backend.core.match_state.DATABASE_DSN = orig_database_dsn
 
 from unittest.mock import patch
 

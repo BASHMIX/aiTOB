@@ -2,37 +2,9 @@
 from __future__ import annotations
 
 import asyncio
-import os
-import uuid
-from urllib.parse import urlsplit, urlunsplit
-
 import pytest
 
 from backend.core import database
-
-
-PG_TEST_URL = os.getenv("AITOB_PG_TEST_URL")
-pytestmark = pytest.mark.skipif(not PG_TEST_URL, reason="requires explicit AITOB_PG_TEST_URL")
-
-
-@pytest.fixture(autouse=True)
-async def isolated_postgres(monkeypatch: pytest.MonkeyPatch):
-    import psycopg
-    from psycopg import sql
-
-    parts = urlsplit(PG_TEST_URL or "")
-    name = "aitob_scope_" + uuid.uuid4().hex
-    admin = urlunsplit((parts.scheme, parts.netloc, "/postgres", parts.query, parts.fragment))
-    target = urlunsplit((parts.scheme, parts.netloc, "/" + name, parts.query, parts.fragment))
-    with psycopg.connect(admin, autocommit=True) as connection:
-        connection.execute(sql.SQL("CREATE DATABASE {}" ).format(sql.Identifier(name)))
-    monkeypatch.setenv("DATABASE_URL", target)
-    try:
-        await database.init_db()
-        yield
-    finally:
-        with psycopg.connect(admin, autocommit=True) as connection:
-            connection.execute(sql.SQL("DROP DATABASE IF EXISTS {}" ).format(sql.Identifier(name)))
 
 
 async def _workspace(db, workspace_id: str) -> None:
@@ -44,7 +16,7 @@ async def _workspace(db, workspace_id: str) -> None:
 
 @pytest.mark.asyncio
 async def test_tenant_player_projection_and_links_exclude_unowned_rows():
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
         await _workspace(db, "scope-a")
         await _workspace(db, "scope-b")
         await db.execute("INSERT INTO players (discord_id, gamer_tag, workspace_id) VALUES ('p-a', 'A', 'scope-a')")
@@ -63,7 +35,7 @@ async def test_tenant_player_projection_and_links_exclude_unowned_rows():
 @pytest.mark.asyncio
 async def test_workspace_bound_workers_claim_only_their_provider_and_outbox_rows():
     for workspace in ("scope-a", "scope-b"):
-        async with database.aiosqlite.connect(database.DB_PATH) as db:
+        async with database.dbapi.connect(database.DATABASE_DSN) as db:
             await _workspace(db, workspace)
             await db.commit()
     base = {
@@ -97,7 +69,7 @@ async def test_workspace_bound_workers_claim_only_their_provider_and_outbox_rows
 
 @pytest.mark.asyncio
 async def test_workspace_bound_workflow_cannot_mutate_foreign_match():
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
         await _workspace(db, "scope-a")
         await _workspace(db, "scope-b")
         await db.execute("INSERT INTO active_matches (set_id, workspace_id, status) VALUES ('match-shared', 'scope-a', 'not_started')")
@@ -109,7 +81,7 @@ async def test_workspace_bound_workflow_cannot_mutate_foreign_match():
             {"event_id": "foreign-event", "event_type": "discord_call", "deduplication_key": "foreign-key"},
             workspace_id="scope-b",
         )
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
         match = await (await db.execute("SELECT hub_status FROM active_matches WHERE set_id='match-shared'")).fetchone()
         count = await (await db.execute("SELECT COUNT(*) FROM workflow_outbox")).fetchone()
     assert match[0] is None
@@ -120,7 +92,7 @@ async def test_workspace_bound_workflow_cannot_mutate_foreign_match():
 async def test_operational_workspace_ownership_gate_fails_closed_then_enforces():
     from backend.core.schema_migrations import POSTGRES_WORKSPACE_TABLES, enforce_postgres_workspace_ownership
 
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute("INSERT INTO tournaments (slug, name) VALUES ('unowned-gate', 'Legacy')")
         await db.commit()
         with pytest.raises(RuntimeError, match="backfill required"):

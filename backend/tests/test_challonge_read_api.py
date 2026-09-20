@@ -11,7 +11,7 @@ from backend.core.contracts import ProviderEntrant, ProviderSet, ProviderSetStat
 
 @pytest.fixture
 async def read_api_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "read-api.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "read-api.pg"))
     await database.init_db()
     slug = "challonge:account:fnc-jo:1"
     await database.upsert_tournament(slug, "FNC", None, None, None, json.dumps({}), provider_type="challonge", provider_tournament_id="1", provider_subdomain="fnc-jo", provider_account_id="account")
@@ -21,7 +21,7 @@ async def read_api_db(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ten_dashboard_set_reads_are_sqlite_only_when_fresh(read_api_db, monkeypatch):
+async def test_ten_dashboard_set_reads_are_postgres_only_when_fresh(read_api_db, monkeypatch):
     calls = 0
 
     async def no_background(_slug):

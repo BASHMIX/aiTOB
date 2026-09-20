@@ -16,7 +16,7 @@ from backend.core.database import (
 )
 
 # Distinct file so it never collides with other suites' test DBs.
-TEST_DB_PATH = ""
+TEST_DATABASE_DSN = ""
 
 
 @pytest.fixture
@@ -24,18 +24,18 @@ async def setup_test_db(tmp_path):
     import backend.core.database
     import backend.core.match_state
 
-    global TEST_DB_PATH
-    TEST_DB_PATH = str(tmp_path / "avatar-gate.sqlite")
-    orig_db_path = backend.core.database.DB_PATH
-    backend.core.database.DB_PATH = TEST_DB_PATH
-    backend.core.match_state.DB_PATH = TEST_DB_PATH
+    global TEST_DATABASE_DSN
+    TEST_DATABASE_DSN = str(tmp_path / "avatar-gate.pg")
+    orig_database_dsn = backend.core.database.DATABASE_DSN
+    backend.core.database.DATABASE_DSN = TEST_DATABASE_DSN
+    backend.core.match_state.DATABASE_DSN = TEST_DATABASE_DSN
 
     await init_db()
 
     yield
 
-    backend.core.database.DB_PATH = orig_db_path
-    backend.core.match_state.DB_PATH = orig_db_path
+    backend.core.database.DATABASE_DSN = orig_database_dsn
+    backend.core.match_state.DATABASE_DSN = orig_database_dsn
 
 
 # ── get_verified_players_missing_avatar ─────────────────────────────────────

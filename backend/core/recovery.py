@@ -106,7 +106,7 @@ class AttendanceTimerService:
 
 
 class RecoveryService:
-    """Build a fresh restart plan from SQLite, with no in-memory carry-over."""
+    """Build a fresh restart plan from PostgreSQL, with no in-memory carry-over."""
 
     def __init__(self, *, timers: AttendanceTimerService | None = None):
         self.timers = timers or AttendanceTimerService()
@@ -142,7 +142,7 @@ class RecoveryService:
                             "not_called", "provider_already_complete",
                             "provider_double_dq_reconciled", "already_reconciled",
                         }
-                    except AttendanceCommandError:
+                    except (AttendanceCommandError, ValueError):
                         resolved = False
                 if not resolved:
                     await database.set_match_sync_status_v2(

@@ -7,7 +7,7 @@ import datetime as dt
 import uuid
 from pathlib import Path
 
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 import pytest
 
 import backend.core.database as database
@@ -20,8 +20,8 @@ def run(coro):
 
 @pytest.fixture()
 def retention_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    path = tmp_path / "retention.sqlite"
-    monkeypatch.setattr(database, "DB_PATH", str(path))
+    path = tmp_path / "retention.pg"
+    monkeypatch.setattr(database, "DATABASE_DSN", str(path))
     run(database.init_db())
     return path
 
@@ -32,7 +32,7 @@ def test_retention_purges_only_aged_auth_artifacts(retention_db: Path):
         old = (now - dt.timedelta(days=31)).isoformat()
         future = (now + dt.timedelta(days=2)).isoformat()
         token_id = str(uuid.uuid4())
-        async with aiosqlite.connect(retention_db) as db:
+        async with dbapi.connect(retention_db) as db:
             before_workspaces = (await (await db.execute("SELECT COUNT(*) FROM workspaces")).fetchone())[0]
             user_id = str(uuid.uuid4())
             workspace_id = str(uuid.uuid4())
@@ -65,7 +65,7 @@ def test_retention_purges_only_aged_auth_artifacts(retention_db: Path):
         counts = await purge_expired_auth_artifacts(now=now, retention_days=30)
         assert counts["password_reset_tokens"] == 1
         assert counts["user_sessions"] == 1
-        async with aiosqlite.connect(retention_db) as db:
+        async with dbapi.connect(retention_db) as db:
             reset_rows = await (await db.execute("SELECT COUNT(*) FROM password_reset_tokens")).fetchone()
             session_rows = await (await db.execute("SELECT COUNT(*) FROM user_sessions")).fetchone()
             workspace_rows = await (await db.execute("SELECT COUNT(*) FROM workspaces")).fetchone()
@@ -78,11 +78,11 @@ def test_retention_purges_only_aged_auth_artifacts(retention_db: Path):
 
 def test_retention_rejects_unsafe_policy_without_writing(retention_db: Path):
     async def verify():
-        async with aiosqlite.connect(retention_db) as db:
+        async with dbapi.connect(retention_db) as db:
             before = (await (await db.execute("SELECT COUNT(*) FROM workspaces")).fetchone())[0]
         with pytest.raises(ValueError, match="safety range"):
             await purge_expired_auth_artifacts(retention_days=0)
-        async with aiosqlite.connect(retention_db) as db:
+        async with dbapi.connect(retention_db) as db:
             count = await (await db.execute("SELECT COUNT(*) FROM workspaces")).fetchone()
         # Invalid policy must leave all pre-existing workspace rows untouched.
         assert count[0] == before

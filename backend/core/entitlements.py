@@ -13,7 +13,7 @@ import uuid
 from typing import Any
 
 from backend.core import database
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 
 
 # Conservative development defaults.  ``None`` is intentionally not used for
@@ -73,8 +73,8 @@ async def get_workspace_entitlement(workspace_id: str) -> dict[str, Any]:
     """Return a safe effective entitlement projection for one workspace."""
     if not workspace_id:
         raise ValueError("workspace_id is required")
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         row = await (await db.execute(
             "SELECT workspace_id, plan_key, billing_state, limits_json, usage_json, "
             "expires_at, suspended_at, updated_at "
@@ -140,7 +140,7 @@ async def workspace_resource_count(workspace_id: str, resource: str) -> int:
     except KeyError as exc:
         raise ValueError(f"Unknown entitlement resource: {resource}") from exc
     # Table/column names come only from the static mapping above.
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         row = await (await db.execute(
             f"SELECT COUNT(*) FROM {table} WHERE {column}=?"
             + (" AND status='active'" if resource == "members" else ""),
@@ -189,7 +189,7 @@ async def set_workspace_entitlement(
     except RuntimeError as exc:
         raise ValueError("Entitlement limits are invalid") from exc
     payload = json.dumps(clean, separators=(",", ":"))
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute(
             "INSERT INTO workspace_entitlements (workspace_id, plan_key, billing_state, limits_json, updated_at) "
             "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP) "
@@ -237,9 +237,9 @@ async def apply_manual_subscription(
     if extend_days is not None and not 1 <= int(extend_days) <= 3650:
         raise ValueError("extend_days must be between 1 and 3650")
     requested_expiry = _parse_subscription_expiry(expires_at) if expires_at is not None else None
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
+        await db.execute("BEGIN")
         try:
             workspace = await (await db.execute(
                 "SELECT id, status FROM workspaces WHERE id=?", (workspace_id,)

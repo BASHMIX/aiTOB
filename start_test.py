@@ -32,9 +32,9 @@ Common flags:
 import os
 import sys
 import json
-import sqlite3
 import argparse
 import subprocess
+import psycopg
 
 # ── Paths ────────────────────────────────────────────────────────────────
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -51,9 +51,7 @@ else:
 if not os.path.exists(PYTHON):
     PYTHON = sys.executable
 
-# Resolve the SQLite path the app uses (honor DB_PATH; relative => under ROOT).
-_db_env = os.getenv("DB_PATH", os.path.join("backend", "core", "database.sqlite"))
-DB_PATH = _db_env if os.path.isabs(_db_env) else os.path.join(ROOT, _db_env)
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
 PORTS = [8000, 5173]  # API, Vite
 
@@ -142,7 +140,7 @@ def _player_filter(player_ids):
     """Return (where_sql, params) for an optional discord_id IN (...) filter."""
     if not player_ids:
         return "", []
-    placeholders = ",".join("?" for _ in player_ids)
+    placeholders = ",".join("%s" for _ in player_ids)
     return f" WHERE discord_id IN ({placeholders})", list(player_ids)
 
 
@@ -157,7 +155,7 @@ _PURGE_STEPS = [
     ("dispatcher Top-N stop flags",   "DELETE FROM global_settings WHERE key LIKE '_dispatcher_stop_signaled_%'"),
     ("dispatcher master switch → off", "UPDATE global_settings SET value='off' WHERE key='auto_dispatch_master_switch'"),
     ("leftover on-stream flags + station bindings",
-     "UPDATE active_matches SET is_stream_match=0, station_id=NULL"),
+     "UPDATE active_matches SET is_stream_match=FALSE, station_id=NULL"),
 ]
 
 
@@ -169,16 +167,15 @@ def _purge_residue(cur):
         try:
             cur.execute(sql)
             cprint(GREEN, "DB", f"Purged {label} ({cur.rowcount} row(s)).")
-        except sqlite3.OperationalError:
+        except psycopg.Error:
             # Table/column not present in this DB revision — skip quietly.
             pass
 
 
 def reset_db(player_ids=None, wipe=False, matches=False, assume_yes=False, purge=False):
     """Reset player (and optionally match) state for a fresh test loop."""
-    if not os.path.exists(DB_PATH):
-        cprint(YELLOW, "SYS", f"No DB at {DB_PATH} — nothing to reset (it'll be created on next start).")
-        return
+    if not DATABASE_URL.startswith(("postgresql://", "postgres://")):
+        raise RuntimeError("DATABASE_URL must identify PostgreSQL before resetting test state")
 
     scope = f"players {player_ids}" if player_ids else "ALL players"
     actions = []
@@ -193,7 +190,7 @@ def reset_db(player_ids=None, wipe=False, matches=False, assume_yes=False, purge
                        "commands, conflicts, planned streams, stream/station flags)")
 
     destructive = wipe or matches or purge
-    cprint(CYAN, "DB", f"Target: {DB_PATH}")
+    cprint(CYAN, "DB", "Target: PostgreSQL database selected by DATABASE_URL")
     for a in actions:
         cprint(CYAN, "DB", f"  • {a}")
     if destructive and not assume_yes:
@@ -203,7 +200,7 @@ def reset_db(player_ids=None, wipe=False, matches=False, assume_yes=False, purge
             return
 
     where, params = _player_filter(player_ids)
-    conn = sqlite3.connect(DB_PATH)
+    conn = psycopg.connect(DATABASE_URL)
     try:
         cur = conn.cursor()
         if wipe:
@@ -213,11 +210,11 @@ def reset_db(player_ids=None, wipe=False, matches=False, assume_yes=False, purge
             try:
                 cur.execute(f"DELETE FROM pending_verifications{where}", params)
                 cprint(GREEN, "DB", f"Deleted {cur.rowcount} pending verification(s).")
-            except sqlite3.OperationalError:
+            except psycopg.Error:
                 pass
         else:
             cur.execute(
-                "UPDATE players SET avatar_path=NULL, is_verified=0, "
+                "UPDATE players SET avatar_path=NULL, is_verified=FALSE, "
                 f"registration_step='avatar_upload'{where}",
                 params,
             )
@@ -229,7 +226,7 @@ def reset_db(player_ids=None, wipe=False, matches=False, assume_yes=False, purge
             try:
                 cur.execute("DELETE FROM planned_streams")
                 cprint(GREEN, "DB", f"Cleared {cur.rowcount} planned stream(s).")
-            except sqlite3.OperationalError:
+            except psycopg.Error:
                 pass
 
         if purge:

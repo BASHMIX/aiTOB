@@ -10,7 +10,7 @@ from backend.core.database import (
     init_db, upsert_active_match, get_active_matches,
 )
 
-TEST_DB_PATH = ""
+TEST_DATABASE_DSN = ""
 
 
 @pytest.fixture
@@ -18,15 +18,15 @@ async def setup_test_db(tmp_path):
     import backend.core.database
     import backend.core.match_state
 
-    global TEST_DB_PATH
-    TEST_DB_PATH = str(tmp_path / "event-scoping.sqlite")
-    orig = backend.core.database.DB_PATH
-    backend.core.database.DB_PATH = TEST_DB_PATH
-    backend.core.match_state.DB_PATH = TEST_DB_PATH
+    global TEST_DATABASE_DSN
+    TEST_DATABASE_DSN = str(tmp_path / "event-scoping.pg")
+    orig = backend.core.database.DATABASE_DSN
+    backend.core.database.DATABASE_DSN = TEST_DATABASE_DSN
+    backend.core.match_state.DATABASE_DSN = TEST_DATABASE_DSN
     await init_db()
     yield
-    backend.core.database.DB_PATH = orig
-    backend.core.match_state.DB_PATH = orig
+    backend.core.database.DATABASE_DSN = orig
+    backend.core.match_state.DATABASE_DSN = orig
 
 
 async def _seed_two_events():

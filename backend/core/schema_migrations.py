@@ -10,71 +10,12 @@ import hashlib
 import os
 
 from backend.core.database_schema import INDEXES, MIGRATIONS, TABLE_SCHEMAS
-from backend.core.storage import postgres_ddl
-
-
-async def apply_sqlite_workspace_constraints(db):
-    """Rebuild legacy SQLite tables with workspace-aware keys in one transaction.
-
-    This function is intentionally called only by migration/rehearsal tooling;
-    runtime services must use PostgreSQL. Existing rows and image/config URLs
-    are copied verbatim and no status or workflow fields are interpreted.
-    """
-    async def indexes(table: str):
-        async with db.execute(f"PRAGMA index_list('{table}')") as cursor:
-            result = []
-            for row in await cursor.fetchall():
-                # seq, name, unique, origin, partial
-                if not row[2]:
-                    continue
-                async with db.execute(f"PRAGMA index_info('{row[1]}')") as info:
-                    result.append([item[2] for item in await info.fetchall()])
-            return result
-
-    link_cols = {row[1] for row in await (await db.execute("PRAGMA table_info(tournament_player_links)")).fetchall()}
-    link_indexes = await indexes("tournament_player_links")
-    if "id" not in link_cols or ["workspace_id", "tournament_slug", "entrant_id"] not in link_indexes:
-        await db.execute("""CREATE TABLE tournament_player_links__new (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tournament_slug TEXT NOT NULL, entrant_id TEXT NOT NULL,
-            player_discord_id TEXT NOT NULL, workspace_id TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(workspace_id, tournament_slug, entrant_id),
-            FOREIGN KEY(tournament_slug) REFERENCES tournaments(slug),
-            FOREIGN KEY(player_discord_id) REFERENCES players(discord_id)
-        )""")
-        cols = ["tournament_slug", "entrant_id", "player_discord_id", "workspace_id", "created_at"]
-        cols = [column for column in cols if column in link_cols]
-        await db.execute(
-            "INSERT INTO tournament_player_links__new (" + ",".join(cols) + ") "
-            "SELECT " + ",".join(cols) + " FROM tournament_player_links"
-        )
-        await db.execute("DROP TABLE tournament_player_links")
-        await db.execute("ALTER TABLE tournament_player_links__new RENAME TO tournament_player_links")
-
-    overlay_cols = {row[1] for row in await (await db.execute("PRAGMA table_info(overlays)")).fetchall()}
-    overlay_indexes = await indexes("overlays")
-    if "workspace_id" not in overlay_cols or ["workspace_id", "name"] not in overlay_indexes:
-        await db.execute("""CREATE TABLE overlays__new (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
-            config TEXT, workspace_id TEXT, UNIQUE(workspace_id, name)
-        )""")
-        cols = ["id", "name", "config", "workspace_id"]
-        available = [column for column in cols if column in overlay_cols]
-        select_cols = ",".join(available)
-        await db.execute(
-            "INSERT INTO overlays__new (" + select_cols + ") SELECT " + select_cols + " FROM overlays"
-        )
-        await db.execute("DROP TABLE overlays")
-        await db.execute("ALTER TABLE overlays__new RENAME TO overlays")
-
-
 def migration_statements():
     for phase, statements in (("table", TABLE_SCHEMAS), ("addition", MIGRATIONS), ("index", INDEXES)):
         for statement in statements:
-            converted = postgres_ddl(statement)
-            digest = hashlib.sha256(converted.encode()).hexdigest()
-            yield f"{phase}:{digest}", phase, converted
+            normalized = statement.strip()
+            digest = hashlib.sha256(normalized.encode()).hexdigest()
+            yield f"{phase}:{digest}", phase, normalized
 
 
 async def apply_postgres_schema(db):

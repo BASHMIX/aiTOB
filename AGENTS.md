@@ -15,8 +15,8 @@ Docker: `docker compose up --build` — multi-stage builds (api / bot targets).
 
 | Layer | Tech | Key files |
 |-------|------|-----------|
-| Backend | Python 3.12+, FastAPI, aiosqlite, psutil | `backend/api/main.py` — entrypoint & WS |
-| Database | SQLite via aiosqlite | `backend/core/database.py` — schema + all queries |
+| Backend | Python 3.12+, FastAPI, psycopg, psutil | `backend/api/main.py` — entrypoint & WS |
+| Database | PostgreSQL via psycopg | `backend/core/database.py` — schema + all queries |
 | Models | Pydantic v2 | `backend/core/models.py` |
 | Discord | discord.py 2.x | `backend/bot/main.py` — commands, threads, hub-agent |
 | AI | LangGraph + langchain-google-genai | `backend/bot/agent/` — match referee graph |

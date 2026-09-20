@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from typing import Final
 from cryptography.fernet import Fernet, InvalidToken
 
-from backend.core.storage import dbapi as aiosqlite, is_postgres
+from backend.core.storage import dbapi, is_postgres
 
 from backend.core import database
 
@@ -171,8 +171,8 @@ async def enforce_auth_rate_limit(
     """Database-backed fixed-window limiter shared by every API process."""
     observed = now or _utcnow()
     subject_hash = _token_hash(subject.strip().lower())
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute("BEGIN")
         try:
             if is_postgres():
                 # A SELECT-then-INSERT sequence is not safe when the first
@@ -259,7 +259,7 @@ def _totp_counter(now: dt.datetime | None = None) -> int:
 
 
 async def has_mfa(user_id: str) -> bool:
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         row = await (await db.execute("SELECT 1 FROM user_mfa_credentials WHERE user_id=?", (user_id,))).fetchone()
     return bool(row)
 
@@ -288,8 +288,8 @@ async def begin_totp_setup(principal: SessionPrincipal, password: str, *, now=No
     issued = now or _utcnow()
     secret = base64.b32encode(secrets.token_bytes(20)).decode("ascii").rstrip("=")
     ciphertext = _auth_box().encrypt(secret.encode("ascii")).decode("ascii")
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute("BEGIN")
         await _require_account_session(db, principal, now=issued, password=password)
         if await (await db.execute("SELECT 1 FROM user_mfa_credentials WHERE user_id=?", (principal.user_id,))).fetchone():
             raise ValueError("Two-factor authentication is already enabled.")
@@ -308,8 +308,8 @@ async def enable_totp(principal: SessionPrincipal, secret: str, code: str, *, no
     if not hmac.compare_digest(_totp_at(secret, counter), str(code).strip()):
         raise PermissionError("Invalid authenticator code.")
     recovery_codes = [secrets.token_urlsafe(8) for _ in range(8)]
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute("BEGIN")
         try:
             await _require_account_session(db, principal, now=now)
             setup = await (await db.execute(
@@ -377,8 +377,8 @@ async def _consume_mfa_code(db, user_id: str, code: str, *, now: dt.datetime | N
 
 
 async def disable_totp(principal: SessionPrincipal, code: str, password: str, *, now: dt.datetime | None = None) -> None:
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute("BEGIN")
         try:
             await _require_account_session(db, principal, password=password, now=now)
             if not await _consume_mfa_code(db, principal.user_id, code, now=now):
@@ -429,7 +429,7 @@ def _invite_token() -> tuple[str, str]:
 
 
 async def public_registration_enabled() -> bool:
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         row = await (await db.execute(
             "SELECT value FROM global_settings WHERE key='ALLOW_PUBLIC_REGISTRATION'"
         )).fetchone()
@@ -444,8 +444,8 @@ async def register_workspace_owner(email: str, password: str, display_name: str,
     if "@" not in normalized_email or not display_name.strip() or not workspace_name.strip():
         raise ValueError("Valid account and workspace details are required.")
     user_id, workspace_id = str(uuid.uuid4()), str(uuid.uuid4())
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute("BEGIN")
         try:
             existing = await (await db.execute("SELECT id FROM users WHERE email=?", (normalized_email,))).fetchone()
             if existing:
@@ -486,8 +486,8 @@ async def create_workspace_invitation(
     token, token_hash = _invite_token()
     invite_id = str(uuid.uuid4())
     expires_at = issued + dt.timedelta(days=7)
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute("BEGIN")
         try:
             await _require_current_owner(db, principal)
             await db.execute(
@@ -506,9 +506,9 @@ async def create_workspace_invitation(
 
 
 async def list_workspace_members(principal: SessionPrincipal) -> list[dict]:
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         await _require_current_owner(db, principal)
-        db.row_factory = aiosqlite.Row
+        db.row_factory = dbapi.Row
         rows = await (await db.execute(
             """SELECT u.id,u.email,u.display_name,m.role,m.status,m.created_at
                FROM workspace_memberships m JOIN users u ON u.id=m.user_id
@@ -524,9 +524,9 @@ async def list_workspace_invitations(principal: SessionPrincipal) -> list[dict]:
     from this projection.  The endpoint is for owner review/cancellation only;
     it must never become a way to recover an invitation credential.
     """
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         await _require_current_owner(db, principal)
-        db.row_factory = aiosqlite.Row
+        db.row_factory = dbapi.Row
         rows = await (await db.execute(
             """SELECT id,email,role,expires_at,accepted_at,cancelled_at,created_at
                FROM workspace_invitations
@@ -538,8 +538,8 @@ async def list_workspace_invitations(principal: SessionPrincipal) -> list[dict]:
 
 
 async def cancel_workspace_invitation(principal: SessionPrincipal, invitation_id: str) -> None:
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute("BEGIN")
         try:
             await _require_current_owner(db, principal)
             result = await db.execute(
@@ -558,9 +558,9 @@ async def accept_workspace_invitation(token: str, password: str, display_name: s
     if not token or not display_name.strip():
         raise ValueError("Invitation and display name are required.")
     issued = now or _utcnow()
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
+        await db.execute("BEGIN")
         try:
             invite = await (await db.execute(
                 "SELECT * FROM workspace_invitations WHERE token_hash=? AND accepted_at IS NULL AND cancelled_at IS NULL",
@@ -611,8 +611,8 @@ async def set_workspace_member_role(principal: SessionPrincipal, user_id: str, r
         raise PermissionError("Only an Owner may change roles.")
     if role not in MEMBER_ROLES:
         raise ValueError("Role is invalid.")
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute("BEGIN")
         try:
             await _require_current_owner(db, principal)
             current = await (await db.execute(
@@ -640,8 +640,8 @@ async def set_workspace_member_role(principal: SessionPrincipal, user_id: str, r
 async def disable_workspace_member(principal: SessionPrincipal, user_id: str) -> None:
     if principal.role != "owner":
         raise PermissionError("Only an Owner may remove members.")
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute("BEGIN")
         try:
             await _require_current_owner(db, principal)
             row = await (await db.execute(
@@ -677,8 +677,8 @@ async def disable_workspace(principal: SessionPrincipal) -> None:
     """
     if principal.role != "owner":
         raise PermissionError("Only an Owner may disable the workspace.")
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute("BEGIN")
         try:
             await _require_current_owner(db, principal)
             pending_ledger = await (await db.execute(
@@ -743,8 +743,8 @@ async def get_workspace_lifecycle(principal: SessionPrincipal) -> dict[str, obje
     """
     if principal.role not in {"owner", "organizer", "tournament_organizer"}:
         raise PermissionError("Workspace lifecycle details require an organizer role.")
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         workspace = await (await db.execute(
             "SELECT id, status FROM workspaces WHERE id=?", (principal.workspace_id,)
         )).fetchone()
@@ -792,11 +792,10 @@ async def bootstrap_initial_owner_from_env() -> bool:
     if "@" not in email or password.lower() == "admin":
         raise RuntimeError("Owner bootstrap values are invalid")
 
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        await db.execute("PRAGMA foreign_keys = ON")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         user_id, workspace_id = str(uuid.uuid4()), str(uuid.uuid4())
         slug = _safe_slug(os.getenv("AITOB_BOOTSTRAP_WORKSPACE_SLUG", "") or workspace_name)
-        await db.execute("BEGIN IMMEDIATE")
+        await db.execute("BEGIN")
         try:
             if is_postgres():
                 # Serializes bootstrap across API/bot processes before rows
@@ -826,8 +825,8 @@ async def bootstrap_initial_owner_from_env() -> bool:
 
 async def authenticate_password(email: str, password: str, *, totp_code: str | None = None, now: dt.datetime | None = None) -> tuple[str, SessionPrincipal]:
     now = now or _utcnow()
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         async with db.execute("SELECT id, password_hash, status FROM users WHERE email=?", (email.strip().lower(),)) as cursor:
             user = await cursor.fetchone()
         if not user or user["status"] != "active" or not verify_password(password, user["password_hash"]):
@@ -844,7 +843,7 @@ async def authenticate_password(email: str, password: str, *, totp_code: str | N
         membership = memberships[0]
         mfa_enabled = await (await db.execute("SELECT 1 FROM user_mfa_credentials WHERE user_id=?", (user["id"],))).fetchone()
         if mfa_enabled:
-            await db.execute("BEGIN IMMEDIATE")
+            await db.execute("BEGIN")
             try:
                 if not await _consume_mfa_code(db, str(user["id"]), totp_code or "", now=now):
                     raise PermissionError("Two-factor authentication code is required.")
@@ -866,8 +865,8 @@ async def get_session_principal(token: str | None, *, now: dt.datetime | None = 
     if not token:
         return None
     now = now or _utcnow()
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         async with db.execute(
             """SELECT s.id session_id, s.user_id, s.workspace_id, s.expires_at, u.status user_status,
                       w.status workspace_status, m.status membership_status, m.role
@@ -886,15 +885,15 @@ async def get_session_principal(token: str | None, *, now: dt.datetime | None = 
 
 
 async def revoke_session(session_id: str) -> None:
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute("UPDATE user_sessions SET revoked_at=CURRENT_TIMESTAMP WHERE id=? AND revoked_at IS NULL", (session_id,))
         await db.commit()
 
 
 async def change_password(principal: SessionPrincipal, current_password: str, new_password: str) -> None:
     replacement = hash_password(new_password)
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute("BEGIN")
         try:
             await _require_account_session(db, principal, password=current_password)
             await db.execute("UPDATE users SET password_hash=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (replacement, principal.user_id))
@@ -926,8 +925,8 @@ async def update_account_profile(
         raise ValueError("Display name cannot be empty.")
     if normalized_workspace is not None and not normalized_workspace:
         raise ValueError("Workspace name cannot be empty.")
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute("BEGIN")
         try:
             await _require_account_session(db, principal)
             changed: list[str] = []
@@ -966,7 +965,7 @@ async def create_password_reset(email: str, *, now=None) -> str | None:
     """Create a delivery token; callers must return a generic response publicly."""
     issued = now or _utcnow()
     token = secrets.token_urlsafe(32)
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         user = await (await db.execute("SELECT id FROM users WHERE email=? AND status='active'", (email.strip().lower(),))).fetchone()
         if not user:
             return None
@@ -981,8 +980,8 @@ async def create_password_reset(email: str, *, now=None) -> str | None:
 
 async def consume_password_reset(token: str, new_password: str, *, now=None) -> None:
     issued, replacement = now or _utcnow(), hash_password(new_password)
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute("BEGIN")
         try:
             lock = " FOR UPDATE" if is_postgres() else ""
             row = await (await db.execute(
@@ -1003,7 +1002,7 @@ async def consume_password_reset(token: str, new_password: str, *, now=None) -> 
 
 async def create_email_verification(principal: SessionPrincipal, *, now=None) -> str:
     issued, token = now or _utcnow(), secrets.token_urlsafe(32)
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         await _require_account_session(db, principal, now=issued)
         await db.execute("UPDATE email_verification_tokens SET used_at=? WHERE user_id=? AND used_at IS NULL", (issued.isoformat(), principal.user_id))
         await db.execute(
@@ -1016,8 +1015,8 @@ async def create_email_verification(principal: SessionPrincipal, *, now=None) ->
 
 async def consume_email_verification(token: str, *, now=None) -> None:
     issued = now or _utcnow()
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute("BEGIN")
         try:
             lock = " FOR UPDATE" if is_postgres() else ""
             row = await (await db.execute(
@@ -1034,8 +1033,8 @@ async def consume_email_verification(token: str, *, now=None) -> None:
 
 
 async def session_public_profile(principal: SessionPrincipal) -> dict[str, object]:
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         async with db.execute("""SELECT u.email, u.display_name, u.email_verified_at,
                                         CASE WHEN mf.user_id IS NULL THEN FALSE ELSE TRUE END AS mfa_enabled,
                                         w.name workspace_name, w.slug workspace_slug,
@@ -1058,8 +1057,8 @@ async def session_public_profile(principal: SessionPrincipal) -> dict[str, objec
 
 async def legacy_owner_principal() -> SessionPrincipal | None:
     """Temporary compatibility identity: exactly one active Owner membership."""
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         async with db.execute("""SELECT m.user_id, m.workspace_id, m.role FROM workspace_memberships m
                                  JOIN users u ON u.id=m.user_id JOIN workspaces w ON w.id=m.workspace_id
                                  WHERE m.status='active' AND m.role='owner' AND u.status='active' AND w.status='active'""") as cursor:

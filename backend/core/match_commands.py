@@ -441,26 +441,30 @@ async def record_called_occurrence(
         occurrence_version=occurrence_version, source_first_observed=source,
         payload=payload,
     )
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = database.aiosqlite.Row
-        await db.execute("BEGIN IMMEDIATE")
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = database.dbapi.Row
+        await db.execute("BEGIN")
         try:
-            row = await (await db.execute(
-                "SELECT * FROM match_call_occurrences WHERE workspace_id=? AND tournament_id=? AND match_id=? AND occurrence_version=?" + (" FOR UPDATE" if __import__('backend.core.storage', fromlist=['is_postgres']).is_postgres() else ""),
-                (workspace_id, tournament_id, match_id, occurrence_version),
-            )).fetchone()
-            if row:
-                await db.commit()
-                return dict(row)
             occurrence_id = str(uuid4())
-            await db.execute(
+            inserted = await db.execute(
                 """INSERT INTO match_call_occurrences
                    (id, workspace_id, tournament_id, match_id, occurrence_version,
                     source_first_observed, called_at, delivery_state, outbox_command_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?)
+                   ON CONFLICT(workspace_id, tournament_id, match_id, occurrence_version)
+                   DO NOTHING""",
                 (occurrence_id, workspace_id, tournament_id, match_id, occurrence_version,
                  source, occurred, event["event_id"]),
             )
+            if inserted.rowcount == 0:
+                row = await (await db.execute(
+                    """SELECT * FROM match_call_occurrences
+                       WHERE workspace_id=? AND tournament_id=? AND match_id=?
+                         AND occurrence_version=?""",
+                    (workspace_id, tournament_id, match_id, occurrence_version),
+                )).fetchone()
+                await db.commit()
+                return dict(row)
             await db.execute(
                 """INSERT INTO workflow_outbox
                    (event_id, match_id, event_type, payload_json, deduplication_key,

@@ -4,8 +4,8 @@
 
 `DATABASE_URL` is required for API, Discord bot, workers, and WebSocket runtime.
 If absent or the connection/migrations fail, startup terminates before it begins
-serving requests. SQLite is permitted only when `AITOB_TESTING=1` or when an
-explicit migration/restore command opens a source database read-only.
+serving requests. There is no alternate runtime, test, migration, backup, or
+restore database engine.
 
 ## Transaction rules
 

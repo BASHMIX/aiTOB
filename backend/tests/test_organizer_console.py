@@ -1,4 +1,4 @@
-"""SQLite-only Organizer Console projection acceptance tests."""
+"""PostgreSQL-only Organizer Console projection acceptance tests."""
 from __future__ import annotations
 
 import pytest
@@ -10,7 +10,7 @@ from backend.core.organizer_console import read_organizer_console
 
 @pytest.fixture
 async def console_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "console.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "console.pg"))
     await database.init_db()
     for slug in ("console/a", "console/b"):
         await database.upsert_tournament(slug, slug, "SF6", "event", "SF6", "{}")
@@ -51,7 +51,7 @@ async def test_console_links_proposal_command_and_outbox_without_claiming_delive
 @pytest.mark.asyncio
 async def test_console_and_tournament_settings_reject_cross_workspace_reads_and_writes(tmp_path, monkeypatch):
     """Workspace ownership is part of the repository boundary, not only UI filtering."""
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "workspace-console.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "workspace-console.pg"))
     await database.init_db()
     await database.upsert_tournament("tenant/a", "Tenant A", "", "", "", "{}", workspace_id="ws-a")
     await database.upsert_tournament("tenant/b", "Tenant B", "", "", "", "{}", workspace_id="ws-b")

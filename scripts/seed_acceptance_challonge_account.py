@@ -26,14 +26,16 @@ async def main(source: str, target: str, source_key: str, target_key: str) -> No
         create_integration_account, get_integration_secret, list_integration_accounts,
         set_integration_secret,
     )
-    database.DB_PATH = source
+    os.environ["DATABASE_URL"] = source
+    database.DATABASE_DSN = source
     os.environ["AITOB_INTEGRATION_MASTER_KEY"] = source_key
     source_accounts = [a for a in await list_integration_accounts() if a["provider_type"] == "challonge" and a["status"] == "active"]
     if len(source_accounts) != 1:
         raise RuntimeError("Expected exactly one active local Challonge account.")
     source_account = source_accounts[0]
     credentials = {kind: await get_integration_secret(source_account["id"], kind) for kind in ("api_key", "access_token", "refresh_token")}
-    database.DB_PATH = target
+    os.environ["DATABASE_URL"] = target
+    database.DATABASE_DSN = target
     os.environ["AITOB_INTEGRATION_MASTER_KEY"] = target_key
     await database.init_db()
     try:
@@ -51,8 +53,8 @@ async def main(source: str, target: str, source_key: str, target_key: str) -> No
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source", default="backend/core/database.sqlite")
-    parser.add_argument("--target", default=".acceptance/acceptance.sqlite")
+    parser.add_argument("--source", required=True, help="source PostgreSQL DSN")
+    parser.add_argument("--target", required=True, help="acceptance PostgreSQL DSN")
     parser.add_argument("--source-env", default=".env")
     parser.add_argument("--target-env", default=".env.acceptance")
     args = parser.parse_args()

@@ -35,8 +35,8 @@ foreach ($name in $isolatedSecrets) {
 $env:PYTHON_DOTENV_DISABLED = '1'
 
 if ($env:ACCEPTANCE_ENVIRONMENT -ne 'true') { throw 'ACCEPTANCE_ENVIRONMENT=true is required.' }
-if ([string]::IsNullOrWhiteSpace($env:DB_PATH) -or $env:DB_PATH -notmatch 'acceptance') {
-    throw 'DB_PATH must name an isolated acceptance SQLite file.'
+if ([string]::IsNullOrWhiteSpace($env:DATABASE_URL) -or $env:DATABASE_URL -notmatch '^postgres(ql)?://') {
+    throw 'DATABASE_URL must identify an isolated acceptance PostgreSQL database.'
 }
 $env:PROVIDER_V2_CONTRACTS_ENABLED = if ($Stage -ge 1) { 'true' } else { 'false' }
 $env:PROVIDER_COORDINATOR_ENABLED = if ($Stage -ge 2) { 'true' } else { 'false' }
@@ -48,13 +48,13 @@ $env:CHALLONGE_SCORE_COMMANDS_ENABLED = if ($Stage -ge 5) { 'true' } else { 'fal
 # remain false and a double DQ is still rejected by the API.
 if ($EnableDqSandbox -and $Stage -lt 5) { throw 'DQ sandbox testing requires Stage 5 or later.' }
 $env:CHALLONGE_DQ_COMMANDS_ENABLED = if ($EnableDqSandbox) { 'true' } else { 'false' }
-# The bot resolves exactly one active test Discord account from acceptance.sqlite.
+# The bot resolves exactly one active test Discord account from the acceptance database.
 # Multiple accounts require an explicit non-secret AITOB_DISCORD_ACCOUNT_ID process selector.
 
 $python = Join-Path $PSScriptRoot '..\.venv\Scripts\python.exe'
 if (-not (Test-Path -LiteralPath $python)) { throw 'Project .venv Python was not found.' }
 
-Write-Host "Acceptance stage $Stage API: http://127.0.0.1:$($env:PORT) using $($env:DB_PATH)"
+Write-Host "Acceptance stage $Stage API: http://127.0.0.1:$($env:PORT) using PostgreSQL"
 if ($WithBot) {
     Start-Process -FilePath $python -ArgumentList 'backend/bot/main.py' -WorkingDirectory (Join-Path $PSScriptRoot '..') -WindowStyle Hidden
 }

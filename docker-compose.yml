@@ -70,7 +70,7 @@ services:
       AITOB_DISABLE_BACKGROUND_WORKERS: ${AITOB_DISABLE_BACKGROUND_WORKERS:-false}
     volumes:
       # Share only filesystem assets with the API. Runtime state is PostgreSQL;
-      # no SQLite volume is mounted into a service container.
+      # no file-backed database volume is mounted into a service container.
       - static_data:/app/backend/api/static
     restart: always
     depends_on:

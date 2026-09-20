@@ -7,7 +7,7 @@ import uuid
 from datetime import UTC, datetime
 
 from backend.core import database
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 from backend.core.timestamps import as_utc
 
 
@@ -38,8 +38,8 @@ async def issue_overlay_access(
             raise ValueError("Overlay is not associated with this station")
     token = secrets.token_urlsafe(36)
     token_id = str(uuid.uuid4())
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute("BEGIN")
         if overlay_name is None:
             await db.execute(
                 """UPDATE overlay_access_tokens
@@ -69,8 +69,8 @@ async def issue_overlay_access(
 async def resolve_overlay_access(token: str, station_public_id: str) -> dict | None:
     if not token:
         return None
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         row = await (await db.execute(
             """SELECT oat.id, oat.workspace_id, oat.station_id, oat.overlay_name, oat.expires_at,
                       s.public_id, s.name, s.active_overlay
@@ -88,7 +88,7 @@ async def resolve_overlay_access(token: str, station_public_id: str) -> dict | N
 
 
 async def revoke_overlay_access(workspace_id: str, token_id: str) -> bool:
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         result = await db.execute(
             "UPDATE overlay_access_tokens SET revoked_at=CURRENT_TIMESTAMP WHERE id=? AND workspace_id=? AND revoked_at IS NULL",
             (token_id, workspace_id),

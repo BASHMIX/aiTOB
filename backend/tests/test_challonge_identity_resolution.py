@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 import pytest
 
 from backend.core import challonge_resolution as resolution
@@ -44,16 +44,16 @@ class _ResolverAdapter:
 
 @pytest.fixture
 async def isolated_identity_db(tmp_path, monkeypatch):
-    db_path = tmp_path / "identity.sqlite"
-    monkeypatch.setattr(database, "DB_PATH", str(db_path))
+    database_dsn = tmp_path / "identity.pg"
+    monkeypatch.setattr(database, "DATABASE_DSN", str(database_dsn))
     await database.init_db()
-    async with aiosqlite.connect(db_path) as db:
+    async with dbapi.connect(database_dsn) as db:
         await db.execute(
             """INSERT INTO integration_accounts (id, owner_id, provider_type, external_account_id, display_name)
                VALUES ('account-fnc', 'admin', 'challonge', 'test-account', 'Test Challonge')"""
         )
         await db.commit()
-    return db_path
+    return database_dsn
 
 
 @pytest.mark.asyncio

@@ -63,18 +63,8 @@ async def get_provider_for_tournament(tournament_slug: str, workspace_id: str | 
         if provider_type == "startgg" and account_id:
             from backend.core.providers.startgg import StartGGProvider
             return StartGGProvider(provider_account_id=account_id)
-        if provider_type == "startgg" and workspace_id is not None:
-            # A tenant-owned tournament must never silently fall back to the
-            # historical platform Start.gg credential bucket.  Unscoped
-            # callers remain available for migration/test fixtures only.
+        if provider_type == "startgg":
             raise ValueError("Start.gg tournament is not bound to an integration account.")
-        if provider_type == "startgg" and os.getenv("AITOB_LEGACY_PROVIDER_FALLBACK", "false").lower() not in {"1", "true", "yes", "on"}:
-            # Unscoped resolution is retained only for explicit migration and
-            # test tools. Runtime callers must pass a workspace-owned account;
-            # otherwise the historical platform credential would be a silent
-            # cross-tenant fallback.
-            if os.getenv("AITOB_TESTING") != "1" and os.getenv("AITOB_SQLITE_MIGRATION_TOOL") != "1":
-                raise ValueError("Start.gg provider workspace binding is required.")
         return get_provider(provider_type)
     account_id = str((tournament or {}).get("provider_account_id") or "")
     if not account_id:

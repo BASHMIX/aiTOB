@@ -51,7 +51,7 @@ describe('OrganizerConsole', () => {
   });
 
   it('shows a load failure instead of presenting it as an empty tournament', async () => {
-    (axios.get as any).mockRejectedValueOnce({ response: { data: { message: 'SQLite unavailable' } } });
+    (axios.get as any).mockRejectedValueOnce({ response: { data: { message: 'Database unavailable' } } });
     render(<OrganizerConsole />);
     fireEvent.click(screen.getByText('AI Organizer Console'));
     expect(await screen.findByText(/Could not load local console data: Could not load local console data\./)).toBeInTheDocument();

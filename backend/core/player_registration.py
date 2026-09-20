@@ -13,7 +13,7 @@ from typing import Any, Mapping
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from backend.core import database
-from backend.core.storage import dbapi as aiosqlite, is_postgres
+from backend.core.storage import dbapi, is_postgres
 
 
 class RegistrationError(ValueError):
@@ -50,6 +50,11 @@ def _parse_instant(value: Any) -> dt.datetime | None:
         return None
     if isinstance(value, dt.datetime):
         parsed = value
+        # PostgreSQL TIMESTAMP columns return a naive datetime. Values entering
+        # these repositories are validated as explicit UTC instants, so restore
+        # that storage convention when reading them back.
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=dt.timezone.utc)
     else:
         try:
             parsed = dt.datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
@@ -84,8 +89,8 @@ def _enrollment(row: Any) -> dict[str, Any] | None:
 
 
 async def get_registration_config(tournament_id: str, workspace_id: str) -> dict[str, Any] | None:
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         row = await (await db.execute(
             "SELECT * FROM tournament_registration_configs WHERE tournament_id=? AND workspace_id=?",
             (tournament_id, workspace_id),
@@ -123,9 +128,9 @@ async def upsert_registration_config(
         raise RegistrationError("invalid_image_policy")
     now = _now()
     status = "disabled" if not enabled else "scheduled"
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
+        await db.execute("BEGIN")
         try:
             await db.execute(
                 """INSERT INTO tournament_registration_configs
@@ -146,9 +151,9 @@ async def upsert_registration_config(
                     schedule_version=tournament_registration_configs.schedule_version + 1,
                     status=excluded.status,
                     updated_at=excluded.updated_at, updated_by=excluded.updated_by""",
-                (tournament_id, workspace_id, int(enabled), values.get("destination_external_id"), opens_at, closes_at,
-                 display_timezone, int(values.get("require_provider_registration", True)),
-                 policy, int(values.get("startgg_bio_verification_enabled", False)), image_policy,
+                (tournament_id, workspace_id, enabled, values.get("destination_external_id"), opens_at, closes_at,
+                 display_timezone, bool(values.get("require_provider_registration", True)),
+                 policy, bool(values.get("startgg_bio_verification_enabled", False)), image_policy,
                  values.get("verified_role_external_id"), _dump(values.get("announcement_policy", {})), status,
                  now, now, actor_id),
             )
@@ -202,9 +207,9 @@ async def set_registration_status(
     if status not in {"scheduled", "open", "closed", "disabled", "degraded"}:
         raise RegistrationError("invalid_registration_status")
     now = _now()
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
+        await db.execute("BEGIN")
         try:
             row = await (await db.execute(
                 "SELECT * FROM tournament_registration_configs WHERE tournament_id=? AND workspace_id=?" + (" FOR UPDATE" if is_postgres() else ""),
@@ -237,8 +242,8 @@ async def set_registration_status(
 
 
 async def get_enrollment(enrollment_id: str, tournament_id: str, workspace_id: str) -> dict[str, Any] | None:
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         row = await (await db.execute(
             "SELECT * FROM tournament_player_enrollments WHERE id=? AND tournament_id=? AND workspace_id=?",
             (enrollment_id, tournament_id, workspace_id),
@@ -261,8 +266,8 @@ async def list_enrollments(
         where += " AND state=?"
         params.append(state)
     params.append(max(1, min(int(limit), 500)))
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         rows = await (await db.execute(
             "SELECT * FROM tournament_player_enrollments WHERE " + where + " ORDER BY updated_at DESC LIMIT ?",
             params,
@@ -286,9 +291,9 @@ async def upsert_enrollment(
         raise RegistrationError("invalid_enrollment_state")
     now = _now()
     enrollment_id = str(uuid.uuid4())
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
+        await db.execute("BEGIN")
         try:
             existing = None
             if provider_entrant_id:
@@ -336,9 +341,9 @@ async def transition_enrollment(
 ) -> dict[str, Any]:
     if state not in ENROLLMENT_STATES:
         raise RegistrationError("invalid_enrollment_state")
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
+        await db.execute("BEGIN")
         try:
             row = await (await db.execute(
                 "SELECT id FROM tournament_player_enrollments WHERE id=? AND tournament_id=? AND workspace_id=?" + (" FOR UPDATE" if is_postgres() else ""),
@@ -383,9 +388,9 @@ async def link_discord_member(
     if not member_exists:
         raise RegistrationError("discord_member_not_in_guild")
     now = _now()
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
+        await db.execute("BEGIN")
         try:
             target = await (await db.execute(
                 "SELECT * FROM tournament_player_enrollments WHERE id=? AND tournament_id=? AND workspace_id=?",
@@ -412,7 +417,7 @@ async def link_discord_member(
                        state=CASE WHEN state IN ('awaiting_discord_link','awaiting_identity','needs_review') THEN 'awaiting_identity' ELSE state END,
                        updated_at=?
                    WHERE id=? AND tournament_id=? AND workspace_id=?""",
-                (value, now, actor_id, now, now, _dump(methods), enrollment_id, tournament_id, workspace_id),
+                (value, now, actor_id, now, _dump(methods), now, enrollment_id, tournament_id, workspace_id),
             )
             await db.commit()
         except Exception:
@@ -436,9 +441,9 @@ async def unlink_discord_member(
     actor_id: str,
 ) -> dict[str, Any]:
     now = _now()
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
+        await db.execute("BEGIN")
         try:
             row = await (await db.execute(
                 "SELECT * FROM tournament_player_enrollments WHERE id=? AND tournament_id=? AND workspace_id=?",

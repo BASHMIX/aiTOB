@@ -411,7 +411,7 @@ async def api_sync_bracket(slug: str, principal: SessionPrincipal = Depends(requ
     summary="Read local provider freshness and recovery status",
 )
 async def api_tournament_sync_status(slug: str, principal: SessionPrincipal = Depends(require_permission("workspace.read"))):
-    """SQLite-only organizer diagnostics; this endpoint never polls a provider."""
+    """PostgreSQL-backed organizer diagnostics; this endpoint never polls a provider."""
     tournament = await get_tournament(slug, _workspace(principal))
     if not tournament:
         raise HTTPException(status_code=404, detail="Tournament not found")

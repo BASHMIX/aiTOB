@@ -6,9 +6,9 @@ from backend.core.tournament_readiness import compute_readiness
 
 @pytest.mark.asyncio
 async def test_grouped_readiness_has_precise_required_and_optional_checks(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "readiness.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "readiness.pg"))
     await database.init_db()
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute("INSERT INTO workspaces(id,slug,name) VALUES ('w','w','W')")
         await db.execute("INSERT INTO users(id,email,display_name,password_hash) VALUES ('u','u@example.com','U','x')")
         await db.commit()

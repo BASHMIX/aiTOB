@@ -8,7 +8,7 @@ import os
 import uuid
 from pathlib import Path
 
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 import pytest
 from fastapi.testclient import TestClient
 
@@ -33,8 +33,8 @@ def run(coro):
 
 @pytest.fixture()
 def isolated_workspace_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    db_path = tmp_path / "consistent-operational-copy.sqlite"
-    monkeypatch.setattr(database, "DB_PATH", str(db_path))
+    database_dsn = tmp_path / "consistent-operational-copy.pg"
+    monkeypatch.setattr(database, "DATABASE_DSN", str(database_dsn))
     monkeypatch.setenv("AITOB_BOOTSTRAP_OWNER_EMAIL", OWNER_EMAIL)
     monkeypatch.setenv("AITOB_BOOTSTRAP_OWNER_PASSWORD", OWNER_PASSWORD)
     monkeypatch.setenv("AITOB_BOOTSTRAP_OWNER_NAME", "Existing owner")
@@ -42,19 +42,19 @@ def isolated_workspace_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("AITOB_AUTH_MASTER_KEY", "7lXNrOpw2HnqGYiRkqzGN70KGyxoDpcQ0H3jDXiVlvc=")
     monkeypatch.delenv("AITOB_LEGACY_HUB_PASSWORD_COMPAT", raising=False)
     run(database.init_db())
-    yield db_path
+    yield database_dsn
 
 
 def test_bootstrap_migrates_a_consistent_copy_and_is_idempotent(isolated_workspace_db: Path):
     async def verify():
         # Simulates a pre-existing operational record. Workspace scope is not
         # added in this phase, and init_db must preserve it across reruns.
-        async with aiosqlite.connect(isolated_workspace_db) as db:
+        async with dbapi.connect(isolated_workspace_db) as db:
             await db.execute("INSERT INTO tournaments (slug, name) VALUES ('legacy-copy', 'Legacy copy')")
             await db.commit()
         await database.init_db()
         await database.init_db()
-        async with aiosqlite.connect(isolated_workspace_db) as db:
+        async with dbapi.connect(isolated_workspace_db) as db:
             users = (await (await db.execute("SELECT COUNT(*) FROM users")).fetchone())[0]
             workspaces = (await (await db.execute("SELECT COUNT(*) FROM workspaces")).fetchone())[0]
             memberships = (await (await db.execute("SELECT COUNT(*) FROM workspace_memberships WHERE role='owner'")).fetchone())[0]
@@ -172,11 +172,11 @@ def test_invitation_projection_and_cancellation_are_owner_scoped(isolated_worksp
     async def verify():
         _, owner = await authenticate_password(OWNER_EMAIL, OWNER_PASSWORD)
         second_workspace = str(uuid.uuid4())
-        async with aiosqlite.connect(isolated_workspace_db) as db:
+        async with dbapi.connect(isolated_workspace_db) as db:
             await db.execute("INSERT INTO workspaces (id,slug,name) VALUES (?,?,?)", (second_workspace, "second-invite", "Second"))
             await db.commit()
         invitation, _ = await create_workspace_invitation(owner, "one@example.test", "viewer")
-        async with aiosqlite.connect(isolated_workspace_db) as db:
+        async with dbapi.connect(isolated_workspace_db) as db:
             await db.execute(
                 "INSERT INTO workspace_invitations (id,workspace_id,email,role,token_hash,expires_at,created_by) VALUES (?,?,?,?,?,?,?)",
                 (str(uuid.uuid4()), second_workspace, "two@example.test", "viewer", str(uuid.uuid4()), (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=1)).isoformat(), owner.user_id),
@@ -210,7 +210,7 @@ def test_signed_in_profile_update_is_owner_scoped_and_audited(isolated_workspace
         with pytest.raises(PermissionError, match="Owner"):
             await update_account_profile(member, workspace_name="Unauthorized Rename")
 
-        async with aiosqlite.connect(isolated_workspace_db) as db:
+        async with dbapi.connect(isolated_workspace_db) as db:
             rows = await (await db.execute(
                 "SELECT action, detail_json FROM audit_events WHERE workspace_id=? ORDER BY created_at",
                 (owner.workspace_id,),
@@ -240,7 +240,7 @@ def test_profile_http_route_uses_session_and_rejects_client_workspace_selection(
 def test_stale_owner_principal_cannot_invite_after_membership_disabled(isolated_workspace_db: Path):
     async def verify():
         _, owner = await authenticate_password(OWNER_EMAIL, OWNER_PASSWORD)
-        async with aiosqlite.connect(isolated_workspace_db) as db:
+        async with dbapi.connect(isolated_workspace_db) as db:
             await db.execute("UPDATE workspace_memberships SET status='disabled'")
             await db.commit()
         with pytest.raises(PermissionError):
@@ -310,12 +310,12 @@ def test_login_logout_expiry_disabled_membership_and_workspace_spoof_rejection(i
     async def verify_rejections():
         token, principal = await authenticate_password(OWNER_EMAIL, OWNER_PASSWORD)
         assert await get_session_principal(token) is not None
-        async with aiosqlite.connect(isolated_workspace_db) as db:
+        async with dbapi.connect(isolated_workspace_db) as db:
             await db.execute("UPDATE user_sessions SET expires_at='2000-01-01T00:00:00+00:00' WHERE id=?", (principal.session_id,))
             await db.commit()
         assert await get_session_principal(token) is None
 
-        async with aiosqlite.connect(isolated_workspace_db) as db:
+        async with dbapi.connect(isolated_workspace_db) as db:
             await db.execute("UPDATE workspace_memberships SET status='disabled' WHERE user_id=?", (principal.user_id,))
             await db.commit()
         with pytest.raises(PermissionError):
@@ -330,7 +330,7 @@ def test_password_is_not_default_and_legacy_bridge_is_owner_only(isolated_worksp
         assert await legacy_owner_principal() is not None
         # A disabled owner removes the compatibility identity rather than
         # falling back to a globally trusted password.
-        async with aiosqlite.connect(isolated_workspace_db) as db:
+        async with dbapi.connect(isolated_workspace_db) as db:
             await db.execute("UPDATE workspace_memberships SET status='disabled'")
             await db.commit()
         assert await legacy_owner_principal() is None
@@ -387,7 +387,7 @@ def test_workspace_disable_refuses_inflight_work_and_revokes_after_drain(isolate
             await disable_workspace(owner)
         await database.delete_active_match("disable-match", owner.workspace_id)
         await disable_workspace(owner)
-        async with aiosqlite.connect(isolated_workspace_db) as db:
+        async with dbapi.connect(isolated_workspace_db) as db:
             workspace = await (await db.execute("SELECT status FROM workspaces WHERE id=?", (owner.workspace_id,))).fetchone()
             membership = await (await db.execute("SELECT status FROM workspace_memberships WHERE workspace_id=? AND user_id=?", (owner.workspace_id, owner.user_id))).fetchone()
             audit = await (await db.execute("SELECT action, outcome FROM audit_events WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1", (owner.workspace_id,))).fetchone()
@@ -407,7 +407,7 @@ def test_workspace_disable_sees_owned_outbox_and_hub_commands_without_match_join
 
     async def verify():
         _, owner = await authenticate_password(OWNER_EMAIL, OWNER_PASSWORD)
-        async with aiosqlite.connect(isolated_workspace_db) as db:
+        async with dbapi.connect(isolated_workspace_db) as db:
             await db.execute(
                 "INSERT INTO workflow_outbox (event_id, match_id, event_type, deduplication_key, workspace_id) VALUES (?, ?, ?, ?, ?)",
                 ("orphan-outbox", "already-removed", "discord.call", "orphan-outbox", owner.workspace_id),
@@ -415,7 +415,7 @@ def test_workspace_disable_sees_owned_outbox_and_hub_commands_without_match_join
             await db.commit()
         with pytest.raises(ValueError, match="active operations"):
             await disable_workspace(owner)
-        async with aiosqlite.connect(isolated_workspace_db) as db:
+        async with dbapi.connect(isolated_workspace_db) as db:
             await db.execute("DELETE FROM workflow_outbox WHERE event_id=?", ("orphan-outbox",))
             await db.execute(
                 "INSERT INTO hub_commands (command_text, status, workspace_id) VALUES (?, 'pending', ?)",
@@ -449,7 +449,7 @@ def test_workspace_lifecycle_reports_assets_and_hard_delete_policy(isolated_work
 
 def test_unscoped_legacy_routes_fail_closed_for_non_owner(isolated_workspace_db: Path):
     async def add_organizer():
-        async with aiosqlite.connect(isolated_workspace_db) as db:
+        async with dbapi.connect(isolated_workspace_db) as db:
             workspace_id = (await (await db.execute("SELECT id FROM workspaces")).fetchone())[0]
             organizer_id = str(uuid.uuid4())
             await db.execute("INSERT INTO users (id, email, display_name, password_hash) VALUES (?, ?, ?, ?)", (organizer_id, "organizer@example.test", "Organizer", hash_password("organizer-password")))
@@ -502,7 +502,7 @@ def test_password_reset_http_round_trip_and_old_password_rejected(isolated_works
 
 def test_granular_match_routes_enforce_role_boundaries(isolated_workspace_db):
     async def add_members():
-        async with aiosqlite.connect(isolated_workspace_db) as db:
+        async with dbapi.connect(isolated_workspace_db) as db:
             workspace_id = (await (await db.execute("SELECT id FROM workspaces")).fetchone())[0]
             for role, email in (("moderator", "route-moderator@example.test"), ("stream_operator", "route-stream@example.test")):
                 user_id = str(uuid.uuid4())
@@ -535,7 +535,7 @@ def test_granular_match_routes_enforce_role_boundaries(isolated_workspace_db):
 def test_roles_are_positive_and_negative_over_http(isolated_workspace_db):
     """A role acceptance must prove allowed operations, not only denials."""
     async def seed_match():
-        async with aiosqlite.connect(isolated_workspace_db) as db:
+        async with dbapi.connect(isolated_workspace_db) as db:
             workspace_id = (await (await db.execute("SELECT id FROM workspaces")).fetchone())[0]
             for role, email in (
                 ("tournament_organizer", "positive-to@example.test"),
@@ -554,7 +554,7 @@ def test_roles_are_positive_and_negative_over_http(isolated_workspace_db):
                 )
             await db.commit()
             # Close this writer before repository helpers open their own
-            # connection; SQLite cannot safely nest the write transactions.
+            # connection; PostgreSQL cannot safely nest the write transactions.
         await database.upsert_tournament(
             "role-acceptance", "Role acceptance", None, None, None, "{}",
             provider_type="startgg", workspace_id=workspace_id,
@@ -595,7 +595,7 @@ def test_email_verification_token_is_hashed_expiring_and_one_use(isolated_worksp
     async def verify():
         _, principal = await authenticate_password(OWNER_EMAIL, OWNER_PASSWORD)
         token = await create_email_verification(principal)
-        async with aiosqlite.connect(isolated_workspace_db) as db:
+        async with dbapi.connect(isolated_workspace_db) as db:
             row = await (await db.execute("SELECT token_hash FROM email_verification_tokens")).fetchone()
             assert row[0] != token
         await consume_email_verification(token)
@@ -623,7 +623,7 @@ def test_auth_rate_limit_is_database_backed_and_resets_after_window(isolated_wor
 
 def test_two_workspaces_can_use_same_station_public_id_without_cross_access(isolated_workspace_db):
     async def verify():
-        async with aiosqlite.connect(isolated_workspace_db) as db:
+        async with dbapi.connect(isolated_workspace_db) as db:
             first_workspace = (await (await db.execute("SELECT id FROM workspaces")).fetchone())[0]
             second_workspace = str(uuid.uuid4())
             await db.execute("INSERT INTO workspaces (id, slug, name) VALUES (?, 'second', 'Second')", (second_workspace,))
@@ -683,7 +683,7 @@ def test_overlay_link_is_workspace_scoped_hashed_and_revocable(isolated_workspac
         await database.create_station("broadcast", "Broadcast", owner.workspace_id)
         token_id, token = await issue_overlay_access(owner.workspace_id, "broadcast", owner.user_id)
         assert (await resolve_overlay_access(token, "broadcast"))["workspace_id"] == owner.workspace_id
-        async with aiosqlite.connect(isolated_workspace_db) as db:
+        async with dbapi.connect(isolated_workspace_db) as db:
             stored = await (await db.execute("SELECT token_hash FROM overlay_access_tokens WHERE id=?", (token_id,))).fetchone()
         assert stored and stored[0] != token
         assert await revoke_overlay_access(owner.workspace_id, token_id)

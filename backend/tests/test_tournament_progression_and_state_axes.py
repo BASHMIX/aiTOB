@@ -107,12 +107,12 @@ def test_challonge_manual_dq_is_available_for_an_eligible_not_started_match(monk
 
 
 @pytest.mark.asyncio
-async def test_active_match_display_is_sqlite_only_and_does_not_change_workflow(tmp_path, monkeypatch):
+async def test_active_match_display_is_postgres_only_and_does_not_change_workflow(tmp_path, monkeypatch):
     """Repeated card reads serialize axes but never call a provider or mutate rows."""
     from backend.api.routers import matches
     from backend.core import database
 
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "progression.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "progression.pg"))
 
     async def no_provider_call(*_args, **_kwargs):
         raise AssertionError("A display read must not resolve a provider")

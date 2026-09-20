@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 import backend.core.database as database
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 
 
 def run(coro):
@@ -18,8 +18,8 @@ def run(coro):
 
 @pytest.fixture()
 def audit_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    path = tmp_path / "audit.sqlite"
-    monkeypatch.setattr(database, "DB_PATH", str(path))
+    path = tmp_path / "audit.pg"
+    monkeypatch.setattr(database, "DATABASE_DSN", str(path))
     run(database.init_db())
     return path
 
@@ -32,10 +32,10 @@ def test_audit_detail_redacts_nested_secret_aliases_and_preserves_safe_metadata(
     retain the fact an operation occurred without retaining either value.
     """
     async def verify():
-        # PostgreSQL enforces the workspace ownership foreign key that SQLite
+        # PostgreSQL enforces the workspace ownership foreign key that PostgreSQL
         # development fixtures may not enforce; make the evidence valid on
         # both transports.
-        async with aiosqlite.connect(database.DB_PATH) as db:
+        async with dbapi.connect(database.DATABASE_DSN) as db:
             await db.execute(
                 "INSERT INTO workspaces (id, slug, name) VALUES (?, ?, ?)",
                 ("workspace-a", "workspace-a", "Audit workspace"),
@@ -55,7 +55,7 @@ def test_audit_detail_redacts_nested_secret_aliases_and_preserves_safe_metadata(
                 },
             },
         )
-        async with aiosqlite.connect(audit_db) as db:
+        async with dbapi.connect(audit_db) as db:
             row = await (await db.execute(
                 "SELECT detail_json FROM audit_events WHERE id=?", (event_id,),
             )).fetchone()

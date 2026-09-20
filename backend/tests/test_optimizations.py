@@ -1,6 +1,6 @@
 import pytest
 import os
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 
 from backend.core.database import (
     init_db,
@@ -8,28 +8,28 @@ from backend.core.database import (
     get_match_occupying_station,
     update_tournament_settings,
     upsert_tournament,
-    DB_PATH
+    DATABASE_DSN
 )
 
-TEST_DB_PATH = ""
+TEST_DATABASE_DSN = ""
 
 @pytest.fixture
 async def setup_test_db(tmp_path):
     import backend.core.database
     import backend.core.match_state
     
-    global TEST_DB_PATH
-    TEST_DB_PATH = str(tmp_path / "optimizations.sqlite")
-    orig_db_path = backend.core.database.DB_PATH
-    backend.core.database.DB_PATH = TEST_DB_PATH
-    backend.core.match_state.DB_PATH = TEST_DB_PATH
+    global TEST_DATABASE_DSN
+    TEST_DATABASE_DSN = str(tmp_path / "optimizations.pg")
+    orig_database_dsn = backend.core.database.DATABASE_DSN
+    backend.core.database.DATABASE_DSN = TEST_DATABASE_DSN
+    backend.core.match_state.DATABASE_DSN = TEST_DATABASE_DSN
     
     await init_db()
     
     yield
     
-    backend.core.database.DB_PATH = orig_db_path
-    backend.core.match_state.DB_PATH = orig_db_path
+    backend.core.database.DATABASE_DSN = orig_database_dsn
+    backend.core.match_state.DATABASE_DSN = orig_database_dsn
 
 @pytest.mark.asyncio
 async def test_get_match_occupying_station(setup_test_db):
@@ -93,8 +93,8 @@ async def test_update_tournament_settings_batching(setup_test_db):
     await update_tournament_settings(slug="test-tourney", bot_manage_limit="top8")
     
     # Check that they were correctly updated
-    async with aiosqlite.connect(TEST_DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(TEST_DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         async with db.execute("SELECT set_id, bot_enabled FROM active_matches") as cursor:
             rows = await cursor.fetchall()
             assert len(rows) == 2

@@ -1,6 +1,6 @@
 import pytest
 import os
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 
 from backend.core.database import (
     init_db,
@@ -9,28 +9,28 @@ from backend.core.database import (
     update_tournament_settings,
     update_active_match,
     upsert_active_match,
-    DB_PATH
+    DATABASE_DSN
 )
 
-TEST_DB_PATH = ""
+TEST_DATABASE_DSN = ""
 
 @pytest.fixture
 async def setup_test_db(tmp_path):
     import backend.core.database
     import backend.core.match_state
 
-    global TEST_DB_PATH
-    TEST_DB_PATH = str(tmp_path / "database-security.sqlite")
-    orig_db_path = backend.core.database.DB_PATH
-    backend.core.database.DB_PATH = TEST_DB_PATH
-    backend.core.match_state.DB_PATH = TEST_DB_PATH
+    global TEST_DATABASE_DSN
+    TEST_DATABASE_DSN = str(tmp_path / "database-security.pg")
+    orig_database_dsn = backend.core.database.DATABASE_DSN
+    backend.core.database.DATABASE_DSN = TEST_DATABASE_DSN
+    backend.core.match_state.DATABASE_DSN = TEST_DATABASE_DSN
 
     await init_db()
 
     yield
 
-    backend.core.database.DB_PATH = orig_db_path
-    backend.core.match_state.DB_PATH = orig_db_path
+    backend.core.database.DATABASE_DSN = orig_database_dsn
+    backend.core.match_state.DATABASE_DSN = orig_database_dsn
 
 @pytest.mark.asyncio
 async def test_update_station_sql_injection(setup_test_db):
@@ -40,11 +40,11 @@ async def test_update_station_sql_injection(setup_test_db):
     # Try updating with malicious column
     try:
         await update_station("station_sec_1", name="Hacked Station", **{"name='Hacked Station'; DROP TABLE stations; --": "test"})
-    except aiosqlite.OperationalError:
+    except dbapi.OperationalError:
         pytest.fail("SQL injection triggered!")
 
-    async with aiosqlite.connect(TEST_DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(TEST_DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         async with db.execute("SELECT name FROM stations WHERE id = 'station_sec_1'") as cursor:
             row = await cursor.fetchone()
             assert row["name"] == "Hacked Station" # Legitimate param still works
@@ -58,11 +58,11 @@ async def test_update_station_sql_injection(setup_test_db):
 async def test_create_or_update_player_sql_injection(setup_test_db):
     try:
         await create_or_update_player("user_sec_1", gamer_tag="Hacked Player", **{"gamer_tag='Hack'; DROP TABLE players; --": "test"})
-    except aiosqlite.OperationalError:
+    except dbapi.OperationalError:
         pytest.fail("SQL injection triggered!")
 
-    async with aiosqlite.connect(TEST_DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(TEST_DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         async with db.execute("SELECT gamer_tag FROM players WHERE discord_id = 'user_sec_1'") as cursor:
             row = await cursor.fetchone()
             assert row["gamer_tag"] == "Hacked Player"
@@ -79,11 +79,11 @@ async def test_update_tournament_settings_sql_injection(setup_test_db):
 
     try:
         await update_tournament_settings("tourney_sec_1", name="Hacked Tourney", **{"name='Hack'; DROP TABLE tournaments; --": "test"})
-    except aiosqlite.OperationalError:
+    except dbapi.OperationalError:
         pytest.fail("SQL injection triggered!")
 
-    async with aiosqlite.connect(TEST_DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(TEST_DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         async with db.execute("SELECT name FROM tournaments WHERE slug = 'tourney_sec_1'") as cursor:
             row = await cursor.fetchone()
             assert row["name"] == "Hacked Tourney"
@@ -99,11 +99,11 @@ async def test_update_active_match_sql_injection(setup_test_db):
 
     try:
         await update_active_match("match_sec_1", p1_name="Hacked P1", **{"p1_name='Hack'; DROP TABLE active_matches; --": "test"})
-    except aiosqlite.OperationalError:
+    except dbapi.OperationalError:
         pytest.fail("SQL injection triggered!")
 
-    async with aiosqlite.connect(TEST_DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(TEST_DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         async with db.execute("SELECT p1_name FROM active_matches WHERE set_id = 'match_sec_1'") as cursor:
             row = await cursor.fetchone()
             assert row["p1_name"] == "Hacked P1"

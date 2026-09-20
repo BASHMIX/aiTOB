@@ -2,19 +2,19 @@ import pytest
 
 from backend.core import database
 from backend.core.player_registration import RegistrationError, link_discord_member, unlink_discord_member, upsert_enrollment
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 
 
 @pytest.fixture
 async def link_db(tmp_path, monkeypatch):
-    db_path = tmp_path / "registration-link.sqlite"
-    monkeypatch.setattr(database, "DB_PATH", str(db_path))
+    database_dsn = tmp_path / "registration-link.pg"
+    monkeypatch.setattr(database, "DATABASE_DSN", str(database_dsn))
     await database.init_db()
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute("INSERT INTO workspaces (id, slug, name) VALUES ('w1', 'w1', 'Workspace')")
         await db.execute("INSERT INTO tournaments (slug, name, workspace_id) VALUES ('t1', 'Tournament', 'w1')")
         await db.commit()
-    return database.DB_PATH
+    return database.DATABASE_DSN
 
 
 @pytest.mark.asyncio

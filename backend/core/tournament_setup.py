@@ -15,7 +15,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from backend.core import database
-from backend.core.storage import dbapi as aiosqlite, is_postgres
+from backend.core.storage import dbapi, is_postgres
 
 
 class DraftError(ValueError):
@@ -52,7 +52,7 @@ def _now() -> str:
 
 
 def _iso_timestamp(value: Any) -> str | None:
-    """Keep SQLite strings and PostgreSQL datetime values API-compatible."""
+    """Keep stored strings and PostgreSQL datetime values API-compatible."""
     if value is None:
         return None
     if isinstance(value, dt.datetime):
@@ -145,8 +145,8 @@ async def create_draft(workspace_id: str, actor_id: str, *, template: Mapping[st
         answers = {key: template[key] for key in ("tournament_review", "operating_profile", "discord_setup") if key in template}
     draft_id = str(uuid.uuid4())
     now = _now()
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         await db.execute(
             """INSERT INTO tournament_setup_drafts
                (id, workspace_id, created_by, updated_by, answers_json, completion_json, created_at, updated_at)
@@ -158,8 +158,8 @@ async def create_draft(workspace_id: str, actor_id: str, *, template: Mapping[st
 
 
 async def get_draft(draft_id: str, workspace_id: str) -> dict[str, Any]:
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         return await _fetch(db, draft_id, workspace_id)
 
 
@@ -176,9 +176,9 @@ async def reopen_draft_for_tournament(tournament_id: str, workspace_id: str, act
     if not tournament_id:
         raise DraftNotFound("draft_not_found")
     now = _now()
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
+        await db.execute("BEGIN")
         try:
             suffix = " FOR UPDATE" if is_postgres() else ""
             row = await (await db.execute(
@@ -214,8 +214,8 @@ async def list_drafts(workspace_id: str, *, statuses: set[str] | None = None, li
         where += " AND status IN (" + ",".join("?" for _ in allowed) + ")"
         params.extend(allowed)
     params.append(bounded_limit)
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         rows = await (await db.execute(
             "SELECT * FROM tournament_setup_drafts WHERE " + where + " ORDER BY updated_at DESC LIMIT ?", params
         )).fetchall()
@@ -239,9 +239,9 @@ async def patch_draft(
     payload = dict(value or {})
     _reject_secrets(payload)
     now = _now()
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
+        await db.execute("BEGIN")
         try:
             row = await (await db.execute(
                 "SELECT * FROM tournament_setup_drafts WHERE id=? AND workspace_id=?" + (" FOR UPDATE" if is_postgres() else ""),
@@ -283,8 +283,8 @@ async def patch_draft(
 
 
 async def abandon_draft(draft_id: str, workspace_id: str, *, expected_revision: int) -> None:
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute("BEGIN")
         try:
             row = await (await db.execute(
                 "SELECT status, revision FROM tournament_setup_drafts WHERE id=? AND workspace_id=?" + (" FOR UPDATE" if is_postgres() else ""),
@@ -323,9 +323,9 @@ async def update_provider_scope(
     if provider_type not in {"startgg", "challonge"}:
         raise DraftError("unsupported_provider")
     now = _now()
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
+        await db.execute("BEGIN")
         try:
             row = await (await db.execute(
                 "SELECT * FROM tournament_setup_drafts WHERE id=? AND workspace_id=?" + (" FOR UPDATE" if is_postgres() else ""),

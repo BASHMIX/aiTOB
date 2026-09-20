@@ -18,14 +18,14 @@ OWNER_PASSWORD = "a-strong-owner-password"
 
 @pytest.fixture()
 def isolated_workspace_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    db_path = tmp_path / "websocket.sqlite"
-    monkeypatch.setattr(database, "DB_PATH", str(db_path))
+    database_dsn = tmp_path / "websocket.pg"
+    monkeypatch.setattr(database, "DATABASE_DSN", str(database_dsn))
     monkeypatch.setenv("AITOB_BOOTSTRAP_OWNER_EMAIL", OWNER_EMAIL)
     monkeypatch.setenv("AITOB_BOOTSTRAP_OWNER_PASSWORD", OWNER_PASSWORD)
     monkeypatch.setenv("AITOB_AUTH_MASTER_KEY", "7lXNrOpw2HnqGYiRkqzGN70KGyxoDpcQ0H3jDXiVlvc=")
     monkeypatch.delenv("AITOB_LEGACY_HUB_PASSWORD_COMPAT", raising=False)
     asyncio.run(database.init_db())
-    return db_path
+    return database_dsn
 
 
 def test_hub_websocket_requires_a_live_session(isolated_workspace_db):
@@ -38,7 +38,7 @@ def test_hub_websocket_requires_a_live_session(isolated_workspace_db):
 
 def test_hub_websocket_subscriptions_are_bound_to_session_workspace(isolated_workspace_db):
     async def seed():
-        async with database.aiosqlite.connect(database.DB_PATH) as db:
+        async with database.dbapi.connect(database.DATABASE_DSN) as db:
             owner_workspace = (await (await db.execute("SELECT id FROM workspaces ORDER BY created_at LIMIT 1")).fetchone())[0]
             await db.execute("INSERT INTO workspaces (id,slug,name) VALUES ('workspace-other','workspace-other','Other')")
             await db.commit()
@@ -64,7 +64,7 @@ def test_hub_websocket_subscriptions_are_bound_to_session_workspace(isolated_wor
 
 def test_overlay_websocket_requires_hashed_station_grant_and_cannot_cross_workspace(isolated_workspace_db):
     async def seed():
-        async with database.aiosqlite.connect(database.DB_PATH) as db:
+        async with database.dbapi.connect(database.DATABASE_DSN) as db:
             owner_workspace = (await (await db.execute("SELECT id FROM workspaces ORDER BY created_at LIMIT 1")).fetchone())[0]
         await database.create_station("overlay-a", "Overlay A", owner_workspace)
 

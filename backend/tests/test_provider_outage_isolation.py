@@ -23,7 +23,7 @@ async def test_challonge_429_backoff_does_not_block_startgg_snapshot():
 
 @pytest.mark.asyncio
 async def test_challonge_outage_does_not_block_local_call(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "outage.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "outage.pg"))
     await database.init_db()
     slug = "challonge:account:outage:1"
     await database.upsert_tournament(slug, "Outage", None, None, None, json.dumps({}), provider_type="challonge", provider_tournament_id="1", provider_account_id="account")
@@ -39,7 +39,7 @@ async def test_challonge_outage_does_not_block_local_call(tmp_path, monkeypatch)
 
 @pytest.mark.asyncio
 async def test_token_expiry_keeps_score_as_local_draft_without_remote_mutation(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "expiry.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "expiry.pg"))
     await database.init_db()
     slug = "challonge:account:expiry:1"
     await database.upsert_tournament(slug, "Expiry", None, None, None, json.dumps({}), provider_type="challonge", provider_tournament_id="1", provider_account_id="account")

@@ -1,15 +1,12 @@
 """PostgreSQL acceptance for the user, session, and membership foundation.
 
-These tests intentionally run only when ``--postgres`` is supplied.  The
-repository conftest creates a disposable database for every test, so no
-operational SQLite/PostgreSQL database or external mail service is touched.
+The repository conftest creates a disposable database for every test, so no
+operational database or external mail service is touched.
 """
 
 from __future__ import annotations
 
 import datetime as dt
-import os
-
 import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
@@ -26,13 +23,6 @@ from backend.core.workspace_auth import (
     hash_password,
     get_session_principal,
     revoke_session,
-)
-
-
-PG_TEST_URL = os.getenv("AITOB_PG_TEST_URL")
-pytestmark = pytest.mark.skipif(
-    not PG_TEST_URL,
-    reason="requires explicit AITOB_PG_TEST_URL",
 )
 
 

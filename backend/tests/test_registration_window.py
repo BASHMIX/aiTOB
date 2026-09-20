@@ -9,20 +9,20 @@ from backend.core.player_registration import (
     set_registration_status,
     upsert_registration_config,
 )
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 
 
 @pytest.fixture
 async def window_db(tmp_path, monkeypatch):
-    db_path = tmp_path / "registration-window.sqlite"
-    monkeypatch.setattr(database, "DB_PATH", str(db_path))
+    database_dsn = tmp_path / "registration-window.pg"
+    monkeypatch.setattr(database, "DATABASE_DSN", str(database_dsn))
     await database.init_db()
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute("INSERT INTO workspaces (id, slug, name) VALUES ('w1', 'w1', 'Workspace')")
         await db.execute("INSERT INTO users (id, email, display_name, password_hash) VALUES ('u1', 'owner@example.test', 'Owner', 'hash')")
         await db.execute("INSERT INTO tournaments (slug, name, workspace_id, provider_type) VALUES ('t1', 'Tournament', 'w1', 'startgg')")
         await db.commit()
-    return database.DB_PATH
+    return database.DATABASE_DSN
 
 
 @pytest.mark.asyncio

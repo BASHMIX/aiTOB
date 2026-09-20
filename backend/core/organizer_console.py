@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 
 from backend.core import database
 from backend.core.action_proposals import list_action_proposals
@@ -41,8 +41,8 @@ async def read_organizer_console(tournament_slug: str, workspace_id: str | None 
     capacity = max(1, int(tournament.get("auto_dispatch_concurrency") or 1))
     proposals = await list_action_proposals(tournament_slug, workspace_id)
 
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         conflicts = [dict(row) for row in await (await db.execute(
             """SELECT c.id, c.set_id, c.created_at, am.p1_name, am.p2_name
                FROM conflicts c JOIN active_matches am ON am.set_id=c.set_id

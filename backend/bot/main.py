@@ -994,7 +994,7 @@ async def _dispatch_workflow_outbox_event(event: dict):
             await thread.send(f"✅ {player.upper()} readiness recorded.")
         return
     if event_type in {"obs_match_started", "obs_station_assigned", "obs_match_complete"}:
-        # Overlay state is already durable in SQLite; notify the Hub/OBS bridge
+        # Overlay state is already durable in PostgreSQL; notify the Hub/OBS bridge
         # only after the outbox item has been claimed by this bot process.
         await ws_add_bot_feed(f"Workflow effect applied: {event_type} for {event['match_id']}", "info")
         return
@@ -1619,7 +1619,7 @@ async def ws_add_bot_feed(message: str, level: str = "info"):
             bot_ws = None
             print(f"[BOT] Failed to stream log over WS: {e}")
             
-    # Fallback: Write directly to SQLite database
+    # Fallback: write directly to the PostgreSQL repository
     try:
         from core.database import add_bot_feed as db_add_bot_feed
         await db_add_bot_feed(message, level)

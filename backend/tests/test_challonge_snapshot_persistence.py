@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import asyncio
 
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 import pytest
 
 from backend.core import database
@@ -26,8 +26,8 @@ def _set(match_id: str, state: str = "open", revision: str = "2", p1: str = "p1"
 
 @pytest.fixture
 async def challonge_db(tmp_path, monkeypatch):
-    path = tmp_path / "snapshot.sqlite"
-    monkeypatch.setattr(database, "DB_PATH", str(path))
+    path = tmp_path / "snapshot.pg"
+    monkeypatch.setattr(database, "DATABASE_DSN", str(path))
     await database.init_db()
     await database.upsert_tournament(
         "challonge:account:fnc-jo:18449397", "FNC", None, None, None, json.dumps({}),
@@ -48,8 +48,8 @@ async def test_complete_snapshot_atomically_projects_open_complete_bye_and_tbd(c
     )
 
     assert len(result["sets"]) == 3
-    async with aiosqlite.connect(challonge_db) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(challonge_db) as db:
+        db.row_factory = dbapi.Row
         async with db.execute("SELECT * FROM active_matches ORDER BY provider_set_id") as cursor:
             rows = [dict(row) for row in await cursor.fetchall()]
         async with db.execute("SELECT COUNT(*) FROM provider_snapshot_participants") as cursor:
@@ -71,7 +71,7 @@ async def test_failed_partial_pages_publish_nothing_and_preserve_last_healthy_sn
         )
 
     assert await database.get_bracket_snapshot(slug) == {"sets": [], "synced_at": None}
-    async with aiosqlite.connect(challonge_db) as db:
+    async with dbapi.connect(challonge_db) as db:
         async with db.execute("SELECT COUNT(*) FROM active_matches") as cursor:
             assert (await cursor.fetchone())[0] == 0
 
@@ -83,7 +83,7 @@ async def test_partial_scope_never_deletes_other_rows_and_snapshot_never_changes
         slug, "account", [_set("m1"), _set("m2")], [], scope="full_snapshot", revision="2",
         observed_at=None, covered_scopes={"full_snapshot"}, complete_pages=True,
     )
-    async with aiosqlite.connect(challonge_db) as db:
+    async with dbapi.connect(challonge_db) as db:
         await db.execute("INSERT INTO stations (id, name) VALUES ('station_x', 'Protected station')")
         await db.execute("""UPDATE active_matches SET status='in_progress', hub_status=NULL,
             station_id='station_x', is_stream_match=TRUE WHERE provider_set_id='m1'""")
@@ -93,8 +93,8 @@ async def test_partial_scope_never_deletes_other_rows_and_snapshot_never_changes
         slug, "account", [_set("m1", "open", revision="3", p1="p3")], [], scope="single_match",
         revision="3", observed_at=None, covered_scopes={"single_match"}, complete_pages=True,
     )
-    async with aiosqlite.connect(challonge_db) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(challonge_db) as db:
+        db.row_factory = dbapi.Row
         async with db.execute("SELECT provider_set_id, status, station_id, is_stream_match, p1_entrant_id FROM active_matches ORDER BY provider_set_id") as cursor:
             rows = [dict(row) for row in await cursor.fetchall()]
     assert [row["provider_set_id"] for row in rows] == ["m1", "m2"]
@@ -122,6 +122,6 @@ async def test_concurrent_snapshots_cannot_regress_revision(challonge_db):
         )
     outcomes = await asyncio.gather(*(publish(revision) for revision in (8, 3, 9, 4, 6)), return_exceptions=True)
     assert all(not isinstance(value, Exception) or isinstance(value, database.StaleProviderSnapshotError) for value in outcomes)
-    async with aiosqlite.connect(challonge_db) as db:
+    async with dbapi.connect(challonge_db) as db:
         row = await (await db.execute("SELECT provider_revision FROM active_matches WHERE provider_set_id='race'")).fetchone()
     assert row[0] == "9"

@@ -7,9 +7,9 @@ from backend.core import database
 
 @pytest.mark.asyncio
 async def test_discord_state_hash_is_one_way_and_expiry_scoped(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "oauth.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "oauth.pg"))
     await database.init_db()
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute("INSERT INTO workspaces(id,slug,name) VALUES ('w','w','Workspace')")
         await db.execute("INSERT INTO users(id,email,display_name,password_hash) VALUES ('u','u@example.com','U','x')")
         await db.execute("INSERT INTO tournament_setup_drafts(id,workspace_id,created_by,updated_by) VALUES ('d','w','u','u')")

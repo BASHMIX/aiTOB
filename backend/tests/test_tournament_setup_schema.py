@@ -1,28 +1,14 @@
 """PostgreSQL schema contracts for Tournament Setup aggregates.
 
-These tests are deliberately PostgreSQL-only.  They describe the storage
-boundary required by feature 004 and are expected to fail while the additive
-schema/migration work is still pending.  SQLite is not an acceptable substitute
-for these checks because the contracts depend on PostgreSQL foreign keys,
-partial unique indexes, and UUID/workspace ownership constraints.
+These tests describe the PostgreSQL storage boundary required by feature 004,
+including foreign keys, partial unique indexes, and workspace ownership.
 """
 
 from __future__ import annotations
 
-import os
-import uuid
-from urllib.parse import urlsplit, urlunsplit
-
 import pytest
 
 from backend.core import database
-
-
-PG_TEST_URL = os.getenv("AITOB_PG_TEST_URL")
-pytestmark = pytest.mark.skipif(
-    not PG_TEST_URL,
-    reason="requires explicit AITOB_PG_TEST_URL",
-)
 
 
 # Every new operational aggregate has a direct workspace owner.  Credentials
@@ -125,29 +111,8 @@ REQUIRED_SCOPED_UNIQUES = (
 )
 
 
-@pytest.fixture(autouse=True)
-async def isolated_postgres(monkeypatch: pytest.MonkeyPatch):
-    """Create one disposable PostgreSQL database per contract test."""
-    import psycopg
-    from psycopg import sql
-
-    parts = urlsplit(PG_TEST_URL or "")
-    name = "aitob_setup_schema_" + uuid.uuid4().hex
-    admin = urlunsplit((parts.scheme, parts.netloc, "/postgres", parts.query, parts.fragment))
-    target = urlunsplit((parts.scheme, parts.netloc, "/" + name, parts.query, parts.fragment))
-    with psycopg.connect(admin, autocommit=True) as connection:
-        connection.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
-    monkeypatch.setenv("DATABASE_URL", target)
-    try:
-        await database.init_db()
-        yield
-    finally:
-        with psycopg.connect(admin, autocommit=True) as connection:
-            connection.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(name)))
-
-
 async def _rows(statement: str, parameters: tuple = ()) -> list:
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
         async with db.execute(statement, parameters) as cursor:
             return await cursor.fetchall()
 

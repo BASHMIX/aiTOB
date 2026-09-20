@@ -2,19 +2,19 @@ import pytest
 
 from backend.core import database
 from backend.core.registration_sync import sync_provider_roster
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 
 
 @pytest.fixture
 async def registration_db(tmp_path, monkeypatch):
-    db_path = tmp_path / "registration.sqlite"
-    monkeypatch.setattr(database, "DB_PATH", str(db_path))
+    database_dsn = tmp_path / "registration.pg"
+    monkeypatch.setattr(database, "DATABASE_DSN", str(database_dsn))
     await database.init_db()
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute("INSERT INTO workspaces (id, slug, name) VALUES ('w1', 'w1', 'Workspace')")
         await db.execute("INSERT INTO tournaments (slug, name, workspace_id, provider_type, provider_account_id, provider_tournament_id) VALUES ('t1', 'Tournament', 'w1', 'startgg', 'a1', 'remote-t1')")
         await db.commit()
-    return database.DB_PATH
+    return database.DATABASE_DSN
 
 
 @pytest.mark.asyncio
@@ -37,8 +37,8 @@ async def test_roster_sync_is_exact_scope_idempotent_and_marks_removals_for_revi
         provider_revision="r2",
     )
     assert third.updated == 1 and third.removed == 1
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         rows = await (await db.execute("SELECT provider_entrant_id, state, state_reason_code, prefix, gamertag FROM tournament_player_enrollments ORDER BY provider_entrant_id")).fetchall()
     assert rows[0]["state_reason_code"] == "provider_identity_changed"
     assert rows[0]["gamertag"] == "Alpha Prime"
@@ -52,6 +52,6 @@ async def test_collision_moves_both_entries_to_review(registration_db):
         entrants=[{"id": "e1", "gamertag": "Alpha"}, {"id": "e2", "gamertag": "alpha"}],
     )
     assert result.collision_count == 1
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         rows = await (await db.execute("SELECT state FROM tournament_player_enrollments ORDER BY provider_entrant_id")).fetchall()
     assert [row[0] for row in rows] == ["needs_review", "needs_review"]

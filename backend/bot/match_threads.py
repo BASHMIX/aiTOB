@@ -353,7 +353,7 @@ class ReadyCheckView(discord.ui.View):
         if user_id not in {str(self.p1_discord or ""), str(self.p2_discord or "")}:
             await interaction.response.send_message("This Ready button is only for the two assigned players.", ephemeral=True)
             return
-        # Acknowledge before SQLite/outbox work.  Discord expires an interaction
+        # Acknowledge before PostgreSQL/outbox work. Discord expires an interaction
         # after roughly three seconds, and an expired acknowledgement used to
         # show “This interaction failed” even when the Ready state committed.
         await interaction.response.defer(ephemeral=True, thinking=False)
@@ -487,7 +487,7 @@ async def _challonge_local_workflow_enabled() -> bool:
 async def restore_ready_check_views(bot, workspace_id: str | None = None) -> int:
     """Re-register durable Challonge Ready buttons after a bot process restart.
 
-    This reads SQLite only.  It neither sends a Discord message nor performs a
+    This reads PostgreSQL only. It neither sends a Discord message nor performs a
     provider request, and is intentionally limited to stored called matches.
     """
     restored = 0

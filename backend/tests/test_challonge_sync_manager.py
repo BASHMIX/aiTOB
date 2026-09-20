@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 import pytest
 
 from backend.core import database
@@ -26,7 +26,7 @@ class _Client:
 
 @pytest.fixture
 async def sync_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "sync.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "sync.pg"))
     await database.init_db()
     await database.upsert_tournament(
         "challonge:account:fnc-jo:1", "FNC", None, None, None, json.dumps({}),
@@ -36,7 +36,7 @@ async def sync_db(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_sync_now_uses_one_read_only_full_snapshot_and_publishes_sqlite(sync_db, monkeypatch):
+async def test_sync_now_uses_one_read_only_full_snapshot_and_publishes_postgres(sync_db, monkeypatch):
     from backend.core import provider_sync_manager as sync_module
     client = _Client()
     provider = ChallongeProvider(client)
@@ -107,7 +107,7 @@ async def test_failed_second_collection_page_never_replaces_last_healthy_bracket
         await manager.sync_bracket(sync_db)
 
     assert await database.get_bracket_snapshot(sync_db) == {"sets": [], "synced_at": None}
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         async with db.execute("SELECT COUNT(*) FROM active_matches") as cursor:
             assert (await cursor.fetchone())[0] == 0
 

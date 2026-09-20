@@ -90,7 +90,7 @@ export function MatchDashboard() {
 
   const loadSets = useCallback(async () => {
     if (!currentSlug) { setSets([]); return; }
-    // Challonge's SQLite projection is already represented by active matches.
+    // Challonge's durable projection is already represented by active matches.
     // Fetching the legacy set endpoint here adds no value and revives Start.gg
     // terminology/filters in a one-bracket tournament.
     if (isChallonge) { setSets([]); return; }

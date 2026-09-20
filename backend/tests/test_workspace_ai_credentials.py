@@ -9,10 +9,10 @@ from backend.core.ai_service import (
 
 @pytest.mark.asyncio
 async def test_workspace_ai_keys_are_separate_and_write_only(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "workspace-ai.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "workspace-ai.pg"))
     monkeypatch.setenv("AITOB_INTEGRATION_MASTER_KEY", Fernet.generate_key().decode("ascii"))
     await database.init_db()
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute("INSERT INTO workspaces (id, slug, name) VALUES ('w-a', 'workspace-a', 'A')")
         await db.execute("INSERT INTO workspaces (id, slug, name) VALUES ('w-b', 'workspace-b', 'B')")
         await db.commit()

@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 import backend.core.database as database
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 
 
 def run(coro):
@@ -18,8 +18,8 @@ def run(coro):
 
 @pytest.fixture()
 def error_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    path = tmp_path / "errors.sqlite"
-    monkeypatch.setattr(database, "DB_PATH", str(path))
+    path = tmp_path / "errors.pg"
+    monkeypatch.setattr(database, "DATABASE_DSN", str(path))
     run(database.init_db())
     return path
 
@@ -38,7 +38,7 @@ def test_error_event_is_redacted_and_bounded(error_db: Path):
                 "message": "request failed token=embedded-secret",
             },
         )
-        async with aiosqlite.connect(error_db) as db:
+        async with dbapi.connect(error_db) as db:
             row = await (await db.execute(
                 "SELECT method, path, exception_type, trace_id, detail_json "
                 "FROM error_events WHERE id=?", (event_id,),
@@ -68,7 +68,7 @@ def test_error_telemetry_failure_does_not_replace_original_failure(error_db: Pat
             return False
 
     async def verify():
-        monkeypatch.setattr(database.aiosqlite, "connect", lambda *args, **kwargs: FailedConnection())
+        monkeypatch.setattr(database.dbapi, "connect", lambda *args, **kwargs: FailedConnection())
         assert await database.record_error_event(
             method="GET", path="/boom", exception_type="RuntimeError"
         ) is None

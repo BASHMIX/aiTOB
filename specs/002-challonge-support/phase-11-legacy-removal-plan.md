@@ -108,10 +108,10 @@ T075 must remain open until every gate below passes.
    T066, T073, the Phase 10 runbook, capability projection, tests, and deployment
    configuration must be reconciled with this decision before rollout flags are
    removed. AI-DQ and automatic DQ remain prohibited.
-4. **PostgreSQL source of truth**: runtime and acceptance use PostgreSQL. SQLite
-   is permitted only for isolated unit tests and migration/recovery fixtures.
-   Outdated Phase 2/Phase 10 references to a runtime "SQLite projection" must be
-   corrected to "durable PostgreSQL projection".
+4. **PostgreSQL source of truth**: runtime, acceptance, tests, backup, restore,
+   and maintenance tools use PostgreSQL exclusively. The embedded database
+   adapter, dependency, fallback, migration utilities, and test fixture path
+   were removed on 2026-09-20.
 5. **No unsafe pending effects**: no unknown provider mutation may be resent
    during cutover. Pending/sending/acknowledged commands are verified or placed
    in `needs_review`, and outbox work is drained or explicitly held.
@@ -421,8 +421,7 @@ that lets future consumers bypass the gateway.
 - Remove `AITOB_LEGACY_PROVIDER_FALLBACK` and global credential lookup.
 - Remove obsolete compatibility tests and replace them with one-path contract,
   architecture, account isolation, and parity tests.
-- Update stale comments and runbook references from SQLite runtime to
-  PostgreSQL runtime.
+- Update stale comments and runbook references to PostgreSQL runtime.
 
 ### 7. Verification and cutover
 

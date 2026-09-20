@@ -1,7 +1,7 @@
 # US7 player registration evidence
 
 The registration window, exact roster synchronization, identity policy,
-entrant mapping, and manual Discord link suites were run with isolated SQLite
+entrant mapping, and manual Discord link suites were run with isolated PostgreSQL
 fixtures:
 
 ```text

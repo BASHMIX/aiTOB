@@ -37,16 +37,16 @@ async def _dummy_get_provider(slug):
 @pytest.fixture
 async def setup_db(monkeypatch, tmp_path):
     global TEST_DB
-    TEST_DB = str(tmp_path / "on-stream-overlay.sqlite")
-    orig = db.DB_PATH
-    db.DB_PATH = TEST_DB
-    ms.DB_PATH = TEST_DB
+    TEST_DB = str(tmp_path / "on-stream-overlay.pg")
+    orig = db.DATABASE_DSN
+    db.DATABASE_DSN = TEST_DB
+    ms.DATABASE_DSN = TEST_DB
     # Keep the provider mark_in_progress call hermetic (no network).
     monkeypatch.setattr(ms, "get_provider_for_tournament", _dummy_get_provider)
     await db.init_db()
     yield
-    db.DB_PATH = orig
-    ms.DB_PATH = orig
+    db.DATABASE_DSN = orig
+    ms.DATABASE_DSN = orig
 
 
 async def _seed_match(set_id, **kw):

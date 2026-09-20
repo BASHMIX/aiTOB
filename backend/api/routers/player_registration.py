@@ -36,8 +36,8 @@ async def _tournament(tournament_id: str, workspace_id: str) -> dict[str, Any]:
 async def _binding(tournament_id: str, workspace_id: str, table: str) -> dict[str, Any] | None:
     if table not in {"tournament_discord_bindings", "provider_scope_bindings"}:
         raise ValueError("unsupported binding table")
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = database.aiosqlite.Row
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = database.dbapi.Row
         row = await (await db.execute(
             f"SELECT * FROM {table} WHERE tournament_id=? AND workspace_id=?",
             (tournament_id, workspace_id),

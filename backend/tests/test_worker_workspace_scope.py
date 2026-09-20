@@ -9,7 +9,7 @@ from backend.core import database
 
 @pytest.fixture
 async def scoped_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "worker-scope.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "worker-scope.pg"))
     await database.init_db()
     await database.upsert_tournament("same/a", "A", "", "", "", "{}", workspace_id="ws-a")
     await database.upsert_tournament("same/b", "B", "", "", "", "{}", workspace_id="ws-b")

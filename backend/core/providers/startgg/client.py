@@ -79,9 +79,6 @@ class StartGGClient:
             if self.provider_account_id:
                 from backend.core.integrations import get_integration_secret
                 new_token = await get_integration_secret(self.provider_account_id, "access_token")
-            elif os.getenv("AITOB_LEGACY_PROVIDER_FALLBACK", "false").lower() == "true":
-                from backend.core.database import get_setting, get_connection
-                new_token = await get_setting("STARTGG_API_TOKEN") or await get_connection("STARTGG_API_TOKEN")
             if new_token:
                 self.token = new_token
             self._token_last_fetched = now

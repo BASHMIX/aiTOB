@@ -1,7 +1,7 @@
 """Provider-neutral, API-owned Organizer Assistant service.
 
 This module deliberately has no Discord dependency.  It consumes only a
-redacted SQLite projection for one tournament and can *create a reviewed
+redacted PostgreSQL projection for one tournament and can *create a reviewed
 proposal* in propose-only mode; it never approves or executes an operation.
 """
 from __future__ import annotations
@@ -17,7 +17,7 @@ from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from backend.core.storage import dbapi as aiosqlite, is_postgres
+from backend.core.storage import dbapi, is_postgres
 from cryptography.fernet import Fernet, InvalidToken
 
 from backend.core import database
@@ -174,7 +174,7 @@ def _completion_from_text(text: str, input_tokens: int | None = None, output_tok
 
 
 def _box() -> Fernet:
-    """Use a master key supplied by the service environment, never SQLite."""
+    """Use a master key supplied by the service environment, never the database."""
     encoded = os.getenv("AITOB_AI_SERVICE_MASTER_KEY", "").strip()
     if not encoded:
         raise AIConfigurationError("AI service master key is unavailable.")
@@ -184,7 +184,7 @@ def _box() -> Fernet:
         raise AIConfigurationError("AI service master key is invalid.") from exc
 
 
-async def _ensure_config(db: aiosqlite.Connection) -> None:
+async def _ensure_config(db: dbapi.Connection) -> None:
     await db.execute(
         """INSERT INTO ai_service_config
            (id, provider_type, model, mode, request_limit, token_limit, context_char_limit, response_char_limit, request_timeout_seconds, policy_version)
@@ -213,8 +213,8 @@ async def get_ai_config(workspace_id: str | None = None) -> dict[str, Any]:
     """
     if workspace_id:
         return await get_workspace_ai_config(workspace_id)
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         await _ensure_config(db)
         row = await (await db.execute("SELECT * FROM ai_service_config WHERE id=1")).fetchone()
         secret = await (await db.execute("SELECT 1 FROM ai_service_secrets WHERE secret_type='api_key'")).fetchone()
@@ -283,8 +283,8 @@ async def _workspace_accounts(workspace_id: str) -> dict[str, dict[str, Any] | N
 async def get_workspace_ai_config(workspace_id: str) -> dict[str, Any]:
     if not workspace_id or not str(workspace_id).strip():
         raise AIConfigurationError("Workspace is required for AI configuration.")
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         workspace = await (await db.execute(
             "SELECT id FROM workspaces WHERE id=?", (workspace_id,)
         )).fetchone()
@@ -334,7 +334,7 @@ async def update_workspace_ai_config(
             selected = card["account_id"]
         else:
             raise AIConfigurationError("An enabled workspace AI connection is required.")
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute(
             """UPDATE workspace_ai_configs SET selected_account_id=?, provider_type=?, model=?, mode=?,
                request_limit=?, token_limit=?, context_char_limit=?, response_char_limit=?,
@@ -422,7 +422,7 @@ async def update_ai_config(values: dict[str, Any]) -> dict[str, Any]:
     allowed = set(DEFAULT_CONFIG) | {"policy_version"}
     merged = {key: values.get(key, current[key]) for key in allowed}
     clean = _validate_config(merged)
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         await _ensure_config(db)
         await db.execute(
             """UPDATE ai_service_config SET provider_type=:provider_type, model=:model, mode=:mode,
@@ -438,7 +438,7 @@ async def set_ai_api_key(api_key: str) -> None:
     if not isinstance(api_key, str) or not api_key.strip():
         raise AIConfigurationError("AI API key is required.")
     ciphertext = _box().encrypt(api_key.strip().encode("utf-8")).decode("ascii")
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         await _ensure_config(db)
         await db.execute(
             """INSERT INTO ai_service_secrets (secret_type, ciphertext, updated_at) VALUES ('api_key', ?, CURRENT_TIMESTAMP)
@@ -448,7 +448,7 @@ async def set_ai_api_key(api_key: str) -> None:
 
 
 async def _api_key() -> str:
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         row = await (await db.execute("SELECT ciphertext FROM ai_service_secrets WHERE secret_type='api_key'")).fetchone()
     if not row:
         raise AIConfigurationError("No AI API key is configured for the AI service.")
@@ -481,7 +481,7 @@ def _safe_text(value: Any, limit: int = 180) -> str:
 
 
 async def build_tournament_context(tournament_slug: str, char_limit: int, workspace_id: str | None = None) -> tuple[str, dict[str, str]]:
-    """Build a provider/Discord-free SQLite context and private local references."""
+    """Build a provider/Discord-free PostgreSQL context and private local references."""
     tournament = await database.get_tournament(tournament_slug, workspace_id)
     if not tournament:
         raise AIServiceError("Tournament not found.")
@@ -520,8 +520,8 @@ def _prompt(question: str, context: str, mode: str) -> str:
 async def _reserve(config: dict[str, Any], tournament_slug: str, estimated_input_tokens: int, workspace_id: str | None = None) -> str:
     period_key = datetime.now(UTC).strftime("%Y%m%d%H")
     usage_id = str(uuid.uuid4())
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute("BEGIN")
         if is_postgres():
             # A process-local lock/BEGIN cannot serialize quota reservations.
             # This lock covers the current service-level budget across workers.
@@ -558,7 +558,7 @@ async def _reserve(config: dict[str, Any], tournament_slug: str, estimated_input
 
 
 async def _finish_usage(usage_id: str, *, outcome: str, output_tokens: int = 0, proposal_id: str | None = None) -> None:
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute(
             "UPDATE ai_usage_ledger SET outcome=?, response_tokens=?, proposal_id=?, completed_at=? WHERE id=?",
             (outcome, max(0, int(output_tokens)), proposal_id, datetime.now(UTC).isoformat(), usage_id),
@@ -763,7 +763,7 @@ async def test_ai_connection(
             "category": category,
             "message": message,
         }
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         await _ensure_config(db)
         await db.execute("UPDATE ai_service_config SET last_test_status=?, last_tested_at=?, last_test_message=? WHERE id=1", (outcome, datetime.now(UTC).isoformat(), message))
         await db.commit()

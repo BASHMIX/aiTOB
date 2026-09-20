@@ -14,7 +14,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from backend.api.auth import require_permission
 from backend.core import database, integrations
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 from backend.core.tournament_setup import DraftNotFound, get_draft
 from backend.core.workspace_auth import SessionPrincipal
 
@@ -46,7 +46,7 @@ async def _callback_url(provider: str) -> str:
 
 async def _save_state(state: str, provider: str, workspace_id: str, draft_id: str | None, return_step: str) -> None:
     expires = int(time.time()) + _STATE_TTL_SECONDS
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute("DELETE FROM provider_oauth_states WHERE expires_at <= ?", (int(time.time()),))
         await db.execute(
             "INSERT INTO provider_oauth_states (state_hash, provider, workspace_id, draft_id, return_step, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -56,8 +56,8 @@ async def _save_state(state: str, provider: str, workspace_id: str, draft_id: st
 
 
 async def _consume_state(provider: str, state: str) -> dict | None:
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         row = await (await db.execute(
             "SELECT * FROM provider_oauth_states WHERE state_hash=? AND provider=? AND expires_at>?",
             (_hash(state), provider, int(time.time())),

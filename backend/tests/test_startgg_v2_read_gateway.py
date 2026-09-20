@@ -130,8 +130,8 @@ async def test_enabled_flags_use_v2_reads_in_a_test_database_without_a_remote_mu
     from backend.core import database
     from backend.core import provider_sync_manager as module
 
-    db_path = tmp_path / "startgg-v2.sqlite"
-    monkeypatch.setattr(database, "DB_PATH", str(db_path))
+    database_dsn = tmp_path / "startgg-v2.pg"
+    monkeypatch.setattr(database, "DATABASE_DSN", str(database_dsn))
     await database.init_db()
     await database.upsert_tournament(
         "fixture", "Fixture", None, None, None, "{}", provider_type="startgg", provider_account_id="sgg-account"

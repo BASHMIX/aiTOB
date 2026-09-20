@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 import pytest
 
 from backend.core import database
@@ -18,7 +18,7 @@ FIRST, OTHER = "proposal/first", "proposal/other"
 
 @pytest.fixture
 async def proposal_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "proposals.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "proposals.pg"))
     await database.init_db()
     for slug in (FIRST, OTHER):
         await database.upsert_tournament(slug, slug, "SF6", "event", "SF6", "{}")
@@ -49,7 +49,7 @@ async def test_expiry_untrusted_actor_and_tournament_isolation(proposal_db):
     with pytest.raises(ProposalError):
         await create_action_proposal(tournament_slug=FIRST, action_type="call", match_id="m2", reason="Wrong tournament")
     proposal = await create_action_proposal(tournament_slug=FIRST, action_type="announcement_draft", payload={"text": "Welcome"}, reason="Open doors", expires_in_seconds=60)
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute("UPDATE action_proposals SET expires_at=? WHERE id=?", ((datetime.now(UTC) - timedelta(seconds=1)).isoformat(), proposal["id"]))
         await db.commit()
     expired = await approve_action_proposal(proposal["id"])
@@ -107,7 +107,7 @@ async def test_announcement_execution_is_deduplicated_and_never_sends_directly(p
     first = await execute_approved_proposal(proposal["id"])
     second = await execute_approved_proposal(proposal["id"])
     assert first["execution_status"] == second["execution_status"] == "outbox_queued"
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         async with db.execute("SELECT event_type, status, COUNT(*) FROM workflow_outbox GROUP BY event_type, status") as cursor:
             rows = await cursor.fetchall()
     assert [(row[0], row[1], row[2]) for row in rows] == [("discord_announcement", "pending", 1)]

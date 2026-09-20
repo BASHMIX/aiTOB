@@ -38,7 +38,7 @@ calls its players once even when both sources observe it concurrently.
 storage, discord.py 2.x, LangGraph/LangChain provider adapters, React Router 7,
 Zustand 5, Axios, Tailwind CSS 3
 
-**Storage**: PostgreSQL 17 is the sole runtime store. Existing SQLite support is
+**Storage**: PostgreSQL 17 is the sole runtime and test store. Former local-store support is
 limited to explicit tests and migration/recovery tooling. Tournament logos and
 player broadcast images reuse the validated workspace-owned image store and
 current Cloudinary/local URL precedence.
@@ -84,7 +84,7 @@ tournament-scoped enrollments while reusing verified Workspace player identities
 | Principle | Design evidence | Gate |
 |---|---|---|
 | I. Workspace isolation | Drafts, integration accounts, settings, bindings, readiness results, assets, usage, WebSocket messages, jobs, and bot routing derive `workspace_id` from the authenticated principal or claimed job. Resource lookup uses `(workspace_id, id)` and cross-workspace results are indistinguishable from not found. | PASS |
-| II. PostgreSQL source of truth | New runtime tables and transactions target PostgreSQL. SQLite remains an explicit unit-test/migration source only, with no fallback or dual write. Completion of feature 003 PostgreSQL/workspace identity gates is a blocking prerequisite. | PASS |
+| II. PostgreSQL source of truth | Runtime tables, transactions, tests, and maintenance tools target PostgreSQL exclusively, with no fallback or dual write. Completion of feature 003 PostgreSQL/workspace identity gates is a blocking prerequisite. | PASS |
 | III. Secret and external-effect safety | Gemini/OpenAI credentials use authenticated encryption in `integration_credentials`; OAuth state is hashed and short lived; all public projections are redacted. Activation commits local state first and queues provider/Discord work through idempotent outbox commands. Unknown outcomes reconcile before retry. | PASS |
 | IV. Assets and approved operations | Tournament logos and player images reuse deterministic validation and the workspace-owned image store without hidden AI calls. Attendance and registration failures notify or escalate only. Result reporting and manual single-player DQ keep their authorization and approval paths; automatic/AI DQ is removed and regression-tested. | PASS |
 | V. Verification before cutover | The rollout requires migration fidelity, two-workspace isolation, encrypted-secret, PostgreSQL concurrency, bot routing, provider failure, activation idempotency, asset preservation, and manual acceptance evidence. | PASS |

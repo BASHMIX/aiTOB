@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from backend.core import database
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 
 
 DestinationKind = Literal["match", "escalation"]
@@ -115,8 +115,8 @@ async def _binding_rows(workspace_id: str, tournament_id: str) -> list[dict[str,
     become an implicit fallback route.
     """
 
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         query = """
             SELECT
                 b.tournament_id,
@@ -179,8 +179,8 @@ async def _thread_context(
         clauses.append("set_id = ?")
         params.append(set_id)
 
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         async with db.execute(
             f"SELECT set_id, discord_thread_id, thread_id FROM active_matches WHERE {' AND '.join(clauses)}",
             params,

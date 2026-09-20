@@ -18,9 +18,8 @@ this document.
 
 ## Safety observations
 
-- `backend/core/storage.py` already fails closed when a runtime process lacks a
-  PostgreSQL DSN; tests and migration tools use explicit SQLite opt-in.
-- `backend/core/database.py` still contains SQLite-compatible repository code,
-  so the migration cannot be considered complete from static inspection alone.
+- `backend/core/storage.py` fails closed when a process lacks a PostgreSQL DSN.
+- Runtime, tests, maintenance tools, and dependency metadata are PostgreSQL-only
+  as of 2026-09-20; the former compatibility adapter has been removed.
 - Existing match-thread comments and flags disarm some paths, but the
   `auto_dq_match` invocation remains a required removal target.

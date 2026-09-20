@@ -8,7 +8,7 @@ from backend.core import database
 
 @pytest.mark.asyncio
 async def test_bracket_snapshot_read_and_sync_status_are_workspace_scoped(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "snapshot-scope.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "snapshot-scope.pg"))
     await database.init_db()
     await database.upsert_tournament(
         "same-slug", "Tenant A", None, None, None, "{}", workspace_id="ws-a",
@@ -29,7 +29,7 @@ async def test_bracket_snapshot_read_and_sync_status_are_workspace_scoped(tmp_pa
 
 @pytest.mark.asyncio
 async def test_snapshot_write_rejects_wrong_workspace(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "snapshot-write-scope.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "snapshot-write-scope.pg"))
     await database.init_db()
     await database.upsert_tournament(
         "owned", "Tenant A", None, None, None, "{}", workspace_id="ws-a",

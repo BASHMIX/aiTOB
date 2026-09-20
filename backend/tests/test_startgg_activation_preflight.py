@@ -47,8 +47,8 @@ class FakeStartGG:
 
 @pytest.fixture
 async def preflight_db(tmp_path, monkeypatch):
-    old = db.DB_PATH
-    db.DB_PATH = str(tmp_path / "startgg-preflight.sqlite")
+    old = db.DATABASE_DSN
+    db.DATABASE_DSN = str(tmp_path / "startgg-preflight.pg")
     await db.init_db()
     await db.upsert_tournament(
         SLUG, "Fixture", "Event", "event-1", "Game", "{}",
@@ -61,7 +61,7 @@ async def preflight_db(tmp_path, monkeypatch):
         p1_entrant_id="11", p2_entrant_id="22", bot_enabled=0,
     )
     yield
-    db.DB_PATH = old
+    db.DATABASE_DSN = old
 
 
 def _snap(state, entrants=("11", "22")):

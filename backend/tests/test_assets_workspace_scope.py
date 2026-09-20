@@ -18,18 +18,10 @@ def run(coro):
 
 @pytest.fixture()
 def asset_scope_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    db_path = tmp_path / "asset-scope.sqlite"
-    monkeypatch.setattr(database, "DB_PATH", str(db_path))
-    # This test intentionally exercises the SQLite asset fixture.  When the
-    # PostgreSQL suite is invoked with ``--postgres``, conftest injects a
-    # DATABASE_URL for every test; remove it here so the fixture cannot write
-    # into an unrelated PostgreSQL database.
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.setenv("AITOB_TESTING", "1")
     monkeypatch.setattr(assets_router, "ASSETS_DIR", str(tmp_path / "shared-assets"))
     Path(assets_router.ASSETS_DIR).mkdir()
     run(database.init_db())
-    yield db_path
+    yield database.DATABASE_DSN
 
 
 def _principal(workspace_id: str) -> SessionPrincipal:
@@ -46,6 +38,12 @@ def test_asset_listing_never_enumerates_shared_legacy_files(asset_scope_db):
         shared = Path(assets_router.ASSETS_DIR)
         (shared / "workspace-a-legacy.png").write_bytes(b"legacy-a")
         (shared / "workspace-b-legacy.png").write_bytes(b"legacy-b")
+        async with database.dbapi.connect(database.DATABASE_DSN) as db:
+            await db.execute(
+                "INSERT INTO workspaces (id, slug, name) VALUES (?, ?, ?), (?, ?, ?)",
+                ("workspace-a", "workspace-a", "A", "workspace-b", "workspace-b", "B"),
+            )
+            await db.commit()
         await database.record_media_asset(
             workspace_id="workspace-a",
             asset_type="overlay_asset",

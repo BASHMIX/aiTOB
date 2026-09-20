@@ -1,4 +1,4 @@
-"""Guards against tests accidentally touching the operating SQLite file."""
+"""Guards against tests accidentally touching the operating PostgreSQL database."""
 
 from __future__ import annotations
 
@@ -13,26 +13,28 @@ import pytest
 from backend.core import database
 
 
-def test_database_module_uses_the_explicit_pytest_database():
-    configured = Path(os.environ["AITOB_TEST_DB_PATH"]).resolve()
-    operating = Path(__file__).resolve().parents[2] / "backend" / "core" / "database.sqlite"
-    assert Path(database.DB_PATH).resolve() == configured
-    assert configured != operating.resolve()
+def test_database_module_uses_a_disposable_postgres_database():
+    configured = os.environ["DATABASE_URL"]
+    source = os.environ["AITOB_PG_TEST_URL"]
+    assert database.DATABASE_DSN == configured
+    assert configured.startswith(("postgresql://", "postgres://"))
+    assert configured != source
+    assert "/aitob_repo_test_" in configured
     assert os.environ["AITOB_TESTING"] == "1"
 
 
-def test_testing_mode_refuses_the_operating_database_fallback():
+def test_missing_database_url_is_rejected():
     env = os.environ.copy()
     env["AITOB_TESTING"] = "1"
-    env.pop("DB_PATH", None)
-    env.pop("AITOB_TEST_DB_PATH", None)
+    env.pop("DATABASE_URL", None)
+    env["AITOB_SKIP_ENV_FILES"] = "1"
     result = subprocess.run(
-        [sys.executable, "-c", "import backend.core.database"],
+        [sys.executable, "-c", "from backend.core.storage import require_runtime_database; require_runtime_database()"],
         cwd=Path(__file__).resolve().parents[2], env=env,
         capture_output=True, text=True, check=False,
     )
     assert result.returncode != 0
-    assert "Tests require an explicit DB_PATH" in result.stderr
+    assert "DATABASE_URL must be configured" in result.stderr
 
 
 def test_external_network_is_blocked_unless_explicitly_enabled():
@@ -41,12 +43,3 @@ def test_external_network_is_blocked_unless_explicitly_enabled():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         with pytest.raises(RuntimeError, match="External network is disabled"):
             sock.connect(("203.0.113.1", 443))
-
-
-def test_no_test_fixture_uses_a_project_relative_sqlite_file():
-    tests_root = Path(__file__).resolve().parent
-    offenders = [
-        path for path in tests_root.rglob("test_*.py")
-        if path != Path(__file__) and "backend/core/test_" in path.read_text(encoding="utf-8")
-    ]
-    assert offenders == []

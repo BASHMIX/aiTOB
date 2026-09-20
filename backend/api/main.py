@@ -351,7 +351,7 @@ def _notify_bot_drain():
 async def startup_event():
     import asyncio
     # Fail before migrations, workers, polling, or an external command can
-    # begin. Runtime never falls back to the legacy SQLite file.
+    # begin. Runtime has no alternate database fallback.
     require_runtime_database()
     await init_db()
     # Wire the event-driven hub-command outbox: when the API enqueues a command,
@@ -369,7 +369,7 @@ async def startup_event():
         print("[SYS] Background workers paused by AITOB_DISABLE_BACKGROUND_WORKERS")
         return
 
-    # Restore only Hub-local workflow from SQLite. This creates no provider
+    # Restore only Hub-local workflow from PostgreSQL. This creates no provider
     # mutation and does not auto-DQ an attendance deadline that elapsed while
     # aiTOB was offline.
     from backend.core.provider_feature_flags import get_provider_feature_flags
@@ -533,7 +533,7 @@ async def readiness_check():
         require_runtime_database()
         # Readiness must use the same storage transport as every runtime path;
         # importing the legacy database connector here could accidentally probe
-        # SQLite while the API is configured for PostgreSQL.
+        # another database while the API is configured for PostgreSQL.
         from backend.core.storage import dbapi
         async with dbapi.connect() as db:
             await db.execute("SELECT 1")

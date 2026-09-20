@@ -69,13 +69,11 @@ def test_get_provider_returns_same_instance():
 
 @pytest.mark.asyncio
 async def test_get_provider_for_tournament():
-    # The registry reads the local tournament projection even for the legacy
-    # Start.gg fallback. Initialise the explicitly selected test DB first.
+    # An unbound provider must fail closed; there is no global credential path.
     from backend.core.database import init_db
     await init_db()
-    provider = await get_provider_for_tournament("any_slug")
-    assert isinstance(provider, StartGGProvider)
-    assert _providers["startgg"] is provider
+    with pytest.raises(ValueError, match="integration account"):
+        await get_provider_for_tournament("any_slug")
 
 
 @pytest.mark.asyncio
@@ -121,14 +119,12 @@ async def test_unscoped_startgg_resolution_fails_closed_outside_tools(monkeypatc
     from backend.core import database
 
     monkeypatch.delenv("AITOB_TESTING", raising=False)
-    monkeypatch.delenv("AITOB_SQLITE_MIGRATION_TOOL", raising=False)
-    monkeypatch.delenv("AITOB_LEGACY_PROVIDER_FALLBACK", raising=False)
     monkeypatch.setattr(
         database,
         "get_tournament",
         AsyncMock(return_value={"slug": "legacy/event", "provider_type": "startgg"}),
     )
-    with pytest.raises(ValueError, match="workspace binding is required"):
+    with pytest.raises(ValueError, match="integration account"):
         await get_provider_for_tournament("legacy/event")
 
 

@@ -12,7 +12,7 @@ from backend.core import database
 
 @pytest.fixture
 async def budget_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "budget.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "budget.pg"))
     await database.init_db()
     await database.upsert_tournament(
         "challonge:budget", "Budget", None, None, None, json.dumps({}),

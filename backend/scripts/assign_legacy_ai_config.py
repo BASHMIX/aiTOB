@@ -12,12 +12,12 @@ import json
 from datetime import UTC, datetime
 
 from backend.core import database
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 
 
 async def assign(workspace_id: str, actor_id: str, *, selected_account_id: str | None = None) -> dict[str, object]:
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         row = await (await db.execute("SELECT provider_type, model, mode, request_limit, token_limit, context_char_limit, response_char_limit, request_timeout_seconds, policy_version FROM ai_service_config WHERE id=1")).fetchone()
         if not row:
             raise RuntimeError("legacy_ai_config_missing")

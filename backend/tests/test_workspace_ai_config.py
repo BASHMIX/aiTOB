@@ -19,10 +19,10 @@ from backend.tests.fixtures.tournament_setup.adapters import FakeWorkspaceAIAdap
 
 @pytest.fixture
 async def workspace_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "workspace-ai-config.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "workspace-ai-config.pg"))
     monkeypatch.setenv("AITOB_INTEGRATION_MASTER_KEY", Fernet.generate_key().decode("ascii"))
     await database.init_db()
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute("INSERT INTO workspaces (id, slug, name) VALUES ('w-a', 'workspace-a', 'A')")
         await db.execute("INSERT INTO workspaces (id, slug, name) VALUES ('w-b', 'workspace-b', 'B')")
         await db.commit()

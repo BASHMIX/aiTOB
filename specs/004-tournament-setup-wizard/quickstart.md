@@ -34,7 +34,7 @@ docker compose --env-file .env.production up -d postgres
 ```
 
 `DATABASE_URL` must select a disposable/local PostgreSQL database. Runtime
-startup must fail instead of falling back to SQLite when it is missing or invalid.
+startup must fail instead of selecting an implicit fallback when it is missing or invalid.
 
 ## 3. Implement in dependency order
 

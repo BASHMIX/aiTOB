@@ -15,7 +15,7 @@ from fastapi.responses import RedirectResponse
 
 from backend.api.auth import require_permission
 from backend.core import database
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 from backend.core.tournament_setup import DraftNotFound, get_draft
 from backend.core.workspace_auth import SessionPrincipal
 
@@ -41,7 +41,7 @@ async def authorize_discord(
         raise HTTPException(404, "Draft not found") from exc
     opaque = secrets.token_urlsafe(32)
     expires = int(time.time()) + 600
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute("DELETE FROM discord_oauth_states WHERE expires_at <= ?", (int(time.time()),))
         await db.execute(
             "INSERT INTO discord_oauth_states (state_hash, workspace_id, actor_id, draft_id, return_step, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -57,8 +57,8 @@ async def authorize_discord(
 async def discord_callback(code: str | None = Query(default=None), state: str | None = Query(default=None)):
     if not state:
         raise HTTPException(400, "oauth_state_missing")
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         row = await (await db.execute(
             "SELECT * FROM discord_oauth_states WHERE state_hash=? AND expires_at>?",
             (_hash(state), int(time.time())),

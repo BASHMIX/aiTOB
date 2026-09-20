@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from backend.api.auth import current_session_principal, require_permission
 from backend.core import database
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 from backend.core.workspace_auth import (
     SESSION_COOKIE, SessionPrincipal, accept_workspace_invitation, authenticate_password,
     begin_totp_setup, disable_totp, enable_totp,
@@ -341,7 +341,7 @@ async def email_verification_request(principal: SessionPrincipal = Depends(curre
     # The token is delivered only to the account address; it is never returned
     # by this API or written to logs.  The POST confirmation endpoint remains
     # the mutation boundary for clients that consume the link.
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         row = await (await db.execute("SELECT email FROM users WHERE id=?", (principal.user_id,))).fetchone()
     if row:
         await _deliver_account_email(

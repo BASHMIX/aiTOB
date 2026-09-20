@@ -29,7 +29,7 @@ def backup_tools():
 def _write_manifest(backup: Path, *, digest: str, size: int | None = None) -> Path:
     record: dict[str, object] = {
         "manifest_version": 1,
-        "engine": "sqlite-fixture",
+        "engine": "postgres-fixture",
         "file": backup.name,
         "sha256": digest,
         "secrets_included": False,
@@ -42,7 +42,7 @@ def _write_manifest(backup: Path, *, digest: str, size: int | None = None) -> Pa
 
 
 def test_manifest_verification_accepts_exact_artifact(tmp_path: Path, backup_tools):
-    backup = tmp_path / "accepted.sqlite"
+    backup = tmp_path / "accepted.pg"
     backup.write_bytes(b"stable backup bytes")
     manifest = _write_manifest(backup, digest=backup_tools._digest(backup), size=backup.stat().st_size)
 
@@ -56,14 +56,14 @@ def test_manifest_verification_accepts_exact_artifact(tmp_path: Path, backup_too
 def test_manifest_verification_rejects_tampered_or_mismatched_artifact(
     tmp_path: Path, backup_tools, tamper: str
 ):
-    backup = tmp_path / "checked.sqlite"
+    backup = tmp_path / "checked.pg"
     backup.write_bytes(b"stable backup bytes")
     manifest = _write_manifest(backup, digest=backup_tools._digest(backup), size=backup.stat().st_size)
 
     if tamper == "bytes":
         backup.write_bytes(b"changed after review")
     elif tamper == "filename":
-        renamed = tmp_path / "different.sqlite"
+        renamed = tmp_path / "different.pg"
         backup.rename(renamed)
         backup = renamed
     else:
@@ -76,7 +76,7 @@ def test_manifest_verification_rejects_tampered_or_mismatched_artifact(
 
 
 def test_restore_requires_sidecar_manifest(tmp_path: Path, backup_tools):
-    backup = tmp_path / "without-manifest.sqlite"
+    backup = tmp_path / "without-manifest.pg"
     backup.write_bytes(b"unreviewed backup")
 
     with pytest.raises(ValueError, match="manifest"):

@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 import pytest
 
 from backend.core import database
@@ -16,11 +16,11 @@ async def _resolved(value):
 
 @pytest.fixture
 async def command_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "commands.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "commands.pg"))
     await database.init_db()
     await database.upsert_tournament("challonge:account:fnc:1", "FNC", None, None, None, json.dumps({}), provider_type="challonge", provider_tournament_id="1", provider_account_id="account")
     await database.upsert_active_match("challonge:m1", tournament_slug="challonge:account:fnc:1", p1_name="Alpha", p2_name="Bravo", status="in_progress", hub_status="in_progress", station_id="station-a")
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute("INSERT INTO stations (id, name, active_match_id) VALUES ('station-a', 'Station A', 'challonge:m1')")
         await db.commit()
 
@@ -69,7 +69,7 @@ async def test_outbox_effect_and_completion_are_idempotent_and_station_safe(comm
     first = await completion.complete("challonge:m1", result_kind="score")
     again = await completion.complete("challonge:m1", result_kind="score")
     match = await database.get_active_match("challonge:m1")
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         async with db.execute("SELECT active_match_id FROM stations WHERE id='station-a'") as cursor:
             assert (await cursor.fetchone())[0] is None
         async with db.execute("SELECT COUNT(*) FROM workflow_outbox WHERE match_id='challonge:m1' AND event_type='discord_match_complete'") as cursor:

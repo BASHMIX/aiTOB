@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 import pytest
 
 from backend.core import database
@@ -11,10 +11,10 @@ from backend.core import database
 
 @pytest.fixture
 async def integration_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "integrations.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "integrations.pg"))
     monkeypatch.setenv("AITOB_INTEGRATION_MASTER_KEY", "7lXNrOpw2HnqGYiRkqzGN70KGyxoDpcQ0H3jDXiVlvc=")
     await database.init_db()
-    yield database.DB_PATH
+    yield database.DATABASE_DSN
 
 
 @pytest.mark.asyncio
@@ -32,7 +32,7 @@ async def test_account_secrets_are_encrypted_and_isolated(integration_db):
 
     assert await get_integration_secret(first["id"], "access_token") == "first-secret"
     assert await get_integration_secret(second["id"], "access_token") == "second-secret"
-    async with aiosqlite.connect(integration_db) as db:
+    async with dbapi.connect(integration_db) as db:
         row = await (await db.execute(
             "SELECT ciphertext FROM integration_credentials WHERE owner_id=?", (first["id"],)
         )).fetchone()
@@ -116,7 +116,7 @@ async def test_legacy_migration_does_not_reuse_another_workspaces_account(integr
     from backend.core.integrations import create_integration_account, migrate_legacy_integrations, get_integration_account
     other = await create_integration_account("other", "challonge", "legacy", "Other")
     await database.set_connection("CHALLONGE_OAUTH_ACCESS_TOKEN", "migration-test-token")
-    async with aiosqlite.connect(integration_db) as db:
+    async with dbapi.connect(integration_db) as db:
         for scope in ("admin", "other"):
             await db.execute("INSERT INTO tournaments (slug, name, provider_type, workspace_id) VALUES (?, ?, 'challonge', ?)", (scope, scope, scope))
         await db.commit()

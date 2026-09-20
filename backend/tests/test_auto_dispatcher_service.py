@@ -11,7 +11,7 @@ from backend.core.auto_dispatcher.policy import DispatchPolicy
 from backend.core.auto_dispatcher.service import AutoDispatcherService
 from backend.api.schemas import PatchTournamentSettingsRequest
 from pydantic import ValidationError
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 
 
 SLUG = "dispatch/test"
@@ -21,7 +21,7 @@ NOW = datetime(2026, 9, 6, 12, 0, tzinfo=UTC)
 
 @pytest.fixture
 async def dispatch_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "dispatcher.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "dispatcher.pg"))
     await database.init_db()
     await database.upsert_tournament(SLUG, "Dispatch Test", "SF6", EVENT, "SF6", "{}")
     await database.update_tournament_settings(
@@ -34,28 +34,6 @@ async def dispatch_db(tmp_path, monkeypatch):
     )
     await database.set_setting("auto_dispatch_master_switch", "on")
     yield
-
-
-@pytest.mark.asyncio
-async def test_existing_hub_command_table_migrates_before_dispatcher_index(tmp_path, monkeypatch, request):
-    """An old database without command source must still upgrade safely."""
-    if request.config.getoption("--postgres"):
-        pytest.skip("SQLite upgrade fixture; PostgreSQL schema migrations have separate acceptance coverage")
-    legacy_path = tmp_path / "legacy.sqlite"
-    async with aiosqlite.connect(legacy_path) as db:
-        await db.execute("CREATE TABLE hub_commands (id INTEGER PRIMARY KEY, command_text TEXT, status TEXT, created_at TIMESTAMP)")
-        await db.commit()
-    monkeypatch.setattr(database, "DB_PATH", str(legacy_path))
-
-    await database.init_db()
-
-    async with aiosqlite.connect(legacy_path) as db:
-        async with db.execute("PRAGMA table_info(hub_commands)") as cursor:
-            columns = {row[1] for row in await cursor.fetchall()}
-        async with db.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_hub_commands_dispatcher_pending'") as cursor:
-            index = await cursor.fetchone()
-    assert "source" in columns
-    assert index is not None
 
 
 async def _match(set_id: str, **extra):
@@ -150,7 +128,7 @@ async def test_service_calls_through_hub_workflow_once_and_deduplicates_decision
     assert (await database.get_active_match("m1"))["status"] == "called"
     commands = await database.get_pending_hub_commands()
     assert [(command["command_text"], command["source"]) for command in commands] == [("call_match m1", "dispatcher")]
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         async with db.execute("SELECT COUNT(*) FROM dispatcher_decisions WHERE set_id='m1' AND reason_code='eligible'") as cursor:
             count = (await cursor.fetchone())[0]
         async with db.execute("SELECT seen_count FROM dispatcher_decisions WHERE set_id='m1' AND reason_code='eligible'") as cursor:
@@ -184,7 +162,7 @@ async def test_repeated_skip_updates_one_audit_record_instead_of_spamming(dispat
     await service.run_once(now=NOW)
     await service.run_once(now=NOW + timedelta(seconds=20))
 
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         async with db.execute(
             "SELECT COUNT(*) FROM dispatcher_decisions "
             "WHERE set_id='stream' AND reason_code='on_stream_excluded'"
@@ -219,7 +197,7 @@ async def test_kill_switch_between_selection_and_execution_prevents_call_and_can
     await database.add_hub_command("call_match automatic", source="dispatcher")
     cancelled = await database.cancel_pending_dispatcher_work()
     assert cancelled >= 1
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         async with db.execute("SELECT command_text, status FROM hub_commands ORDER BY id") as cursor:
             rows = await cursor.fetchall()
     assert [(row["command_text"], row["status"]) if isinstance(row, dict) else tuple(row) for row in rows] == [
@@ -268,7 +246,7 @@ async def test_tournament_pause_cancels_only_its_pending_automatic_work(dispatch
         auto_dispatch_stop_at=4,
         auto_dispatch_on_stream=True,
     )
-    # Re-opened SQLite rows retain their own settings; another tournament does
+    # Re-opened PostgreSQL rows retain their own settings; another tournament does
     # not inherit the TO's dispatcher choices.
     first = await database.get_tournament(SLUG)
     other = await database.get_tournament(other_slug)
@@ -277,7 +255,7 @@ async def test_tournament_pause_cancels_only_its_pending_automatic_work(dispatch
 
     await database.add_hub_command("call_match first", source="dispatcher")
     await database.add_hub_command("call_match second", source="dispatcher")
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         await db.executemany(
             "INSERT INTO dispatcher_dispatch_claims (set_id, tournament_slug, state) VALUES (?, ?, 'queued')",
             [("first", SLUG), ("second", other_slug)],
@@ -286,7 +264,7 @@ async def test_tournament_pause_cancels_only_its_pending_automatic_work(dispatch
 
     cancelled = await database.cancel_pending_dispatcher_work(tournament_slug=SLUG)
     assert cancelled == 2  # one command plus one claim, scoped to this tournament
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         async with db.execute("SELECT command_text, status FROM hub_commands ORDER BY command_text") as cursor:
             commands = await cursor.fetchall()
         async with db.execute("SELECT set_id, state FROM dispatcher_dispatch_claims ORDER BY set_id") as cursor:

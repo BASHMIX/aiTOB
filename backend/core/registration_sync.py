@@ -18,7 +18,7 @@ from typing import Any, Awaitable, Callable, Iterable, Mapping
 from backend.core import database
 from backend.core.player_registration import RegistrationError
 from backend.core.registration_identity import detect_gamertag_collisions
-from backend.core.storage import dbapi as aiosqlite, is_postgres
+from backend.core.storage import dbapi, is_postgres
 
 
 def _now() -> str:
@@ -146,9 +146,9 @@ async def sync_provider_roster(
     affected: list[str] = []
     added = updated = unchanged = removed = 0
 
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
+        await db.execute("BEGIN")
         try:
             snapshot = await (await db.execute(
                 "SELECT id FROM provider_roster_snapshots WHERE workspace_id=? AND tournament_id=? AND external_scope_id=? AND entrant_fingerprint=?",

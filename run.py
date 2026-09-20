@@ -178,7 +178,7 @@ signal.signal(signal.SIGTERM, signal_handler)
 # ── Main ──────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     # Validate the source of truth before starting any child. The API, bot and
-    # workers must fail together rather than one silently opening SQLite.
+    # workers must fail together rather than selecting an implicit fallback.
     try:
         from backend.core.storage import require_runtime_database
         require_runtime_database()

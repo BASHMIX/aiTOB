@@ -19,7 +19,8 @@ async def main(source: str, target: str, source_key: str, target_key: str, appli
         add_integration_destination, create_integration_account, get_integration_secret,
         list_integration_accounts, set_integration_secret,
     )
-    database.DB_PATH = source
+    os.environ["DATABASE_URL"] = source
+    database.DATABASE_DSN = source
     os.environ["AITOB_INTEGRATION_MASTER_KEY"] = source_key
     source_accounts = [a for a in await list_integration_accounts() if a["provider_type"] == "discord" and a["status"] == "active"]
     if len(source_accounts) != 1:
@@ -27,7 +28,8 @@ async def main(source: str, target: str, source_key: str, target_key: str, appli
     token = await get_integration_secret(source_accounts[0]["id"], "bot_token")
     if not token:
         raise RuntimeError("Local Discord account has no encrypted token.")
-    database.DB_PATH = target
+    os.environ["DATABASE_URL"] = target
+    database.DATABASE_DSN = target
     os.environ["AITOB_INTEGRATION_MASTER_KEY"] = target_key
     await database.init_db()
     try:
@@ -47,8 +49,8 @@ async def main(source: str, target: str, source_key: str, target_key: str, appli
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source", default="backend/core/database.sqlite")
-    parser.add_argument("--target", default=".acceptance/acceptance.sqlite")
+    parser.add_argument("--source", required=True, help="source PostgreSQL DSN")
+    parser.add_argument("--target", required=True, help="acceptance PostgreSQL DSN")
     parser.add_argument("--source-env", default=".env")
     parser.add_argument("--target-env", default=".env.acceptance")
     parser.add_argument("--application-id", required=True)

@@ -8,7 +8,7 @@ matches must only land on an idle stream station bound to the same event.
 import os
 import pytest
 
-from backend.core.storage import dbapi as aiosqlite
+from backend.core.storage import dbapi
 
 from backend.core.database import (
     init_db, upsert_active_match, upsert_tournament,
@@ -18,7 +18,7 @@ from backend.core.database import (
     resolve_dispatch_budget,
 )
 
-TEST_DB_PATH = ""
+TEST_DATABASE_DSN = ""
 
 EVENT_T8 = "100"
 EVENT_SF6 = "200"
@@ -30,20 +30,20 @@ async def setup_test_db(tmp_path):
     import backend.core.database
     import backend.core.match_state
 
-    global TEST_DB_PATH
-    TEST_DB_PATH = str(tmp_path / "dispatch-event-scoping.sqlite")
-    orig = backend.core.database.DB_PATH
-    backend.core.database.DB_PATH = TEST_DB_PATH
-    backend.core.match_state.DB_PATH = TEST_DB_PATH
+    global TEST_DATABASE_DSN
+    TEST_DATABASE_DSN = str(tmp_path / "dispatch-event-scoping.pg")
+    orig = backend.core.database.DATABASE_DSN
+    backend.core.database.DATABASE_DSN = TEST_DATABASE_DSN
+    backend.core.match_state.DATABASE_DSN = TEST_DATABASE_DSN
     await init_db()
     yield
-    backend.core.database.DB_PATH = orig
-    backend.core.match_state.DB_PATH = orig
+    backend.core.database.DATABASE_DSN = orig
+    backend.core.match_state.DATABASE_DSN = orig
 
 
 async def _arm_tournament(slug=SLUG, concurrency=1, stop_at=2):
     await upsert_tournament(slug, "Major X", "", "", "", "{}")
-    async with aiosqlite.connect(TEST_DB_PATH) as db:
+    async with dbapi.connect(TEST_DATABASE_DSN) as db:
         await db.execute(
             "UPDATE tournaments SET auto_dispatch_enabled = TRUE, "
             "auto_dispatch_concurrency = ?, auto_dispatch_stop_at = ? WHERE slug = ?",
@@ -175,7 +175,7 @@ async def test_disarmed_tournament_not_eligible(setup_test_db):
 async def test_eligible_events_can_be_restricted_to_one_workspace(setup_test_db):
     await upsert_tournament("tenant-a", "Tenant A", "", "", "", "{}", workspace_id="ws-a")
     await upsert_tournament("tenant-b", "Tenant B", "", "", "", "{}", workspace_id="ws-b")
-    async with aiosqlite.connect(TEST_DB_PATH) as db:
+    async with dbapi.connect(TEST_DATABASE_DSN) as db:
         await db.execute("UPDATE tournaments SET auto_dispatch_enabled=TRUE WHERE workspace_id IN ('ws-a','ws-b')")
         await db.commit()
     await upsert_active_match("a-1", workspace_id="ws-a", tournament_slug="tenant-a", event_id="e", p1_name="A", p2_name="B", p1_entrant_id="a", p2_entrant_id="b", status="not_started")

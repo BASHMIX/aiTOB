@@ -14,7 +14,7 @@ from backend.core import database
 
 @pytest.mark.asyncio
 async def test_workspace_scoped_active_match_update_rejects_foreign_match(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "active-match-scope.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "active-match-scope.pg"))
     await database.init_db()
     await database.upsert_active_match(
         "provider-set-101",
@@ -39,7 +39,7 @@ async def test_workspace_scoped_active_match_update_rejects_foreign_match(tmp_pa
 
 @pytest.mark.asyncio
 async def test_station_helpers_do_not_treat_another_workspace_match_as_local_usage(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "active-match-station-scope.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "active-match-station-scope.pg"))
     await database.init_db()
     await database.upsert_active_match(
         "provider-set-202",

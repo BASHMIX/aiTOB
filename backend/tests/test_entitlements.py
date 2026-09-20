@@ -18,9 +18,9 @@ from backend.core.entitlements import (
 
 @pytest.fixture
 async def entitlement_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "entitlements.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "entitlements.pg"))
     await database.init_db()
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute("INSERT INTO workspaces (id, slug, name) VALUES (?, ?, ?)", ("ws-a", "ws-a", "A"))
         await db.execute("INSERT INTO workspaces (id, slug, name) VALUES (?, ?, ?)", ("ws-b", "ws-b", "B"))
         await db.execute("INSERT INTO workspace_entitlements (workspace_id, limits_json) VALUES (?, ?)", ("ws-a", json.dumps({"tournaments": 1})))

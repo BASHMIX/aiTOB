@@ -1,21 +1,20 @@
 import pytest
 import os
 import json
-import aiosqlite
 
-from backend.core.database import init_db, save_overlay, get_overlays, delete_overlay, DB_PATH
+from backend.core.database import init_db, save_overlay, get_overlays, delete_overlay, DATABASE_DSN
 from backend.api.schemas import SaveOverlayRequest
 
-TEST_DB_PATH = ""
+TEST_DATABASE_DSN = ""
 
 @pytest.fixture
 async def setup_test_db(tmp_path):
     import backend.core.database
     
-    global TEST_DB_PATH
-    TEST_DB_PATH = str(tmp_path / "editor-dragging.sqlite")
-    orig_db_path = backend.core.database.DB_PATH
-    backend.core.database.DB_PATH = TEST_DB_PATH
+    global TEST_DATABASE_DSN
+    TEST_DATABASE_DSN = str(tmp_path / "editor-dragging.pg")
+    orig_database_dsn = backend.core.database.DATABASE_DSN
+    backend.core.database.DATABASE_DSN = TEST_DATABASE_DSN
     
     # Initialize the test database
     await init_db()
@@ -23,7 +22,7 @@ async def setup_test_db(tmp_path):
     yield
     
     # Restore original paths
-    backend.core.database.DB_PATH = orig_db_path
+    backend.core.database.DATABASE_DSN = orig_database_dsn
 
 
 @pytest.mark.asyncio

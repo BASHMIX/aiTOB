@@ -24,14 +24,14 @@ TEST_DB = ""
 @pytest.fixture
 async def setup_db(tmp_path):
     global TEST_DB
-    TEST_DB = str(tmp_path / "call-match-unification.sqlite")
-    orig = db.DB_PATH
-    db.DB_PATH = TEST_DB
-    ms.DB_PATH = TEST_DB
+    TEST_DB = str(tmp_path / "call-match-unification.pg")
+    orig = db.DATABASE_DSN
+    db.DATABASE_DSN = TEST_DB
+    ms.DATABASE_DSN = TEST_DB
     await init_db()
     yield
-    db.DB_PATH = orig
-    ms.DB_PATH = orig
+    db.DATABASE_DSN = orig
+    ms.DATABASE_DSN = orig
 
 
 # ── A1: the unified Call-Match core ───────────────────────────────────────

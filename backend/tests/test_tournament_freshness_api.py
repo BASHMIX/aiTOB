@@ -1,4 +1,4 @@
-"""Phase-10 acceptance checks for SQLite-only organizer freshness diagnostics."""
+"""Phase-10 acceptance checks for PostgreSQL-only organizer freshness diagnostics."""
 from __future__ import annotations
 
 import json
@@ -10,7 +10,7 @@ from backend.core import database
 
 @pytest.fixture
 async def freshness_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "freshness.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "freshness.pg"))
     await database.init_db()
     await database.upsert_tournament(
         "challonge:freshness", "Freshness", None, None, None, json.dumps({}),
@@ -41,7 +41,7 @@ async def test_sets_response_exposes_freshness_and_uses_one_stale_open_admission
 
 
 @pytest.mark.asyncio
-async def test_sync_status_is_sqlite_only_and_explains_economy_discovery(freshness_db, monkeypatch):
+async def test_sync_status_is_postgres_only_and_explains_economy_discovery(freshness_db, monkeypatch):
     from backend.api.routers import tournaments
 
     async def state(_slug: str):

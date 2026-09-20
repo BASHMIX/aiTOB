@@ -11,6 +11,10 @@ Get-Content -LiteralPath $EnvFile | ForEach-Object {
 }
 
 $headers = @{ "X-Hub-Password" = $values["HUB_PASSWORD"] }
+$env:DATABASE_URL = $values["DATABASE_URL"]
+if ([string]::IsNullOrWhiteSpace($env:DATABASE_URL) -or $env:DATABASE_URL -notmatch '^postgres(ql)?://') {
+    throw "The acceptance env file must contain a PostgreSQL DATABASE_URL."
+}
 $tournament = @(
     (Invoke-RestMethod -Headers $headers -Uri "http://127.0.0.1:8001/api/tournaments").tournaments |
     Where-Object { $_.provider_type -eq "challonge" }
@@ -20,16 +24,15 @@ if (-not $tournament) { throw "No acceptance Challonge tournament." }
 $slug = [uri]::EscapeDataString([string]$tournament.slug)
 $settingsUrl = "http://127.0.0.1:8001/api/tournaments/$slug/settings"
 $statusUrl = "http://127.0.0.1:8001/api/tournaments/$slug/sync-status"
-$acceptanceDb = ".acceptance/acceptance.sqlite"
-
 function Get-ChallongeUsageCount {
     # The acceptance database records one row per coordinator-owned provider
     # request.  It is a stronger cadence proof than a timestamp alone: a stale
     # snapshot can legitimately leave the visible projection unchanged.
     $script = @'
-import sqlite3
-db = sqlite3.connect(r".acceptance/acceptance.sqlite")
-print(db.execute("SELECT COUNT(*) FROM provider_api_usage WHERE provider_type='challonge'").fetchone()[0])
+import os
+import psycopg
+with psycopg.connect(os.environ["DATABASE_URL"]) as db:
+    print(db.execute("SELECT COUNT(*) FROM provider_api_usage WHERE provider_type='challonge'").fetchone()[0])
 '@
     return [int]($script | .\.venv\Scripts\python.exe -)
 }

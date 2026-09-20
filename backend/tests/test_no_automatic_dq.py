@@ -3,7 +3,7 @@
 Attendance expiry, process recovery, Discord ready-checks, and the organizer
 assistant may request review or explain the next manual action. None of those
 flows may invoke the provider DQ mutation. These tests intentionally use
-SQLite fixtures and local fakes so they run in the repository test environment
+PostgreSQL fixtures and local fakes so they run in the repository test environment
 without Discord, provider, or AI credentials.
 """
 
@@ -29,7 +29,7 @@ NOW = datetime(2026, 9, 13, 12, 0, tzinfo=UTC)
 async def no_auto_dq_db(tmp_path, monkeypatch):
     """Create a disposable database with a called, expired match."""
 
-    monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "no-automatic-dq.sqlite"))
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "no-automatic-dq.pg"))
     await database.init_db()
     await database.upsert_tournament(
         SLUG,
@@ -53,9 +53,9 @@ async def no_auto_dq_db(tmp_path, monkeypatch):
 
 
 async def _provider_dq_ledger_count(set_id: str) -> int:
-    from backend.core.storage import dbapi as aiosqlite
+    from backend.core.storage import dbapi
 
-    async with aiosqlite.connect(database.DB_PATH) as db:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
         async with db.execute(
             "SELECT COUNT(*) FROM provider_command_ledger WHERE set_id=? AND action='dq'",
             (set_id,),

@@ -1,8 +1,7 @@
 """One-time, local-only initial Owner bootstrap.
 
 Reads credentials interactively so neither value is put in command history, a
-configuration file, or process arguments.  It is intentionally suitable only
-while the application is using the explicit SQLite migration-tool mode.
+configuration file, or process arguments. DATABASE_URL must select PostgreSQL.
 """
 
 from __future__ import annotations
@@ -13,7 +12,6 @@ import os
 
 
 async def main() -> None:
-    os.environ.setdefault("AITOB_SQLITE_MIGRATION_TOOL", "1")
     email = input("Owner email: ").strip()
     password = getpass.getpass("Owner password: ")
     display_name = input("Owner display name [Owner]: ").strip() or "Owner"

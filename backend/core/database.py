@@ -1,16 +1,13 @@
-from backend.core.storage import dbapi as aiosqlite, is_postgres, postgres_ddl
+from backend.core.storage import dbapi
 import datetime
 import os
 import json
 import re
 import uuid
-from pathlib import Path
 from typing import Optional
 from backend.core.contracts.tournament_types import ProviderSet, ProviderSetState, ProviderEntrant
 
-if os.getenv("AITOB_TESTING") == "1" and not os.getenv("DB_PATH"):
-    raise RuntimeError("Tests require an explicit DB_PATH; refusing the operating database fallback.")
-DB_PATH = os.getenv("DB_PATH", "backend/core/database.sqlite")
+DATABASE_DSN = os.getenv("DATABASE_URL", "")
 
 _BOOLEAN_COLUMNS = {
     "auto_dq_enabled", "is_verified", "hidden", "swapped", "bot_enabled",
@@ -25,6 +22,18 @@ def _database_value(column: str, value):
     if column in _BOOLEAN_COLUMNS and value is not None:
         return bool(value)
     return value
+
+
+async def _table_columns(db, table: str) -> set[str]:
+    """Return trusted public-schema columns for an allow-listed identifier."""
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table):
+        raise ValueError("Invalid metadata table")
+    async with db.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema='public' AND table_name=? ORDER BY ordinal_position",
+        (table,),
+    ) as cursor:
+        return {str(row[0]) for row in await cursor.fetchall()}
 
 
 class TournamentRemovalBlocked(ValueError):
@@ -105,7 +114,7 @@ async def record_audit_event(
     """Persist a structured, redacted audit event without secrets/content."""
     event_id = str(uuid.uuid4())
     safe_detail = json.dumps(_redact_audit(detail or {}), separators=(",", ":"))
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         await db.execute(
             """INSERT INTO audit_events
                (id, workspace_id, actor_id, action, target_type, target_id,
@@ -138,7 +147,7 @@ async def record_error_event(
     event_id = str(uuid.uuid4())
     safe_detail = json.dumps(_redact_audit(detail or {}), separators=(",", ":"))
     try:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with dbapi.connect(DATABASE_DSN) as db:
             await db.execute(
                 """INSERT INTO error_events
                    (id, workspace_id, trace_id, method, path, exception_type, detail_json)
@@ -160,72 +169,25 @@ async def record_error_event(
 
 
 async def init_db():
-    if os.getenv("AITOB_TESTING") == "1":
-        project_root = Path(__file__).resolve().parents[2]
-        if Path(DB_PATH).resolve().is_relative_to(project_root):
-            raise RuntimeError("Tests may not initialize a database inside the project workspace.")
-    from backend.core.database_schema import TABLE_SCHEMAS, INDEXES, MIGRATIONS
-    if is_postgres():
-        from backend.core.schema_migrations import apply_postgres_schema
-        async with aiosqlite.connect(DB_PATH) as db:
-            await apply_postgres_schema(db)
-            # Stations are Hub-local resources. A fresh PostgreSQL deployment
-            # must receive the same deterministic seed as a fresh SQLite
-            # development database before any reservation can be accepted.
-            async with db.execute("SELECT COUNT(*) FROM stations") as cursor:
-                station_count = int((await cursor.fetchone())[0])
-            if station_count == 0:
-                await db.execute("INSERT INTO stations (id, name) VALUES ('station_1', 'Station 1')")
-                await db.execute("INSERT INTO stations (id, name) VALUES ('station_2', 'Station 2')")
-            await db.execute("UPDATE stations SET public_id=id WHERE public_id IS NULL")
-            await db.commit()
-        from backend.core.workspace_auth import bootstrap_initial_owner_from_env
-        await bootstrap_initial_owner_from_env()
-        return
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    async with aiosqlite.connect(DB_PATH) as db:
-        for schema in TABLE_SCHEMAS:
-            await db.execute(schema)
-        for m in MIGRATIONS:
-            try:
-                await db.execute(m)
-                await db.commit()
-            except Exception:
-                pass
-        # A migration can introduce a column used by a new index. Applying
-        # indexes afterwards keeps upgrades from an older SQLite file safe.
-        for idx in INDEXES:
-            await db.execute(idx)
-
-        # One-shot cleanup: purge any "preview_*" rows that earlier builds
-        # inserted into active_matches before we filtered them out at sync
-        # time. Preview sets are unresolved bracket placeholders that can't
-        # be mutated on start.gg, so they have no business in the actionable
-        # list. Idempotent — no-ops on a clean DB.
+    from backend.core.schema_migrations import apply_postgres_schema
+    async with dbapi.connect(DATABASE_DSN) as db:
+        await apply_postgres_schema(db)
         await db.execute("DELETE FROM active_matches WHERE set_id LIKE 'preview%'")
-        await db.commit()
-
-        # Seed default stations if empty
-        async with db.execute("SELECT COUNT(*) FROM stations") as c:
-            count = (await c.fetchone())[0]
-        if count == 0:
+        async with db.execute("SELECT COUNT(*) FROM stations") as cursor:
+            station_count = int((await cursor.fetchone())[0])
+        if station_count == 0:
             await db.execute("INSERT INTO stations (id, name) VALUES ('station_1', 'Station 1')")
             await db.execute("INSERT INTO stations (id, name) VALUES ('station_2', 'Station 2')")
         await db.execute("UPDATE stations SET public_id=id WHERE public_id IS NULL")
         await db.commit()
-    # Explicit one-time owner bootstrap. No account is created unless a deployer
-    # provides both bootstrap variables; reruns never create another owner.
     from backend.core.workspace_auth import bootstrap_initial_owner_from_env
     await bootstrap_initial_owner_from_env()
 # ── Players ────────────────────────────────────────────────────────────────
 async def create_or_update_player(discord_id: str, workspace_id: str | None = None, **kwargs):
     if not kwargs:
         return
-    async with aiosqlite.connect(DB_PATH) as db:
-        valid_cols = []
-        async with db.execute("PRAGMA table_info(players)") as cursor:
-            info = await cursor.fetchall()
-            valid_cols = [row[1] for row in info]
+    async with dbapi.connect(DATABASE_DSN) as db:
+        valid_cols = await _table_columns(db, "players")
 
         filtered_kwargs = {k: _database_value(k, v) for k, v in kwargs.items() if k in valid_cols}
         if not filtered_kwargs:
@@ -257,8 +219,8 @@ async def create_or_update_player(discord_id: str, workspace_id: str | None = No
         await db.commit()
 
 async def get_player(discord_id: str, workspace_id: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         query = "SELECT * FROM players WHERE discord_id = ?"
         params: list = [discord_id]
         if workspace_id is not None:
@@ -271,14 +233,14 @@ async def get_player(discord_id: str, workspace_id: str | None = None):
 async def get_discord_id_by_startgg(startgg_id: str, workspace_id: str | None = None) -> str | None:
     """Resolve an explicitly linked Start.gg identity within one workspace.
 
-    This repository boundary replaces the bot's former direct SQLite query. A
+    This repository boundary replaces the bot's former direct database query. A
     missing workspace is intentionally treated as an unscoped legacy lookup
     for compatibility with pre-workspace callers; all runtime callers should
     pass the durable match workspace.
     """
     if not startgg_id:
         return None
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         params: list = [str(startgg_id)]
         query = (
             "SELECT discord_id FROM players "
@@ -294,8 +256,8 @@ async def get_discord_id_by_startgg(startgg_id: str, workspace_id: str | None = 
 
 async def get_players_for_workspace(workspace_id: str | None = None) -> list[dict]:
     """Return the minimal player projection used by administrative tooling."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         query = "SELECT discord_id, startgg_id, gamer_tag, cfn_id FROM players"
         params: list = []
         if workspace_id is not None:
@@ -308,8 +270,8 @@ async def get_players_for_workspace(workspace_id: str | None = None) -> list[dic
 
 async def list_players_for_workspace(workspace_id: str | None = None) -> list[dict]:
     """Return the complete player projection for the workspace API."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         query = "SELECT * FROM players"
         params: list = []
         if workspace_id is not None:
@@ -332,7 +294,7 @@ async def get_player_avatar_urls(discord_id: str, workspace_id: str | None = Non
     if p and p.get("avatar_path"):
         urls.append(str(p["avatar_path"]))
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         m_query = "SELECT storage_url FROM media_assets WHERE owner_type = 'player' AND owner_id = ? AND deleted_at IS NULL"
         m_params: list = [str(discord_id)]
         if workspace_id is not None:
@@ -359,7 +321,7 @@ async def retire_media_assets_for_urls(urls: list[str], workspace_id: str | None
     clean_urls = [str(u) for u in urls if u]
     if not clean_urls:
         return
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         placeholders = ", ".join(["?"] * len(clean_urls))
         query = f"UPDATE media_assets SET deleted_at = CURRENT_TIMESTAMP WHERE storage_url IN ({placeholders}) AND deleted_at IS NULL"
         params: list = list(clean_urls)
@@ -382,7 +344,7 @@ async def is_active_platform_admin(user_id: str) -> bool:
     """
     if not user_id:
         return False
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         async with db.execute(
             "SELECT is_platform_admin FROM users WHERE id = ? AND status = 'active'",
             (str(user_id),),
@@ -393,8 +355,8 @@ async def is_active_platform_admin(user_id: str) -> bool:
 
 async def get_tournament_player_links(tournament_slug: str, workspace_id: str | None = None) -> dict[str, dict]:
     """Return the explicitly confirmed player links for one imported bracket."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         async with db.execute(
             """
             SELECT l.entrant_id, l.player_discord_id, p.gamer_tag, p.avatar_path,
@@ -432,7 +394,7 @@ async def link_tournament_entrant(tournament_slug: str, entrant_id: str, discord
     if not player:
         raise ValueError("Selected aiTOB player does not exist")
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         if workspace_id is not None:
             tournament = await (await db.execute(
                 "SELECT workspace_id FROM tournaments WHERE slug = ?", (tournament_slug,)
@@ -477,7 +439,7 @@ async def link_tournament_entrant(tournament_slug: str, entrant_id: str, discord
 
 async def unlink_tournament_entrant(tournament_slug: str, entrant_id: str, workspace_id: str | None = None) -> bool:
     """Remove a TO-confirmed link and disconnect that entrant from Hub-only profile data."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         if workspace_id is not None:
             tournament = await (await db.execute(
                 "SELECT workspace_id FROM tournaments WHERE slug = ?", (tournament_slug,)
@@ -509,7 +471,7 @@ async def unlink_tournament_entrant(tournament_slug: str, entrant_id: str, works
 
 async def get_all_tournament_slugs(workspace_id: str | None = None) -> list[str]:
     """Return tracked tournament slugs, optionally limited to one workspace."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         query, params = "SELECT slug FROM tournaments", []
         if workspace_id is not None:
             query += " WHERE workspace_id = ?"
@@ -525,7 +487,7 @@ async def sync_player_cfns_to_matches(discord_id: str, workspace_id: str | None 
     cfn_pending DM step) so the stream overlay always has an up-to-date CFN without
     requiring a full bracket re-sync.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         scope = " AND workspace_id = ?" if workspace_id is not None else ""
         scope_params = (workspace_id,) if workspace_id is not None else ()
         await db.execute(
@@ -547,8 +509,8 @@ async def get_verified_players_missing_avatar(workspace_id: str | None = None) -
     Backs the Hub AI 'remind players to upload avatars' tool. Returns the
     fields needed to DM each player in their own language.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         query = ("SELECT discord_id, startgg_id, gamer_tag, preferred_language "
                  "FROM players WHERE is_verified = TRUE "
                  "AND (avatar_path IS NULL OR avatar_path = '')")
@@ -566,8 +528,8 @@ async def get_verified_players_missing_profile(workspace_id: str | None = None) 
     Backs audit_registration_tool. Returns enough fields for the agent to send
     targeted DM reminders for whichever piece(s) of the profile are absent.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         query = (
             "SELECT discord_id, gamer_tag, preferred_language, avatar_path, cfn_id "
             "FROM players WHERE is_verified = TRUE "
@@ -588,7 +550,7 @@ async def save_overlay(name: str, config: str, workspace_id: str | None = None):
             config = json.dumps(config)
         except Exception as e:
             print(f"Error serializing overlay config: {e}")
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         # The legacy table has a global UNIQUE(name) constraint.  Do not let
         # that compatibility constraint turn an update from one workspace into
         # a cross-tenant overwrite; a later ownership migration may relax the
@@ -604,8 +566,8 @@ async def save_overlay(name: str, config: str, workspace_id: str | None = None):
         await db.commit()
 
 async def get_overlays(workspace_id: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         query, params = "SELECT * FROM overlays", ()
         if workspace_id is not None:
             query, params = query + " WHERE workspace_id=?", (workspace_id,)
@@ -613,7 +575,7 @@ async def get_overlays(workspace_id: str | None = None):
             return [dict(row) for row in await cursor.fetchall()]
 
 async def delete_overlay(name: str, workspace_id: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         query, params = "DELETE FROM overlays WHERE name = ?", [name]
         if workspace_id is not None:
             query += " AND workspace_id = ?"
@@ -627,7 +589,7 @@ async def upsert_tournament(slug: str, name: str, event_name: str, event_id: str
                             provider_subdomain: str | None = None,
                             provider_account_id: str | None = None,
                             workspace_id: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         await db.execute('''
             INSERT INTO tournaments (slug, name, event_name, event_id, game, raw_data, provider_type, provider_tournament_id, provider_subdomain, provider_account_id, workspace_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -644,11 +606,8 @@ async def upsert_tournament(slug: str, name: str, event_name: str, event_id: str
 async def update_tournament_settings(slug: str, workspace_id: str | None = None, **kwargs):
     if not kwargs:
         return
-    async with aiosqlite.connect(DB_PATH) as db:
-        valid_cols = []
-        async with db.execute("PRAGMA table_info(tournaments)") as cursor:
-            info = await cursor.fetchall()
-            valid_cols = [row[1] for row in info]
+    async with dbapi.connect(DATABASE_DSN) as db:
+        valid_cols = await _table_columns(db, "tournaments")
 
         filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_cols}
         if not filtered_kwargs:
@@ -663,7 +622,7 @@ async def update_tournament_settings(slug: str, workspace_id: str | None = None,
         await db.execute(f"UPDATE tournaments SET {set_clause} WHERE {where}", values)
         if "bot_manage_limit" in kwargs:
             limit_setting = kwargs["bot_manage_limit"]
-            db.row_factory = aiosqlite.Row
+            db.row_factory = dbapi.Row
             match_query = "SELECT set_id, round_name, phase_group FROM active_matches WHERE tournament_slug = ?"
             match_params: list = [slug]
             if workspace_id is not None:
@@ -680,8 +639,8 @@ async def update_tournament_settings(slug: str, workspace_id: str | None = None,
         await db.commit()
 
 async def get_tournaments(workspace_id: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         query = "SELECT * FROM tournaments"
         params: tuple = ()
         if workspace_id is not None:
@@ -696,8 +655,8 @@ async def get_tournaments(workspace_id: str | None = None):
     return rows
 
 async def get_tournament(slug: str, workspace_id: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         query = "SELECT * FROM tournaments WHERE slug = ?"
         params: tuple = (slug,)
         if workspace_id is not None:
@@ -716,7 +675,7 @@ async def get_tournament_workspace_id(slug: str) -> str | None:
     """Resolve a tournament's durable owner for bot-side scoped operations."""
     if not slug:
         return None
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         async with db.execute("SELECT workspace_id FROM tournaments WHERE slug = ?", (slug,)) as cursor:
             row = await cursor.fetchone()
     return str(row[0]) if row and row[0] else None
@@ -724,7 +683,7 @@ async def get_tournament_workspace_id(slug: str) -> str | None:
 
 async def get_tournament_game_metadata(slug: str, event_id: str, workspace_id: str | None = None) -> dict | None:
     """Return cached Start.gg game catalog metadata for a specific event."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         query = "SELECT game_metadata_json FROM tournaments WHERE slug = ?"
         params: list = [slug]
         if workspace_id is not None:
@@ -753,7 +712,7 @@ async def set_tournament_game_metadata(
     workspace_id: str | None = None,
 ) -> None:
     """Cache game catalog metadata for an event in the tournament row."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         query = "SELECT game_metadata_json FROM tournaments WHERE slug = ?"
         params: list = [slug]
         if workspace_id is not None:
@@ -795,9 +754,9 @@ async def get_fresh_provider_locator_alias(
     locator_key: str,
 ) -> dict | None:
     """Return a recently resolved identity without contacting the provider."""
-    freshness_clause = "CURRENT_TIMESTAMP - INTERVAL '1 day'" if is_postgres() else "datetime('now', '-1 day')"
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    freshness_clause = "CURRENT_TIMESTAMP - INTERVAL '1 day'"
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         async with db.execute(
             f"""
             SELECT a.*, t.name, t.raw_data, t.provider_tournament_id, t.provider_subdomain
@@ -822,7 +781,7 @@ async def record_media_asset(
 ) -> dict:
     """Record a newly uploaded asset without exposing filesystem details."""
     asset_id = str(uuid.uuid4())
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         await db.execute(
             """INSERT INTO media_assets
                (id, workspace_id, asset_type, owner_type, owner_id,
@@ -836,8 +795,8 @@ async def record_media_asset(
 
 
 async def list_media_assets(workspace_id: str) -> list[dict]:
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         async with db.execute(
             """SELECT id, workspace_id, asset_type, owner_type, owner_id,
                       storage_url, storage_key, mime_type, byte_size, width, height,
@@ -872,7 +831,7 @@ def _overlay_config_references_asset(config: object, references: set[str]) -> bo
 
 async def delete_media_asset(asset_id: str, workspace_id: str) -> bool:
     """Soft-delete an asset only when it is owned and no live row references it."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         async with db.execute(
             "SELECT storage_url, storage_key FROM media_assets WHERE id=? AND workspace_id=? AND deleted_at IS NULL",
             (asset_id, workspace_id),
@@ -939,13 +898,12 @@ async def persist_challonge_identity(
         "url_slug": resolved.get("url_slug"),
         "events": [],
     })
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute("BEGIN IMMEDIATE")
-        if is_postgres():
-            # No tournament row exists on first import, so row locking alone
-            # cannot serialize duplicate aliases resolving to this identity.
-            await db.execute("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", ("import:" + canonical_slug,))
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
+        await db.execute("BEGIN")
+        # No tournament row exists on first import, so row locking alone cannot
+        # serialize duplicate aliases resolving to this identity.
+        await db.execute("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", ("import:" + canonical_slug,))
         async with db.execute(
             """
             SELECT * FROM tournaments
@@ -1003,7 +961,7 @@ async def set_tournament_sync_status(
     workspace_id: str | None = None,
 ):
     """Record remote freshness without ever retaining provider credentials."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         scope = " AND workspace_id = ?" if workspace_id else ""
         params = ("ready" if ready else "error", None if ready else (error or "Provider synchronization failed."), slug)
         if workspace_id:
@@ -1021,7 +979,7 @@ async def save_bracket_snapshot(
     workspace_id: str | None = None,
 ) -> None:
     """Persist the provider-normalized bracket for local-only dashboard reads."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         if workspace_id:
             owned = await (await db.execute(
                 "SELECT 1 FROM tournaments WHERE slug = ? AND workspace_id = ?",
@@ -1045,8 +1003,8 @@ async def get_bracket_snapshot(
     tournament_slug: str,
     workspace_id: str | None = None,
 ) -> dict:
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         query = """
             SELECT s.sets_json, s.synced_at
             FROM provider_bracket_snapshots s
@@ -1124,12 +1082,12 @@ async def apply_challonge_snapshot(
         }
         for item in provider_sets
     ]
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
+        await db.execute("BEGIN")
         try:
             async with db.execute(
-                "SELECT provider_type FROM tournaments WHERE slug = ?" + (" FOR UPDATE" if is_postgres() else ""), (tournament_slug,)
+                "SELECT provider_type FROM tournaments WHERE slug = ? FOR UPDATE", (tournament_slug,)
             ) as cursor:
                 tournament = await cursor.fetchone()
             if not tournament or (tournament["provider_type"] or "startgg") != "challonge":
@@ -1233,7 +1191,7 @@ async def record_provider_api_usage(provider_type: str, method: str, path: str, 
                                     *, workspace_id: str | None = None,
                                     provider_account_id: str | None = None) -> None:
     """Record one outgoing provider request without retaining credentials or payloads."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         await db.execute(
             """INSERT INTO provider_api_usage
                (provider_type, provider_account_id, workspace_id, method, path, status_code)
@@ -1247,14 +1205,8 @@ async def get_provider_usage(provider_type: str, monthly_limit: int | None = Non
                              *, workspace_id: str | None = None,
                              provider_account_id: str | None = None) -> dict:
     """Return a local month-to-date request count for the quota badge."""
-    # ``date('now', ...)`` is SQLite-only and silently breaks the PostgreSQL
-    # runtime path. Keep the predicate dialect-specific while retaining the
-    # same UTC month boundary for both stores.
-    month_start = (
-        "date_trunc('month', CURRENT_TIMESTAMP)" if is_postgres()
-        else "datetime('now', 'start of month')"
-    )
-    async with aiosqlite.connect(DB_PATH) as db:
+    month_start = "date_trunc('month', CURRENT_TIMESTAMP)"
+    async with dbapi.connect(DATABASE_DSN) as db:
         async with db.execute(
             f"""
             SELECT COUNT(*) FROM provider_api_usage
@@ -1281,8 +1233,8 @@ async def delete_tournament(slug: str, workspace_id: str | None = None):
     completed/local data is removed atomically and any stale station ownership
     belonging to one of its matches is released.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         match_scope = " AND workspace_id = ?" if workspace_id is not None else ""
         match_params = (slug, workspace_id) if workspace_id is not None else (slug,)
         if workspace_id is not None:
@@ -1294,8 +1246,8 @@ async def delete_tournament(slug: str, workspace_id: str | None = None):
         async with db.execute(
             """SELECT set_id, p1_name, p2_name FROM active_matches
                WHERE tournament_slug = ?""" + match_scope + """
-                 AND (status IN ('not_started', 'called', 'in_progress')
-                      OR hub_status IN ('not_started', 'called', 'ready', 'in_progress'))
+                 AND (status IN ('called', 'in_progress')
+                      OR hub_status IN ('called', 'ready', 'in_progress'))
                LIMIT 1""",
             match_params,
         ) as cursor:
@@ -1306,7 +1258,7 @@ async def delete_tournament(slug: str, workspace_id: str | None = None):
                 f"{active['p2_name'] or 'Player 2'}). Complete, unassign, or reset it before removal."
             )
 
-        await db.execute("BEGIN IMMEDIATE")
+        await db.execute("BEGIN")
         try:
             # Only clear a physical station if it explicitly names a match that
             # belongs to this tournament.  Never release another tournament's
@@ -1360,7 +1312,7 @@ async def set_tournament_streams(slug: str, streams: list, workspace_id: str | N
     `streams` is a list of dicts with keys: id, name, source, game.
     """
     payload = json.dumps(streams or [])
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         query = "UPDATE tournaments SET streams_json = ? WHERE slug = ?"
         params: list = [payload, slug]
         if workspace_id is not None:
@@ -1372,7 +1324,7 @@ async def set_tournament_streams(slug: str, streams: list, workspace_id: str | N
 
 async def get_tournament_streams(slug: str, workspace_id: str | None = None) -> list:
     """Return the cached start.gg stream list for a tournament."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         query = "SELECT streams_json FROM tournaments WHERE slug = ?"
         params: list = [slug]
         if workspace_id is not None:
@@ -1390,7 +1342,7 @@ async def get_tournament_streams(slug: str, workspace_id: str | None = None) -> 
 
 async def get_station_stream_id(station_id: str, workspace_id: str | None = None) -> str | None:
     """Return the start.gg streamId mapped to a local station, or None."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         query, params = "SELECT startgg_stream_id FROM stations WHERE (id = ? OR public_id = ?)", (station_id, station_id)
         if workspace_id is not None:
             query += " AND workspace_id = ?"
@@ -1404,8 +1356,8 @@ async def get_station_by_stream_id(stream_id: str, workspace_id: str | None = No
     """Find the local station mapped to a given start.gg streamId, or None."""
     if not stream_id:
         return None
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         query, params = "SELECT * FROM stations WHERE startgg_stream_id = ?", [stream_id]
         if workspace_id is not None:
             query += " AND workspace_id = ?"
@@ -1421,7 +1373,7 @@ async def add_planned_stream(set_id: str, tournament_slug: str,
                              stream_id: str | None = None, note: str | None = None,
                              workspace_id: str | None = None):
     """Mark a (potentially preview) set for inclusion on stream once it goes live."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         await db.execute('''
             INSERT INTO planned_streams (set_id, tournament_slug, stream_id, note, workspace_id)
             VALUES (?, ?, ?, ?, ?)
@@ -1435,7 +1387,7 @@ async def add_planned_stream(set_id: str, tournament_slug: str,
 
 
 async def remove_planned_stream(set_id: str, workspace_id: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         query, params = "DELETE FROM planned_streams WHERE set_id = ?", [set_id]
         if workspace_id is not None:
             query += " AND workspace_id = ?"
@@ -1445,8 +1397,8 @@ async def remove_planned_stream(set_id: str, workspace_id: str | None = None):
 
 
 async def list_planned_streams(tournament_slug: str | None = None, workspace_id: str | None = None) -> list[dict]:
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         filters, args = [], []
         if tournament_slug:
             filters.append("tournament_slug = ?")
@@ -1463,8 +1415,8 @@ async def list_planned_streams(tournament_slug: str | None = None, workspace_id:
 
 
 async def get_planned_stream(set_id: str) -> dict | None:
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         async with db.execute("SELECT * FROM planned_streams WHERE set_id = ?", (set_id,)) as cursor:
             row = await cursor.fetchone()
     return dict(row) if row else None
@@ -1479,7 +1431,7 @@ async def create_pending_verification(discord_id: str, startgg_slug: str,
                                        workspace_id: str | None = None):
     """Create or replace a pending bio-code verification for this Discord user."""
     expires = (_dt.datetime.utcnow() + _dt.timedelta(seconds=ttl_seconds)).isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         await db.execute(
             "INSERT INTO pending_verifications (discord_id, workspace_id, startgg_slug, code, expires_at, attempts) "
             "VALUES (?, ?, ?, ?, ?, 0) "
@@ -1493,8 +1445,8 @@ async def create_pending_verification(discord_id: str, startgg_slug: str,
 
 async def get_pending_verification(discord_id: str, workspace_id: str | None = None) -> dict | None:
     """Return the pending verification, or None if missing/expired."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         query = "SELECT * FROM pending_verifications WHERE discord_id = ?"
         params: tuple[str, ...] = (discord_id,)
         if workspace_id is not None:
@@ -1517,7 +1469,7 @@ async def get_pending_verification(discord_id: str, workspace_id: str | None = N
 
 async def increment_verification_attempts(discord_id: str, workspace_id: str | None = None) -> int:
     """Increment attempts counter; return new value. Used to rate-limit retries."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         query = "UPDATE pending_verifications SET attempts = attempts + 1 WHERE discord_id = ?"
         params: tuple[str, ...] = (discord_id,)
         if workspace_id is not None:
@@ -1535,7 +1487,7 @@ async def increment_verification_attempts(discord_id: str, workspace_id: str | N
 
 
 async def delete_pending_verification(discord_id: str, workspace_id: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         query = "DELETE FROM pending_verifications WHERE discord_id = ?"
         params: tuple[str, ...] = (discord_id,)
         if workspace_id is not None:
@@ -1548,7 +1500,7 @@ async def delete_pending_verification(discord_id: str, workspace_id: str | None 
 async def save_match_result(set_id: str, tournament_slug: str, stream_slot: str,
                             p1_name: str, p2_name: str, winner: str,
                             p1_score: str, p2_score: str, round_name: str):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         await db.execute('''
             INSERT INTO match_results
                 (set_id, tournament_slug, stream_slot, p1_name, p2_name, winner, p1_score, p2_score, round_name)
@@ -1557,8 +1509,8 @@ async def save_match_result(set_id: str, tournament_slug: str, stream_slot: str,
         await db.commit()
 
 async def get_match_results(tournament_slug: str = None):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         if tournament_slug:
             async with db.execute("SELECT * FROM match_results WHERE tournament_slug = ? ORDER BY created_at DESC", (tournament_slug,)) as cursor:
                 return [dict(r) for r in await cursor.fetchall()]
@@ -1584,8 +1536,8 @@ async def _station_storage_id(db, station_id: str, workspace_id: str | None) -> 
 
 
 async def get_stations(workspace_id: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         query, params = "SELECT * FROM stations", ()
         if workspace_id is not None:
             query, params = query + " WHERE workspace_id=?", (workspace_id,)
@@ -1596,8 +1548,8 @@ async def get_station(station_id: str, workspace_id: str | None = None) -> dict 
     """Single station row (incl. is_stream_station / room_* / event_id), or None."""
     if not station_id:
         return None
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         storage_id = await _station_storage_id(db, station_id, workspace_id)
         if storage_id is None:
             return None
@@ -1606,7 +1558,7 @@ async def get_station(station_id: str, workspace_id: str | None = None) -> dict 
             return _station_public(dict(row)) if row else None
 
 async def create_station(station_id: str, name: str, workspace_id: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         collision = await (await db.execute("SELECT 1 FROM stations WHERE id=?", (station_id,))).fetchone()
         storage_id = station_id if not collision else f"{workspace_id}:{station_id}"
         await db.execute(
@@ -1618,11 +1570,8 @@ async def create_station(station_id: str, name: str, workspace_id: str | None = 
 async def update_station(station_id: str, workspace_id: str | None = None, **kwargs):
     if not kwargs:
         return
-    async with aiosqlite.connect(DB_PATH) as db:
-        valid_cols = []
-        async with db.execute("PRAGMA table_info(stations)") as cursor:
-            info = await cursor.fetchall()
-            valid_cols = [row[1] for row in info]
+    async with dbapi.connect(DATABASE_DSN) as db:
+        valid_cols = await _table_columns(db, "stations")
 
         filtered_kwargs = {k: _database_value(k, v) for k, v in kwargs.items() if k in valid_cols}
         if not filtered_kwargs:
@@ -1637,7 +1586,7 @@ async def update_station(station_id: str, workspace_id: str | None = None, **kwa
         await db.commit()
 
 async def update_station_active_overlay(station_id: str, overlay_name: str | None, workspace_id: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         # Browser Source URLs and API routes use a stable public station id.
         # A colliding id in another workspace is stored internally as
         # ``<workspace>:<public-id>``, so resolve it inside this connection
@@ -1650,7 +1599,7 @@ async def update_station_active_overlay(station_id: str, overlay_name: str | Non
         await db.commit()
 
 async def get_station_active_overlay(station_id: str, workspace_id: str | None = None) -> str | None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         storage_id = await _station_storage_id(db, station_id, workspace_id)
         if storage_id is None:
             return None
@@ -1666,7 +1615,7 @@ async def set_station_preview(
     match_data: dict | None = None,
 ) -> dict | None:
     """Set or clear the preview match for a station."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         storage_id = await _station_storage_id(db, station_id, workspace_id)
         if storage_id is None:
             return None
@@ -1679,7 +1628,7 @@ async def set_station_preview(
     return await get_station(station_id, workspace_id)
 
 async def delete_station(station_id: str, workspace_id: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         storage_id = await _station_storage_id(db, station_id, workspace_id)
         if storage_id is None:
             raise ValueError("Station not found in workspace")
@@ -1690,8 +1639,8 @@ async def delete_station(station_id: str, workspace_id: str | None = None):
 # ── Station Overlays ───────────────────────────────────────────────────────
 async def get_all_station_overlays(workspace_id: str | None = None):
     """Fetch all station overlays in one query (avoids N+1 when listing stations)."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         query = "SELECT so.* FROM station_overlays so JOIN stations s ON s.id=so.station_id"
         params: tuple = ()
         if workspace_id is not None:
@@ -1701,8 +1650,8 @@ async def get_all_station_overlays(workspace_id: str | None = None):
             return [dict(r) for r in await cursor.fetchall()]
 
 async def get_station_overlays(station_id: str, workspace_id: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         storage_id = await _station_storage_id(db, station_id, workspace_id)
         if storage_id is None:
             return []
@@ -1713,7 +1662,7 @@ async def get_station_overlays(station_id: str, workspace_id: str | None = None)
             return [dict(r) for r in await cursor.fetchall()]
 
 async def add_station_overlay(station_id: str, overlay_name: str, workspace_id: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         storage_id = await _station_storage_id(db, station_id, workspace_id)
         if storage_id is None:
             raise PermissionError("Station belongs to another workspace")
@@ -1729,7 +1678,7 @@ async def add_station_overlay(station_id: str, overlay_name: str, workspace_id: 
         await db.commit()
 
 async def remove_station_overlay(station_id: str, overlay_name: str, workspace_id: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         storage_id = await _station_storage_id(db, station_id, workspace_id)
         if storage_id is None:
             raise PermissionError("Station belongs to another workspace")
@@ -1752,8 +1701,8 @@ async def check_players_busy(
     if not entrant_set and not name_set:
         return {}
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         query = """
             SELECT am.set_id, am.station_id, am.status, am.p1_name, am.p2_name,
                    am.p1_entrant_id, am.p2_entrant_id, s.name as station_name
@@ -1817,14 +1766,14 @@ async def check_players_busy(
 
 async def get_station_queue(station_id: str, workspace_id: str | None = None) -> list[dict]:
     """Fetch queued matches for a station in sorted order, with match info and busy player status."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         storage_id = await _station_storage_id(db, station_id, workspace_id)
         if storage_id is None:
             return []
 
         query = """
-            SELECT sq.id as queue_id, sq.station_id, sq.set_id, sq.sort_order, sq.created_at as queued_at,
+            SELECT sq.id as queue_id, sq.station_id, sq.set_id AS queued_set_id, sq.sort_order, sq.created_at as queued_at,
                    am.*
             FROM station_queue sq
             LEFT JOIN active_matches am ON am.set_id = sq.set_id
@@ -1834,6 +1783,8 @@ async def get_station_queue(station_id: str, workspace_id: str | None = None) ->
         async with db.execute(query, (storage_id,)) as cursor:
             rows = await cursor.fetchall()
             items = [dict(r) for r in rows]
+            for item in items:
+                item["set_id"] = item.pop("queued_set_id")
 
     if not items:
         return []
@@ -1880,7 +1831,7 @@ async def enqueue_station_match(station_id: str, set_id: str, workspace_id: str 
     """Enqueue a match to a station's stream queue."""
     if not station_id or not set_id:
         return False
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         storage_id = await _station_storage_id(db, station_id, workspace_id)
         if storage_id is None:
             raise ValueError("Station not found in workspace")
@@ -1910,7 +1861,7 @@ async def reorder_station_queue(station_id: str, ordered_set_ids: list[str], wor
     """Update sort order for all matches in the station queue."""
     if not station_id or not ordered_set_ids:
         return False
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         storage_id = await _station_storage_id(db, station_id, workspace_id)
         if storage_id is None:
             raise ValueError("Station not found in workspace")
@@ -1928,7 +1879,7 @@ async def dequeue_station_match(station_id: str, set_id: str, workspace_id: str 
     """Remove a match from a station queue and re-compact sort orders."""
     if not station_id or not set_id:
         return False
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         storage_id = await _station_storage_id(db, station_id, workspace_id)
         if storage_id is None:
             raise ValueError("Station not found in workspace")
@@ -1953,7 +1904,7 @@ async def dequeue_station_match(station_id: str, set_id: str, workspace_id: str 
 
 async def advance_station_queue(station_id: str, workspace_id: str | None = None) -> dict | None:
     """Promote the top queued match for a station, dequeueing it."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         storage_id = await _station_storage_id(db, station_id, workspace_id)
         if storage_id is None:
             return None
@@ -1992,7 +1943,7 @@ async def assign_station_to_active_match(
     than one tenant.  Omitting the scope is retained only for historical local
     maintenance callers.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         scope = " AND workspace_id = ?" if workspace_id is not None else ""
         async with db.execute(
             "UPDATE active_matches SET station_id = ? WHERE set_id = ?" + scope,
@@ -2003,7 +1954,7 @@ async def assign_station_to_active_match(
 
 async def get_used_station_ids(exclude_set_id: str, workspace_id: str | None = None) -> set:
     """Station IDs currently occupied by other active (not-completed) matches."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         async with db.execute(
             """
             SELECT station_id
@@ -2034,8 +1985,8 @@ async def get_active_matches(tournament_slug: str = None, event_id: str = None, 
         clauses.append("active_matches.workspace_id = ?")
         params.append(workspace_id)
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         async with db.execute(
             f"""SELECT active_matches.*, COALESCE(tournaments.provider_type, 'startgg') AS provider_type
                 FROM active_matches LEFT JOIN tournaments ON tournaments.slug = active_matches.tournament_slug
@@ -2089,7 +2040,7 @@ def serialize_active_match_for_display(match: dict) -> dict:
     """Add the provider-neutral display projection without persisting a change.
 
     This is deliberately a serializer rather than a workflow helper: callers
-    receive a fresh dictionary and the SQLite row, station ownership, Discord
+    receive a fresh dictionary and the persisted row, station ownership, Discord
     workflow, and provider state remain untouched.
     """
     from datetime import date, datetime
@@ -2112,8 +2063,8 @@ def serialize_active_match_for_display(match: dict) -> dict:
     return json_safe({**match, **project_match(match)})
 
 async def get_active_match(set_id: str, workspace_id: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         query, params = "SELECT * FROM active_matches WHERE set_id = ?", (set_id,)
         if workspace_id is not None:
             query, params = query + " AND workspace_id=?", params + (workspace_id,)
@@ -2130,8 +2081,8 @@ async def get_active_match_by_thread(discord_thread_id: str, workspace_id: str |
     """
     if not discord_thread_id:
         return None
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         query, params = "SELECT * FROM active_matches WHERE discord_thread_id = ?", [str(discord_thread_id)]
         if workspace_id is not None:
             query += " AND workspace_id = ?"
@@ -2144,8 +2095,8 @@ async def get_active_matches_by_set_ids(set_ids: list[str], workspace_id: str | 
     """Batch-fetch active matches for many set_ids in one query (avoids N+1)."""
     if not set_ids:
         return []
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         placeholders = ','.join('?' * len(set_ids))
         query = f"SELECT am.* FROM active_matches am WHERE am.set_id IN ({placeholders})"
         params: list = list(set_ids)
@@ -2169,8 +2120,8 @@ async def get_match_occupying_station(station_id: str, exclude_set_id: str = Non
         query += " AND workspace_id = ?"
         params.append(workspace_id)
         
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         async with db.execute(query, params) as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else None
@@ -2183,12 +2134,8 @@ async def upsert_active_match(set_id: str | dict, workspace_id: str | None = Non
         workspace_id = match_data.pop("workspace_id", workspace_id)
         kwargs = {**match_data, **kwargs}
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        # Get valid columns
-        valid_cols = []
-        async with db.execute("PRAGMA table_info(active_matches)") as cursor:
-            info = await cursor.fetchall()
-            valid_cols = [row[1] for row in info]
+    async with dbapi.connect(DATABASE_DSN) as db:
+        valid_cols = await _table_columns(db, "active_matches")
         
         # Filter kwargs
         if workspace_id is not None and "workspace_id" in valid_cols:
@@ -2221,7 +2168,7 @@ async def upsert_active_match(set_id: str | dict, workspace_id: str | None = Non
         await db.commit()
 
 async def delete_active_match(set_id: str, workspace_id: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         query, params = "DELETE FROM active_matches WHERE set_id = ?", [set_id]
         if workspace_id is not None:
             query += " AND workspace_id = ?"
@@ -2313,7 +2260,7 @@ async def _update_existing_match(
 ):
     """Reconcile one existing match against the provider state. Returns a list of hub
     commands the CALLER must enqueue AFTER commit (enqueuing mid-transaction would risk a
-    SQLite write-lock against this still-open connection)."""
+    write lock against this still-open connection)."""
     pending_cmds: list[str] = []
 
     if ps.state in _TERMINAL_STATES:
@@ -2457,12 +2404,12 @@ async def sync_active_matches(tournament_slug: str, provider_sets: list[Provider
     Also promotes planned-stream entries: sets in planned_streams get
     is_stream_match=TRUE and (if a stream_id is set) a matching station assigned.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         bot_manage_limit, check_in_source, local_matches, planned, station_by_stream, discord_by_startgg, avatar_by_startgg, explicit_links = await _preload_sync_data(db, tournament_slug, workspace_id)
 
         found_sids = set()
         # Hub commands to enqueue AFTER commit (enqueuing mid-transaction risks a
-        # SQLite write-lock against this open connection).
+        # Avoid holding a write lock against this open connection.
         pending_cmds: list[str] = []
 
         for ps in provider_sets:
@@ -2559,7 +2506,7 @@ async def delete_tournament_active_matches(slug: str, workspace_id: str | None =
     authenticated API caller supplies its trusted workspace so a colliding
     slug in another tenant cannot be reset accidentally.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         query = "DELETE FROM active_matches WHERE tournament_slug = ?"
         params: list[str] = [slug]
         if workspace_id is not None:
@@ -2570,7 +2517,7 @@ async def delete_tournament_active_matches(slug: str, workspace_id: str | None =
 
 async def delete_active_match(set_id: str, workspace_id: str | None = None):
     """Deletes a single active match, never crossing a supplied workspace."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         query, params = "DELETE FROM active_matches WHERE set_id = ?", [set_id]
         if workspace_id is not None:
             query += " AND workspace_id = ?"
@@ -2594,8 +2541,8 @@ async def update_active_match(match_id: str, *, workspace_id: str | None = None,
     if "status" in kwargs:
         new_status = kwargs["status"]
         try:
-            async with aiosqlite.connect(DB_PATH) as db:
-                db.row_factory = aiosqlite.Row
+            async with dbapi.connect(DATABASE_DSN) as db:
+                db.row_factory = dbapi.Row
                 scope = " AND workspace_id = ?" if workspace_id is not None else ""
                 params = (match_id,) + ((workspace_id,) if workspace_id is not None else ())
                 async with db.execute("SELECT status FROM active_matches WHERE set_id = ?" + scope, params) as c:
@@ -2612,21 +2559,15 @@ async def update_active_match(match_id: str, *, workspace_id: str | None = None,
         except Exception as e:
             print(f"Error validating status transition: {e}")
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        valid_cols = []
-        async with db.execute("PRAGMA table_info(active_matches)") as cursor:
-            info = await cursor.fetchall()
-            valid_cols = [row[1] for row in info]
+    async with dbapi.connect(DATABASE_DSN) as db:
+        valid_cols = await _table_columns(db, "active_matches")
 
         filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_cols}
         if not filtered_kwargs:
             return False
 
         keys = ", ".join([f"{k} = ?" for k in filtered_kwargs.keys()])
-        # PostgreSQL boolean columns reject SQLite's legacy 0/1 integers.
-        # Normalize at the repository boundary so bot workflow updates (for
-        # example ``auto_dq_disarmed=0`` during Call) remain portable while
-        # preserving the existing SQLite test/tool representation.
+        # Normalize older 0/1 callers to PostgreSQL booleans at the repository boundary.
         values = [_database_value(key, value) for key, value in filtered_kwargs.items()]
         values.append(match_id)
         scope = ""
@@ -2670,13 +2611,13 @@ async def record_startgg_attendance_intent_v2(
         "authoritative and no result mutation was sent"
     )
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
+        await db.execute("BEGIN")
         try:
             scope = " AND m.workspace_id = ?" if workspace_id is not None else ""
             params = (match_id,) + ((workspace_id,) if workspace_id is not None else ())
-            lock = " FOR UPDATE OF m" if is_postgres() else ""
+            lock = " FOR UPDATE OF m"
             async with db.execute(
                 """SELECT m.*, COALESCE(t.provider_type, 'startgg') AS owner_provider
                      FROM active_matches m
@@ -2735,7 +2676,7 @@ async def record_startgg_attendance_intent_v2(
     return await get_active_match(match_id, workspace_id) or {}
 
 async def get_player_override(entrant_id: str, workspace_id: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         query = "SELECT * FROM player_overrides WHERE id = ?"
         params: list = [entrant_id]
         if workspace_id is not None:
@@ -2748,7 +2689,7 @@ async def get_player_override(entrant_id: str, workspace_id: str | None = None):
             return None
 
 async def save_player_override(entrant_id: str, data: dict, workspace_id: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         # First, ensure the row exists
         await db.execute(
             "INSERT INTO player_overrides (id, workspace_id) VALUES (?, ?) ON CONFLICT (id) DO NOTHING",
@@ -2788,7 +2729,7 @@ async def save_player_override(entrant_id: str, data: dict, workspace_id: str | 
         await db.commit()
 
 async def get_all_player_overrides(workspace_id: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         query = "SELECT * FROM player_overrides"
         params: list = []
         if workspace_id is not None:
@@ -2810,7 +2751,7 @@ async def get_all_player_overrides(workspace_id: str | None = None):
             return out
 
 async def delete_player_override(entrant_id: str, workspace_id: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         query = "DELETE FROM player_overrides WHERE id = ?"
         params: list = [entrant_id]
         if workspace_id is not None:
@@ -2820,7 +2761,7 @@ async def delete_player_override(entrant_id: str, workspace_id: str | None = Non
         await db.commit()
 
 async def delete_all_player_overrides(workspace_id: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         if workspace_id is None:
             await db.execute("DELETE FROM player_overrides")
         else:
@@ -2829,13 +2770,13 @@ async def delete_all_player_overrides(workspace_id: str | None = None):
 
 # ── Connections ────────────────────────────────────────────────────────────
 async def get_connection(key: str, default: str = None) -> str:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         async with db.execute("SELECT value FROM connections WHERE key = ?", (key,)) as c:
             row = await c.fetchone()
             return row[0] if row else default
 
 async def set_connection(key: str, value: str):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         await db.execute("INSERT INTO connections (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", (key, value))
         await db.commit()
 
@@ -2845,7 +2786,7 @@ async def delete_connections(keys: list[str]) -> None:
     if not keys:
         return
     placeholders = ", ".join("?" for _ in keys)
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         await db.execute(f"DELETE FROM connections WHERE key IN ({placeholders})", keys)
         await db.commit()
 
@@ -2853,7 +2794,7 @@ async def delete_connections(keys: list[str]) -> None:
 async def create_oauth_state(provider: str, state: str, ttl_seconds: int, account_id: str | None = None) -> None:
     """Store one anti-CSRF state for a provider OAuth redirect."""
     expires_at = int(datetime.datetime.now(datetime.timezone.utc).timestamp()) + ttl_seconds
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         await db.execute("DELETE FROM oauth_states WHERE expires_at <= ?", (int(datetime.datetime.now(datetime.timezone.utc).timestamp()),))
         await db.execute(
             "INSERT INTO oauth_states (provider, state, account_id, expires_at) VALUES (?, ?, ?, ?)",
@@ -2865,7 +2806,7 @@ async def create_oauth_state(provider: str, state: str, ttl_seconds: int, accoun
 async def consume_oauth_state(provider: str, state: str) -> str | None:
     """Atomically consume a non-expired OAuth state so callback links cannot replay."""
     now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         async with db.execute(
             "SELECT account_id FROM oauth_states WHERE provider = ? AND state = ? AND expires_at > ?",
             (provider, state, now),
@@ -2878,24 +2819,24 @@ async def consume_oauth_state(provider: str, state: str) -> str | None:
         return str(row[0]) if row and row[0] else None
 
 async def get_all_connections() -> dict:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         async with db.execute("SELECT key, value FROM connections") as c:
             rows = await c.fetchall()
             return {r[0]: r[1] for r in rows}
 
 async def get_setting(key: str, default: str = None) -> str:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         async with db.execute("SELECT value FROM global_settings WHERE key = ?", (key,)) as c:
             row = await c.fetchone()
             return row[0] if row else default
 
 async def set_setting(key: str, value: str):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         await db.execute("INSERT INTO global_settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", (key, value))
         await db.commit()
 
 async def get_all_settings() -> dict:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         async with db.execute("SELECT key, value FROM global_settings") as c:
             rows = await c.fetchall()
             return {r[0]: r[1] for r in rows}
@@ -2906,7 +2847,7 @@ async def clear_settings_prefix(prefix: str):
     Used to reset the per-event one-shot dispatcher stop flags
     (`_dispatcher_stop_signaled_{slug}_{event_id}`) in one shot, without having
     to enumerate every event id."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         await db.execute(
             "DELETE FROM global_settings WHERE key LIKE ? ESCAPE '\\'",
             (prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%",)
@@ -2916,7 +2857,7 @@ async def clear_settings_prefix(prefix: str):
 
 # ── Conflicts ──────────────────────────────────────────────────────────────
 async def add_conflict(set_id: str, p1_claim: str, p2_claim: str):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         await db.execute(
             "INSERT INTO conflicts (set_id, p1_claim, p2_claim) VALUES (?, ?, ?)",
             (set_id, p1_claim, p2_claim)
@@ -2924,8 +2865,8 @@ async def add_conflict(set_id: str, p1_claim: str, p2_claim: str):
         await db.commit()
 
 async def get_conflicts(resolved: bool = False, workspace_id: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         query = "SELECT c.* FROM conflicts c"
         params: list = [resolved]
         if workspace_id is not None:
@@ -2940,8 +2881,8 @@ async def get_conflicts(resolved: bool = False, workspace_id: str | None = None)
 
 async def get_conflict(conflict_id: int, workspace_id: str | None = None):
     """Fetch a single conflict row (incl. its set_id) for score-based resolution."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         query = "SELECT c.* FROM conflicts c"
         params: list = [conflict_id]
         if workspace_id is not None:
@@ -2956,8 +2897,8 @@ async def get_conflict(conflict_id: int, workspace_id: str | None = None):
 
 async def get_conflict_by_set_id(set_id: str, resolved: bool = False):
     """Most recent (un)resolved conflict for a set — used by the Discord investigation."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         async with db.execute(
             "SELECT * FROM conflicts WHERE set_id = ? AND resolved = ? ORDER BY id DESC LIMIT 1",
             (str(set_id), resolved),
@@ -2968,7 +2909,7 @@ async def get_conflict_by_set_id(set_id: str, resolved: bool = False):
 async def update_conflict_claim(conflict_id: int, slot: str, text: str):
     """Store a player's investigation statement (slot is 'p1' or 'p2')."""
     col = "p1_claim" if slot == "p1" else "p2_claim"
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         await db.execute(
             f"UPDATE conflicts SET {col} = ? WHERE id = ?", (text, conflict_id)
         )
@@ -2976,14 +2917,14 @@ async def update_conflict_claim(conflict_id: int, slot: str, text: str):
 
 async def update_conflict_summary(conflict_id: int, summary: str):
     """Store the AI-generated one-line dispute summary."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         await db.execute(
             "UPDATE conflicts SET ai_summary = ? WHERE id = ?", (summary, conflict_id)
         )
         await db.commit()
 
 async def resolve_conflict(conflict_id: int, resolution: str, workspace_id: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         if workspace_id is None:
             await db.execute(
                 "UPDATE conflicts SET resolved = TRUE, resolution = ? WHERE id = ?",
@@ -3005,7 +2946,7 @@ async def resolve_conflict(conflict_id: int, resolution: str, workspace_id: str 
 
 # ── Bot Feed ───────────────────────────────────────────────────────────────
 async def add_bot_feed(message: str, level: str = "info", workspace_id: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         await db.execute(
             "INSERT INTO bot_feed (message, level, workspace_id) VALUES (?, ?, ?)",
             (message, level, workspace_id)
@@ -3027,8 +2968,8 @@ async def add_bot_feed(message: str, level: str = "info", workspace_id: str | No
         await db.commit()
 
 async def get_bot_feed(limit: int = 50, offset: int = 0, workspace_id: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         query = "SELECT * FROM bot_feed"
         params: list = []
         if workspace_id is None:
@@ -3045,7 +2986,7 @@ async def get_bot_feed(limit: int = 50, offset: int = 0, workspace_id: str | Non
 
 
 async def clear_bot_feed(workspace_id: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         if workspace_id is None:
             await db.execute("DELETE FROM bot_feed WHERE workspace_id IS NULL")
         else:
@@ -3081,7 +3022,7 @@ async def add_hub_command(command_text: str, *, source: str = "manual", workspac
     ``source`` is intentionally separate from command text so the dispatcher
     kill switch can cancel only pending automatic work, never a TO command.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         await db.execute(
             "INSERT INTO hub_commands (command_text, source, status, workspace_id) VALUES (?, ?, 'pending', ?)",
             (command_text, source, workspace_id)
@@ -3097,8 +3038,8 @@ async def get_pending_hub_commands(workspace_id: str | None = None):
     not be used by a multi-tenant worker.  Runtime consumers pass the
     workspace selected by their integration account or task context.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         scope = " AND workspace_id = ?" if workspace_id is not None else ""
         params = (workspace_id,) if workspace_id is not None else ()
         async with db.execute(
@@ -3120,43 +3061,23 @@ async def claim_pending_hub_commands(
     workspace's queue.  The unscoped form remains only for legacy migration
     fixtures and single-tenant compatibility during the staged rollout.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
+        await db.execute("BEGIN")
         scope = " AND workspace_id = ?" if workspace_id is not None else ""
         scope_params = (workspace_id,) if workspace_id is not None else ()
-        if is_postgres():
-            rows = await (await db.execute(
-                """WITH candidates AS (
-                     SELECT id FROM hub_commands
-                     WHERE (status='pending' OR (status='processing' AND lease_expires_at<CURRENT_TIMESTAMP))""" + scope + """
-                     ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT ?
-                   )
-                   UPDATE hub_commands h SET status='processing', lease_owner=?,
-                     lease_expires_at=CURRENT_TIMESTAMP + (? * INTERVAL '1 second'),
-                     attempts=COALESCE(attempts,0)+1
-                   FROM candidates c WHERE h.id=c.id RETURNING h.*""",
-                (*scope_params, limit, lease_owner, lease_seconds),
-            )).fetchall()
-        else:
-            ids = await (await db.execute(
-                """SELECT id FROM hub_commands
-                   WHERE (status='pending' OR (status='processing' AND lease_expires_at<CURRENT_TIMESTAMP))""" + scope + """
-                   ORDER BY created_at LIMIT ?""", (*scope_params, limit)
-            )).fetchall()
-            if not ids:
-                await db.commit(); return []
-            placeholders = ",".join("?" for _ in ids)
-            id_values = [row[0] for row in ids]
-            await db.execute(
-                f"""UPDATE hub_commands SET status='processing', lease_owner=?,
-                    lease_expires_at=datetime(CURRENT_TIMESTAMP, '+' || ? || ' seconds'),
-                    attempts=COALESCE(attempts,0)+1 WHERE id IN ({placeholders})""",
-                (lease_owner, lease_seconds, *id_values),
-            )
-            rows = await (await db.execute(
-                f"SELECT * FROM hub_commands WHERE id IN ({placeholders}) ORDER BY created_at", id_values
-            )).fetchall()
+        rows = await (await db.execute(
+            """WITH candidates AS (
+                 SELECT id FROM hub_commands
+                 WHERE (status='pending' OR (status='processing' AND lease_expires_at<CURRENT_TIMESTAMP))""" + scope + """
+                 ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT ?
+               )
+               UPDATE hub_commands h SET status='processing', lease_owner=?,
+                 lease_expires_at=CURRENT_TIMESTAMP + (? * INTERVAL '1 second'),
+                 attempts=COALESCE(attempts,0)+1
+               FROM candidates c WHERE h.id=c.id RETURNING h.*""",
+            (*scope_params, limit, lease_owner, lease_seconds),
+        )).fetchall()
         await db.commit()
         return [dict(row) for row in rows]
 
@@ -3164,7 +3085,7 @@ async def claim_pending_hub_commands(
 async def finish_hub_command(command_id: int, lease_owner: str, status: str, error: str | None = None) -> bool:
     if status not in {"done", "error", "cancelled", "needs_review"}:
         raise ValueError("Invalid terminal command state")
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         cursor = await db.execute(
             """UPDATE hub_commands SET status=?, last_error=?, lease_owner=NULL, lease_expires_at=NULL
                WHERE id=? AND status='processing' AND lease_owner=?""",
@@ -3178,12 +3099,12 @@ async def purge_incomplete_registrations(tournament_slug: str):
     For simplicity, this deletes all is_verified=FALSE players.
     In a real scenario, you'd filter by tournament participation too.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         await db.execute("DELETE FROM players WHERE is_verified = FALSE")
         await db.commit()
 
 async def update_hub_command_status(command_id: int, status: str):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         await db.execute(
             "UPDATE hub_commands SET status = ? WHERE id = ?",
             (status, command_id)
@@ -3208,8 +3129,8 @@ def resolve_dispatch_budget(row: dict) -> tuple[int, int]:
 
 async def get_dispatch_eligible_tournaments(workspace_id: str | None = None) -> list[dict]:
     """Tournaments with the auto-dispatcher armed."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         query = ("SELECT slug, name, auto_dispatch_concurrency, auto_dispatch_stop_at, workspace_id "
                  "FROM tournaments WHERE auto_dispatch_enabled = TRUE")
         params: list = []
@@ -3228,8 +3149,8 @@ async def get_dispatch_eligible_events(workspace_id: str | None = None) -> list[
     Tekken 8) never shares concurrency or Top-N thresholds across games.
     Legacy/single-event rows surface as one bucket with event_id=''.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         query = """
             SELECT t.slug, t.name, t.workspace_id,
                    t.auto_dispatch_concurrency, t.auto_dispatch_stop_at,
@@ -3263,7 +3184,7 @@ async def count_active_dispatched(tournament_slug: str, event_id: str | None = N
     if event_id is not None:
         sql += " AND COALESCE(event_id, '') = ?"
         params.append(event_id)
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         async with db.execute(sql, params) as cursor:
             row = await cursor.fetchone()
     return int(row[0] if row else 0)
@@ -3283,7 +3204,7 @@ async def count_remaining_event_matches(tournament_slug: str, event_id: str | No
     if event_id is not None:
         sql += " AND COALESCE(event_id, '') = ?"
         params.append(event_id)
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         async with db.execute(sql, params) as cursor:
             row = await cursor.fetchone()
     return int(row[0] if row else 0)
@@ -3323,12 +3244,7 @@ async def get_dispatch_candidates(tournament_slug: str, limit: int, event_id: st
     if event_id is not None:
         sql += " AND COALESCE(event_id, '') = ?"
         params.append(event_id)
-    match_order = (
-        "CASE WHEN match_number ~ '^[0-9]+$' THEN match_number::BIGINT ELSE 999999 END"
-        if is_postgres() else
-        "CASE WHEN match_number GLOB '[0-9]*' AND match_number NOT GLOB '*[^0-9]*' "
-        "THEN CAST(match_number AS INTEGER) ELSE 999999 END"
-    )
+    match_order = "CASE WHEN match_number ~ '^[0-9]+$' THEN match_number::BIGINT ELSE 999999 END"
     sql += f"""
         ORDER BY
           COALESCE(NULLIF(phase_group, ''), 'zzzz'),
@@ -3337,8 +3253,8 @@ async def get_dispatch_candidates(tournament_slug: str, limit: int, event_id: st
         LIMIT ?
     """
     params.append(int(limit))
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         async with db.execute(sql, params) as cursor:
             return [dict(r) for r in await cursor.fetchall()]
 
@@ -3351,8 +3267,8 @@ async def get_available_stream_station(event_id: str | None, workspace_id: str |
     already hosting a called/in_progress match. Pass '' to match stations left
     unbound to any event.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         query = """
             SELECT s.* FROM stations s
             WHERE s.is_stream_station = TRUE
@@ -3400,8 +3316,8 @@ def should_bot_manage_match(round_name: str, phase_group: str, limit_setting: st
     return True
 
 async def get_player_in_progress_match(discord_id: str, workspace_id: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         query = "SELECT * FROM active_matches WHERE status = 'in_progress' AND (p1_discord = ? OR p2_discord = ?)"
         params: list = [discord_id, discord_id]
         if workspace_id is not None:
@@ -3427,8 +3343,8 @@ async def create_provider_command_v2(command: dict) -> dict:
     if missing:
         raise ValueError(f"Missing provider command fields: {', '.join(sorted(missing))}")
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         await db.execute(
             """
             INSERT INTO provider_command_ledger (
@@ -3464,7 +3380,7 @@ async def record_dispatcher_decision(
     decision: str, reason_code: str, explanation: str, workspace_id: str | None = None,
 ) -> None:
     """Store one deterministic dispatch decision without per-tick log spam."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         await db.execute(
             """INSERT INTO dispatcher_decisions (
                    decision_key, workspace_id, tournament_slug, event_id, set_id, decision,
@@ -3484,8 +3400,8 @@ async def claim_dispatcher_match(set_id: str, tournament_slug: str, workspace_id
     A stale claim can be reclaimed after two minutes. A queued/cancelled claim
     is never overwritten: the match lifecycle remains the source of truth.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(DATABASE_DSN) as db:
+        await db.execute("BEGIN")
         async with db.execute(
             "SELECT value FROM global_settings WHERE key='auto_dispatch_master_switch'"
         ) as cursor:
@@ -3493,7 +3409,7 @@ async def claim_dispatcher_match(set_id: str, tournament_slug: str, workspace_id
         if not setting or str(setting[0]).lower() != "on":
             await db.rollback()
             return False
-        stale_claim_clause = "CURRENT_TIMESTAMP - INTERVAL '2 minutes'" if is_postgres() else "datetime('now', '-2 minutes')"
+        stale_claim_clause = "CURRENT_TIMESTAMP - INTERVAL '2 minutes'"
         cursor = await db.execute(
             f"""INSERT INTO dispatcher_dispatch_claims (set_id, workspace_id, tournament_slug, state)
                VALUES (?, ?, ?, 'claimed')
@@ -3525,7 +3441,7 @@ async def dispatcher_claim_is_active(set_id: str, workspace_id: str | None = Non
     entry: disabling one tournament cancels only its automatic work, while a
     manual Call remains unrelated.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         async with db.execute(
             """SELECT 1
                FROM dispatcher_dispatch_claims c
@@ -3542,7 +3458,7 @@ async def dispatcher_claim_is_active(set_id: str, workspace_id: str | None = Non
 
 
 async def mark_dispatcher_claim_queued(set_id: str, workspace_id: str | None = None) -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         await db.execute(
             "UPDATE dispatcher_dispatch_claims SET state='queued', updated_at=CURRENT_TIMESTAMP "
             "WHERE set_id=? AND state='claimed'" + (" AND workspace_id=?" if workspace_id is not None else ""),
@@ -3552,7 +3468,7 @@ async def mark_dispatcher_claim_queued(set_id: str, workspace_id: str | None = N
 
 
 async def release_dispatcher_claim(set_id: str, workspace_id: str | None = None) -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         query = "DELETE FROM dispatcher_dispatch_claims WHERE set_id=? AND state='claimed'"
         params: list = [set_id]
         if workspace_id is not None:
@@ -3568,8 +3484,8 @@ async def cancel_pending_dispatcher_work(tournament_slug: str | None = None) -> 
     Supplying a tournament scope is the normal per-tournament pause path.  The
     global Kill Switch intentionally omits it and cancels every dispatcher item.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(DATABASE_DSN) as db:
+        await db.execute("BEGIN")
         if tournament_slug is None:
             commands = await db.execute(
                 "UPDATE hub_commands SET status='cancelled' WHERE source='dispatcher' AND status='pending'"
@@ -3600,8 +3516,8 @@ async def cancel_pending_dispatcher_work(tournament_slug: str | None = None) -> 
 
 
 async def get_provider_command_v2(command_id: str) -> dict | None:
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         async with db.execute(
             "SELECT * FROM provider_command_ledger WHERE id = ?", (command_id,)
         ) as cursor:
@@ -3615,8 +3531,8 @@ async def get_open_provider_command_for_match_v2(match_id: str, action: str, wor
     A score mutation is not safe to parallelize: a second payload can advance a
     bracket differently while the first request outcome is still unknown.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         scope = " AND workspace_id = ?" if workspace_id is not None else ""
         params = (match_id, action) + ((workspace_id,) if workspace_id is not None else ())
         async with db.execute(
@@ -3635,8 +3551,8 @@ async def set_match_sync_status_v2(
     workspace_id: str | None = None,
 ) -> dict:
     """Persist remote-command certainty without claiming a Hub completion."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         scope = " AND workspace_id=?" if workspace_id is not None else ""
         params = (sync_status, reason, match_id) + ((workspace_id,) if workspace_id is not None else ())
         await db.execute(
@@ -3668,8 +3584,8 @@ async def record_targeted_snapshot_observation_v2(
     which it actually contains.  Preserve its provider projection separately
     from Hub workflow state.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         scope = " AND workspace_id=?" if workspace_id is not None else ""
         params = (match_id,) + ((workspace_id,) if workspace_id is not None else ())
         async with db.execute(
@@ -3703,8 +3619,8 @@ async def update_provider_command_state_v2(command_id: str, state: str, *, reaso
     }
     if state not in allowed:
         raise ValueError(f"Unsupported provider command state: {state}")
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         await db.execute(
             """UPDATE provider_command_ledger
                SET state=?, reason=COALESCE(?, reason), lease_owner=NULL, lease_until=NULL,
@@ -3728,13 +3644,12 @@ async def claim_due_provider_commands_v2(
     A later worker will call this under a feature flag. Phase 2 only exposes the
     crash-recovery primitive for tests; no startup path invokes it.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute("BEGIN IMMEDIATE")
-        # PostgreSQL must lock the candidate rows, not merely replace SQLite's
-        # BEGIN IMMEDIATE with BEGIN. SKIP LOCKED lets another worker continue
-        # with unrelated work instead of racing the same command.
-        claim_lock = " FOR UPDATE SKIP LOCKED" if is_postgres() else ""
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
+        await db.execute("BEGIN")
+        # SKIP LOCKED lets another worker continue with unrelated work instead
+        # of racing the same command.
+        claim_lock = " FOR UPDATE SKIP LOCKED"
         workspace_scope = " AND workspace_id = ?" if workspace_id is not None else ""
         async with db.execute(
             """
@@ -3773,7 +3688,7 @@ async def claim_due_provider_commands_v2(
 
 
 async def renew_provider_command_lease_v2(command_id: str, lease_owner: str, lease_until: str) -> bool:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         cursor = await db.execute(
             """UPDATE provider_command_ledger SET lease_until=?, updated_at=CURRENT_TIMESTAMP
                WHERE id=? AND state='sending' AND lease_owner=?""",
@@ -3789,8 +3704,8 @@ async def enqueue_workflow_outbox_v2(event: dict) -> dict:
     missing = required - event.keys()
     if missing:
         raise ValueError(f"Missing workflow outbox fields: {', '.join(sorted(missing))}")
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         outbox_insert = await db.execute(
             """
             INSERT INTO workflow_outbox (
@@ -3828,9 +3743,9 @@ async def update_hub_workflow_and_enqueue_outbox_v2(
     missing = required - event.keys()
     if missing:
         raise ValueError(f"Missing workflow outbox fields: {', '.join(sorted(missing))}")
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
+        await db.execute("BEGIN")
         match_scope = " AND workspace_id = ?" if workspace_id is not None else ""
         update = await db.execute(
             "UPDATE active_matches SET hub_status = ? WHERE set_id = ?" + match_scope,
@@ -3889,9 +3804,9 @@ async def claim_due_workflow_outbox_v2(
     workspace_id: str | None = None,
 ) -> list[dict]:
     """Claim local-effect records for a future outbox worker; does not dispatch."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
+        await db.execute("BEGIN")
         # A crashed sender may already have reached the receiver. A new lease
         # must not turn uncertainty into permission to send again.
         workspace_scope = " AND workspace_id = ?" if workspace_id is not None else ""
@@ -3903,7 +3818,7 @@ async def claim_due_workflow_outbox_v2(
         )
         # See the remote-command claim above: the persisted lease and row lock
         # together prevent two workers from dispatching one effect.
-        claim_lock = " FOR UPDATE SKIP LOCKED" if is_postgres() else ""
+        claim_lock = " FOR UPDATE SKIP LOCKED"
         async with db.execute(
             """
             SELECT event_id FROM workflow_outbox
@@ -3940,7 +3855,7 @@ async def claim_due_workflow_outbox_v2(
 
 async def begin_workflow_outbox_effect_v2(event_id: str, lease_owner: str, now: str) -> bool:
     """Durably mark the uncertainty boundary before invoking an external sink."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         cursor = await db.execute(
             """UPDATE workflow_outbox SET effect_started_at=?, updated_at=CURRENT_TIMESTAMP
                WHERE event_id=? AND status='sending' AND lease_owner=?
@@ -3953,7 +3868,7 @@ async def begin_workflow_outbox_effect_v2(event_id: str, lease_owner: str, now: 
 
 async def mark_workflow_outbox_completed_v2(event_id: str, *, lease_owner: str | None = None) -> bool:
     """Record a successfully dispatched local effect exactly once."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         query = """UPDATE workflow_outbox
                    SET status = 'completed', completed_at = CURRENT_TIMESTAMP,
                        lease_owner = NULL, lease_until = NULL, updated_at = CURRENT_TIMESTAMP
@@ -3969,7 +3884,7 @@ async def mark_workflow_outbox_completed_v2(event_id: str, *, lease_owner: str |
 
 async def mark_workflow_outbox_retryable_v2(event_id: str, reason: str | None = None, *, lease_owner: str | None = None) -> bool:
     """Release a failed local effect for a later idempotent retry."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         query = """UPDATE workflow_outbox
                    SET status = 'retryable', lease_owner = NULL, lease_until = NULL, effect_started_at = NULL, next_attempt_at = CURRENT_TIMESTAMP,
                        updated_at = CURRENT_TIMESTAMP
@@ -3987,7 +3902,7 @@ async def mark_workflow_outbox_needs_review_v2(
     event_id: str, reason: str | None = None, *, lease_owner: str | None = None
 ) -> bool:
     """Stop automatic redelivery after an externally ambiguous outcome."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         query = """UPDATE workflow_outbox
                    SET status = 'needs_review', lease_owner = NULL, lease_until = NULL,
                        updated_at = CURRENT_TIMESTAMP
@@ -4018,12 +3933,12 @@ async def hold_legacy_operations_v2(
     """
     if not outbox_event_ids and not hub_command_ids:
         return {"outbox_held": 0, "hub_commands_held": 0}
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(DATABASE_DSN) as db:
+        await db.execute("BEGIN")
         try:
             outbox_rows: list[dict] = []
             for event_id in outbox_event_ids:
-                lock = " FOR UPDATE" if is_postgres() else ""
+                lock = " FOR UPDATE"
                 row = await (await db.execute(
                     "SELECT event_id, status, attempts, lease_owner, lease_until, effect_started_at, completed_at "
                     "FROM workflow_outbox WHERE event_id=?" + lock,
@@ -4038,7 +3953,7 @@ async def hold_legacy_operations_v2(
                 })
             command_rows: list[dict] = []
             for command_id in hub_command_ids:
-                lock = " FOR UPDATE" if is_postgres() else ""
+                lock = " FOR UPDATE"
                 row = await (await db.execute(
                     "SELECT id, status, attempts, lease_owner, lease_expires_at FROM hub_commands WHERE id=?" + lock,
                     (command_id,),
@@ -4095,7 +4010,7 @@ async def hold_legacy_operations_v2(
 
 
 async def renew_workflow_outbox_lease_v2(event_id: str, lease_owner: str, lease_until: str) -> bool:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         cursor = await db.execute(
             """UPDATE workflow_outbox SET lease_until=?, updated_at=CURRENT_TIMESTAMP
                WHERE event_id=? AND status='sending' AND lease_owner=?""",
@@ -4107,8 +4022,8 @@ async def renew_workflow_outbox_lease_v2(event_id: str, lease_owner: str, lease_
 
 async def list_recovery_matches_v2() -> list[dict]:
     """Durable workflow rows needed to restore timers/threads after a restart."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         async with db.execute(
             """SELECT m.*, COALESCE(t.provider_type, 'startgg') AS provider_type
                FROM active_matches m LEFT JOIN tournaments t ON t.slug=m.tournament_slug
@@ -4124,7 +4039,7 @@ async def get_live_sync_state_v2(tournament_slug: str, workspace_id: str | None 
     tournament = await get_tournament(tournament_slug, workspace_id)
     if not tournament:
         return None
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         async with db.execute(
             """SELECT
                  SUM(CASE WHEN COALESCE(hub_status, status)='in_progress' THEN 1 ELSE 0 END),
@@ -4151,8 +4066,8 @@ async def get_live_sync_state_v2(tournament_slug: str, workspace_id: str | None 
 
 async def list_challonge_state_repair_rows_v2() -> list[dict]:
     """Read repair candidates plus only the local evidence needed for a dry run."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         async with db.execute(
             """SELECT m.*, t.name AS tournament_name, t.provider_type,
                  EXISTS(SELECT 1 FROM provider_reconciliation_audit a
@@ -4167,7 +4082,7 @@ async def list_challonge_state_repair_rows_v2() -> list[dict]:
 
 
 async def save_challonge_state_repair_report_v2(report: dict) -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         await db.execute(
             """INSERT INTO challonge_state_repair_reports
                (report_id, snapshot_id, snapshot_observed_at, fingerprint, report_json)
@@ -4179,8 +4094,8 @@ async def save_challonge_state_repair_report_v2(report: dict) -> None:
 
 
 async def get_challonge_state_repair_report_v2(report_id: str) -> dict | None:
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         async with db.execute("SELECT * FROM challonge_state_repair_reports WHERE report_id=?", (report_id,)) as cursor:
             row = await cursor.fetchone()
     return dict(row) if row else None
@@ -4201,9 +4116,9 @@ async def apply_challonge_state_repair_v2(report_id: str, fingerprint: str, appr
         # An applied immutable report is intentionally idempotent.  It must not
         # acquire a second audit entry or rewrite a later Hub workflow state.
         return 0
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
+        await db.execute("BEGIN")
         try:
             count = 0
             for set_id in requested:
@@ -4281,13 +4196,13 @@ async def apply_local_workflow_transition_v2(
     """
     requested = dict(fields or {})
     effects = list(effects or [])
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
+        await db.execute("BEGIN")
         try:
             # The tournament is left-joined and may be absent on legacy data;
             # PostgreSQL can only lock the concrete match relation.
-            match_lock = " FOR UPDATE OF m" if is_postgres() else ""
+            match_lock = " FOR UPDATE OF m"
             async with db.execute(
                 """SELECT m.*, COALESCE(t.provider_type, 'startgg') AS owner_provider
                    FROM active_matches m LEFT JOIN tournaments t ON t.slug = m.tournament_slug
@@ -4301,8 +4216,7 @@ async def apply_local_workflow_transition_v2(
             if match["owner_provider"] != "challonge":
                 raise ValueError("Local workflow transition is only valid for Challonge")
 
-            async with db.execute("PRAGMA table_info(active_matches)") as cursor:
-                valid_columns = {row[1] for row in await cursor.fetchall()}
+            valid_columns = await _table_columns(db, "active_matches")
             update = {key: value for key, value in requested.items() if key in valid_columns}
             update.update({
                 "status": legacy_status or hub_status,
@@ -4313,7 +4227,7 @@ async def apply_local_workflow_transition_v2(
 
             station_id = update.get("station_id")
             if station_id:
-                station_lock = " FOR UPDATE" if is_postgres() else ""
+                station_lock = " FOR UPDATE"
                 async with db.execute(
                     "SELECT active_match_id FROM stations WHERE id = ?" + station_lock,
                     (station_id,),
@@ -4334,7 +4248,7 @@ async def apply_local_workflow_transition_v2(
                         (owner,),
                     ) as owner_cursor:
                         owner_row = await owner_cursor.fetchone()
-                    if owner_row and str(owner_row["status"] or "") in {"called", "in_progress"}:
+                    if owner_row and str(owner_row["status"] or "") not in {"complete", "removed"}:
                         raise ValueError("Station is already occupied")
                     await db.execute(
                         "UPDATE stations SET active_match_id = NULL WHERE id = ? AND active_match_id = ?",
@@ -4399,9 +4313,9 @@ async def complete_match_and_enqueue_effects_v2(
     p2_score: int | None = None,
 ) -> dict:
     """Idempotently complete a match and free only its own station."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute("BEGIN IMMEDIATE")
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
+        await db.execute("BEGIN")
         try:
             async with db.execute("SELECT * FROM active_matches WHERE set_id = ?", (match_id,)) as cursor:
                 match = await cursor.fetchone()
@@ -4472,8 +4386,8 @@ async def upsert_provider_identity_link_v2(link: dict, workspace_id: str | None 
     missing = required - link.keys()
     if missing:
         raise ValueError(f"Missing identity link fields: {', '.join(sorted(missing))}")
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         await db.execute(
             """INSERT INTO provider_identity_links (
                    workspace_id, provider_type, provider_participant_id, provider_entrant_id,
@@ -4506,8 +4420,8 @@ async def upsert_provider_identity_link_v2(link: dict, workspace_id: str | None 
 
 async def get_verified_discord_identity_link_v2(provider_type: str, tournament_slug: str, entrant_id: str, workspace_id: str | None = None) -> dict | None:
     """Return only explicitly verified/overridden identity links by stable ID."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with dbapi.connect(DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
         async with db.execute(
             """SELECT * FROM provider_identity_links
                WHERE provider_type=? AND tournament_slug=? AND provider_entrant_id=?
@@ -4535,7 +4449,7 @@ async def upsert_provider_api_budget_v2(
     columns = ["provider_type", "provider_account_id", *data.keys()]
     placeholders = ", ".join("?" for _ in columns)
     updates = ", ".join(f"{key} = excluded.{key}" for key in data)
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         await db.execute(
             f"INSERT INTO provider_api_budgets ({', '.join(columns)}) VALUES ({placeholders}) "
             f"ON CONFLICT(provider_type, provider_account_id) DO UPDATE SET {updates}, "
@@ -4560,7 +4474,7 @@ async def save_provider_snapshot_cache_v2(
     expires_at: str | None = None,
 ) -> None:
     """Store V2 cache metadata only; no provider request is made here."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         await db.execute(
             """
             INSERT INTO provider_snapshot_cache (
@@ -4599,7 +4513,7 @@ async def record_provider_request_telemetry_v2(
     cost_class: str | None = None,
 ) -> None:
     """Persist coordinator admission telemetry; this function never contacts a provider."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with dbapi.connect(DATABASE_DSN) as db:
         await db.execute(
             """
             INSERT INTO provider_request_telemetry (

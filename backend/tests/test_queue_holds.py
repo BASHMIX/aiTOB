@@ -13,7 +13,7 @@ async def test_explicit_hold_is_atomic_audited_and_not_claimable():
     await database.init_db()
     workspace_id = "hold-workspace"
     event_id = "hold-event"
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute(
             "INSERT INTO workspaces (id, slug, name) VALUES (?, ?, ?)",
             (workspace_id, "hold-workspace", "Hold Workspace"),
@@ -40,7 +40,7 @@ async def test_explicit_hold_is_atomic_audited_and_not_claimable():
     assert await database.get_pending_hub_commands(workspace_id) == []
     assert await WorkflowOutboxWorker(lambda _event: pytest.fail("held effect dispatched")).run_once() == 0
 
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
         outbox = await (await db.execute(
             "SELECT status, attempts, lease_owner, effect_started_at FROM workflow_outbox WHERE event_id=?",
             (event_id,),
@@ -80,7 +80,7 @@ async def test_hold_precondition_failure_rolls_back_without_partial_update():
             hub_command_ids=[999999],
             reason="must rollback",
         )
-    async with database.aiosqlite.connect(database.DB_PATH) as db:
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
         row = await (await db.execute(
             "SELECT status FROM workflow_outbox WHERE event_id='hold-rollback-event'",
         )).fetchone()
