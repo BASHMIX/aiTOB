@@ -4,6 +4,12 @@
 
 **Prerequisites**: `plan.md`, `spec.md`, `research.md`, `data-model.md`, `contracts/`, `quickstart.md`
 
+**Attendance terminology**: references below to removing automatic DQ mean the
+retired generic/AI path that could invent a winner. The current provider policy
+is defined in the Phase 11 plan: Start.gg owns zero-attendee Double-DQ and may
+resolve exactly one verified attendee after the mirrored deadline; Challonge
+supports authorized single-player DQ only.
+
 **Tests**: Required by the feature specification and verification strategy. For each user story, create the listed tests first and confirm they fail for the intended missing behavior before implementation.
 
 **Organization**: Tasks are grouped by user story so separate agents can implement and validate bounded increments. P1 stories precede P2 stories. Shared integration files are assigned only in Setup and Foundational tasks to reduce merge conflicts.
@@ -18,8 +24,8 @@
 
 **Purpose**: Verify that feature 003 prerequisites are real, define safe rollout controls, and prepare isolated test scaffolding before feature work starts.
 
-- [X] T001 Execute the feature 003 PostgreSQL/workspace identity gate checks and record pass/fail evidence and unresolved blockers in `specs/004-tournament-setup-wizard/evidence/prerequisite-gates.md`
-- [X] T002 Inventory every automatic-DQ path, legacy global AI/Discord fallback, global active-bot selector, and legacy player `team`/`name` boundary in `specs/004-tournament-setup-wizard/evidence/legacy-runtime-inventory.md`
+- [X] T001 Execute the feature 003 PostgreSQL/workspace identity gate checks; superseded run evidence was retired after the PostgreSQL-only cutover
+- [X] T002 Inventory every automatic-DQ path, legacy global AI/Discord fallback, global active-bot selector, and legacy player `team`/`name` boundary; retain the resulting guards in tests and runtime code
 - [X] T003 [P] Add disabled-by-default wizard, activation, registration, and provider-start rollout flags with documented defaults in `.env.example` and `backend/core/provider_feature_flags.py`
 - [X] T004 [P] Create redacted Start.gg, Challonge, Discord, Gemini, and OpenAI fake fixtures and adapter factories in `backend/tests/fixtures/tournament_setup/`
 - [X] T005 [P] Scaffold the isolated React feature module and placeholder route boundary in `frontend-react/src/features/tournament-setup/` and `frontend-react/src/App.tsx`
@@ -49,7 +55,7 @@
 - [X] T018 Add centralized safe provider/AI/Discord error classification, response redaction, and audit-detail allow lists in `backend/core/integrations.py` and `backend/tests/test_tournament_setup_redaction.py` after T013
 - [X] T019 Remove automatic-DQ schema defaults, timer invocations, API wording, and bot actions while retaining reminders and human escalation in `backend/core/auto_dispatcher/service.py`, `backend/api/routers/settings.py`, and `backend/bot/main.py`
 - [X] T020 Create and register feature router shells once in `backend/api/main.py`, `backend/api/routers/__init__.py`, `backend/api/routers/tournament_setup.py`, `backend/api/routers/player_registration.py`, and `backend/api/routers/discord_oauth.py` so story agents only edit their assigned router modules
-- [X] T021 Run the foundational PostgreSQL, migration, workspace-isolation, secret-redaction, and no-automatic-DQ suites and save the command/results in `specs/004-tournament-setup-wizard/evidence/foundation-tests.md`
+- [X] T021 Run the foundational PostgreSQL, migration, workspace-isolation, secret-redaction, and no-automatic-DQ suites
 
 **Checkpoint**: The new schema is available dark, all resources are workspace-owned, secrets fail closed, canonical names are defined, and no runtime path can auto-DQ.
 
@@ -76,7 +82,7 @@
 - [X] T029 [P] [US1] Implement typed provider/account/resolution API clients in `frontend-react/src/features/tournament-setup/api.ts` and `frontend-react/src/features/tournament-setup/types.ts`
 - [X] T030 [P] [US1] Build the account chooser, Connect Start.gg/Challonge actions, locator field, scope cards, provenance, and error remediation in `frontend-react/src/features/tournament-setup/components/ProviderStep.tsx`
 - [X] T031 [US1] Integrate provider resolution and explicit scope selection with optimistic draft state in `frontend-react/src/features/tournament-setup/store.ts`
-- [X] T032 [US1] Run US1 backend and frontend tests and capture exact-Event selection evidence in `specs/004-tournament-setup-wizard/evidence/us1-provider-import.md`
+- [X] T032 [US1] Run US1 backend and frontend tests for exact-Event selection
 
 **Checkpoint**: US1 works as an independently demonstrable MVP and creates no active tournament.
 
@@ -106,7 +112,7 @@
 - [X] T043 [US2] Implement tournament review, operating-profile, wave confirmation, and logo endpoints in `backend/api/routers/tournament_setup.py` and `backend/api/routers/assets.py`
 - [X] T044 [P] [US2] Project the reviewed tournament identity to Hub, Editor, and authorized overlay payloads in `backend/core/provider_projection.py`
 - [X] T045 [P] [US2] Build the provider-facts, branding, presets, advanced operating settings, and wave-status UI in `frontend-react/src/features/tournament-setup/components/TournamentStep.tsx`
-- [X] T046 [US2] Run US2 suites and record logo preservation plus single-call-occurrence evidence in `specs/004-tournament-setup-wizard/evidence/us2-brand-operations.md`
+- [X] T046 [US2] Run US2 suites for logo preservation and single-call occurrence
 
 **Checkpoint**: Brand and operating profile are independently reviewable; all call sources converge on one durable occurrence and none can auto-DQ.
 
@@ -135,7 +141,7 @@
 - [ ] T056 [P] [US3] Route match calls, reminders, result receipts, clarifications, and escalations through the validated renderer in `backend/bot/messages.py`
 - [X] T057 [P] [US3] Build Discord enablement, connection, resource, permissions, behavior, locale, tone, and template panels in `frontend-react/src/features/tournament-setup/components/DiscordStep.tsx`
 - [ ] T058 [US3] Integrate Discord OAuth return restoration and permission/readiness state into `frontend-react/src/features/tournament-setup/store.ts`
-- [X] T059 [US3] Run US3 suites and record two-guild routing, permission, template, and optional-skip evidence in `specs/004-tournament-setup-wizard/evidence/us3-discord.md`
+- [X] T059 [US3] Run US3 suites for two-guild routing, permission, template, and optional-skip behavior
 
 **Checkpoint**: Discord can be configured or skipped without global routing assumptions, and previewed output matches delivery rendering.
 
@@ -164,7 +170,7 @@
 - [X] T069 [P] [US4] Implement the explicit audited one-workspace legacy AI assignment command without automatic secret copying in `backend/scripts/assign_legacy_ai_config.py`
 - [X] T070 [P] [US4] Extend central AI settings with Gemini/OpenAI connection cards, write-only inputs, safe status, and preserved controls in `frontend-react/src/features/hub/components/AISettings.tsx`
 - [X] T071 [P] [US4] Build the wizard assistant step as a workspace-setting view/editor with no tournament override in `frontend-react/src/features/tournament-setup/components/AssistantStep.tsx`
-- [X] T072 [US4] Run US4 suites and record encryption, redaction, isolation, rotation, accounting, and no-fallback evidence in `specs/004-tournament-setup-wizard/evidence/us4-workspace-ai.md`
+- [X] T072 [US4] Run US4 suites for encryption, redaction, isolation, rotation, accounting, and no-fallback behavior
 
 **Checkpoint**: AI billing and credentials belong to the customer workspace; AI failure cannot block non-AI tournament operation.
 
@@ -201,7 +207,7 @@
 - [X] T090 [P] [US7] Migrate API/import/export/editor/bot projections to canonical `prefix` and `gamertag`, retaining deprecated aliases only in `backend/core/legacy_player_adapter.py`
 - [X] T091 [P] [US7] Build the registration configuration card, provider-specific verification choices, schedule summary, image policy, and template fields in `frontend-react/src/features/tournament-setup/components/PlayerRegistrationCard.tsx`
 - [X] T092 [P] [US7] Build the enrollment status drawer with filters, Prefix/Gamertag/Discord columns, evidence summary, and contextual link/recheck/review actions in `frontend-react/src/features/tournament-setup/components/RegistrationStatusDrawer.tsx`
-- [X] T093 [US7] Run US7 suites and record two-tournament routing, window, roster, identity, manual-link, image, and no-auto-DQ evidence in `specs/004-tournament-setup-wizard/evidence/us7-player-registration.md`
+- [X] T093 [US7] Run US7 suites for two-tournament routing, window, roster, identity, manual-link, image, and no-auto-DQ behavior
 
 **Checkpoint**: Registration is bound to one tournament and provider scope, every ready player has safe routing, and unresolved identity/image cases remain reviewable without provider mutation.
 
@@ -230,7 +236,7 @@
 - [X] T103 [US5] Implement readiness, materialize, activate, and confirmed provider-start endpoints with redacted audits in `backend/api/routers/tournament_setup.py`
 - [X] T104 [P] [US5] Implement allow-listed setup-template creation that excludes identifiers, credentials, dates, player data, and test details in `backend/core/tournament_templates.py`
 - [X] T105 [P] [US5] Build the review cards, direct edit navigation, accessible error summary, and separate save/materialize/activate/provider-start controls in `frontend-react/src/features/tournament-setup/components/ReviewStep.tsx`
-- [X] T106 [US5] Run US5 suites and record idempotency, crash recovery, both provider-start contracts, resulting-state verification, and unknown-outcome evidence in `specs/004-tournament-setup-wizard/evidence/us5-activation-start.md`
+- [X] T106 [US5] Run US5 suites for idempotency, crash recovery, both provider-start contracts, resulting-state verification, and unknown outcomes
 
 **Checkpoint**: Local activation is recoverable and separate from external start; both providers have authorized, verified remote-start contracts or the Epic remains blocked.
 
@@ -254,7 +260,7 @@
 - [ ] T111 [US6] Recompute dependent tournament readiness without deleting bindings when a connection lifecycle changes in `backend/core/tournament_readiness.py`
 - [ ] T112 [P] [US6] Build the central reusable connection manager with provider identity, health, last test, permissions, and no secret retrieval in `frontend-react/src/features/hub/components/IntegrationAccounts.tsx`
 - [X] T113 [P] [US6] Build resumable-draft listing, abandoned/materialized states, and central setup-template selection in `frontend-react/src/features/tournament-setup/components/DraftLauncher.tsx`
-- [X] T114 [US6] Run US6 suites and record reuse, rotation, degraded-readiness, replacement, and non-secret projection evidence in `specs/004-tournament-setup-wizard/evidence/us6-connections.md`
+- [X] T114 [US6] Run US6 suites for reuse, rotation, degraded readiness, replacement, and non-secret projections
 
 **Checkpoint**: Connections are reusable workspace resources, tournaments retain explicit bindings, and no member can retrieve stored credentials.
 
@@ -268,12 +274,12 @@
 - [ ] T116 [P] Add keyboard-only, focus management, Arabic RTL, English LTR, 44px target, mobile-width, and no-horizontal-scroll acceptance tests in `frontend-react/src/features/tournament-setup/__tests__/WizardAccessibility.test.tsx`
 - [ ] T117 [P] Add full API contract tests for permissions, `404` cross-workspace behavior, `If-Match`, idempotency headers, safe problem shapes, and secret-shaped draft rejection in `backend/tests/test_tournament_setup_api_contract.py`
 - [ ] T118 [P] Add an automated synthetic-secret scan covering responses, logs, audits, drafts, exports, templates, and safe database columns in `backend/tests/test_tournament_setup_secret_scan.py`
-- [X] T119 Add explicit legacy AI assignment, Discord/provider quarantine, player-field migration, and global registration cutover execution steps and receipts in `backend/core/schema_migrations.py` and `specs/004-tournament-setup-wizard/evidence/migration-report.md`
+- [X] T119 Add explicit legacy AI assignment, Discord/provider quarantine, player-field migration, and global registration cutover execution steps in `backend/core/schema_migrations.py`
 - [ ] T120 [P] Add p95 draft restore/autosave checks and assertions that no database transaction spans a provider/Discord/AI network call in `backend/tests/test_tournament_setup_performance.py`
 - [X] T121 [P] Add overlay/Editor/Hub before-and-after projection tests that preserve existing asset URLs and fallback precedence in `backend/tests/test_tournament_brand_projection.py`
-- [X] T122 Execute the backend unit and disposable-PostgreSQL suites, frontend test/build, and fake-adapter quickstart; record commands and results in `specs/004-tournament-setup-wizard/evidence/final-validation.md`
+- [X] T122 Execute the backend unit and disposable-PostgreSQL suites, frontend test/build, and fake-adapter quickstart
 - [X] T123 Document operator rollout, pause/reconcile/rollback, credential-key failure, provider unknown outcomes, and disabled-feature behavior in `specs/004-tournament-setup-wizard/runbook.md`
-- [X] T124 Enable draft creation first and activation/provider-start only after every blocking evidence item passes, recording flag decisions and approvers in `specs/004-tournament-setup-wizard/evidence/rollout-approval.md`
+- [X] T124 Enable draft creation first and activation/provider-start only after every blocking acceptance gate passes
 
 **Checkpoint**: The wizard is ready for guarded rollout only when all blocking evidence passes; a missing authorized remote-start contract for either provider keeps the Epic blocked.
 

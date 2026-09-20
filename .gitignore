@@ -186,8 +186,10 @@ logs/
 # Documents
 *.doc
 *.md
+!README.md
 !specs/**/*.md
 !AGENTS.md
 !docs/CHANGELOG.md
+!docs/LIVE_TEST_RUNBOOK.md
 .doc/
 .docs/

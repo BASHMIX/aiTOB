@@ -1,90 +1,50 @@
 # AI Tournament Organizer Bot
 
-## Architecture
+Read `README.md` before changing the repository. It is the canonical runtime,
+setup, testing, and operating-policy reference.
 
-**3 services** managed by `run.py` (color-coded, parallel logs):
-- **API** — FastAPI on `:8000` (`uvicorn backend.api.main:app --reload`)
-- **BOT** — Discord bot (`backend/bot/main.py`)
-- **VITE** — React dev server on `:5173` (proxies `/api`, `/static`, `/assets`, `/ws` to `:8000`)
+## Non-negotiable architecture
 
-Stop all with `python stop.py` (reads `.pids.json`, kills process trees via psutil).
+- Python 3.12+, FastAPI, discord.py, React/Vite, and PostgreSQL 17+.
+- `DATABASE_URL` is required. Do not add an embedded database, fallback store,
+  dual write, or file-backed test fixture.
+- `run.py` starts API, BOT, and VITE; `stop.py` stops their process trees.
+- Tests require `AITOB_PG_TEST_URL` pointing to a disposable PostgreSQL server.
+- Browser authentication is an HttpOnly account session. Treat Hub-password
+  headers as an explicitly enabled compatibility boundary only.
+- Provider state is authoritative for bracket progression. Keep provider state,
+  Hub match lifecycle, and `broadcast_state` separate.
+- Never fabricate a Start.gg winner. Start.gg owns native Double-DQ; Challonge
+  offers only organizer-approved single-player DQ.
 
-Docker: `docker compose up --build` — multi-stage builds (api / bot targets).
+## Key locations
 
-## Stack
+- API and WebSockets: `backend/api/`
+- PostgreSQL repositories/schema: `backend/core/database.py` and
+  `backend/core/database_schema.py`
+- Provider contracts/adapters: `backend/core/contracts/` and
+  `backend/core/providers/`
+- Match lifecycle/attendance: `backend/core/match_state.py` and
+  `backend/core/match_attendance.py`
+- Discord bot: `backend/bot/`
+- Frontend: `frontend-react/`
+- Executable workflow definition: `docs/workflows.json`
+- Open provider consolidation: `specs/002-challonge-support/phase-11-legacy-removal-plan.md`
 
-| Layer | Tech | Key files |
-|-------|------|-----------|
-| Backend | Python 3.12+, FastAPI, psycopg, psutil | `backend/api/main.py` — entrypoint & WS |
-| Database | PostgreSQL via psycopg | `backend/core/database.py` — schema + all queries |
-| Models | Pydantic v2 | `backend/core/models.py` |
-| Discord | discord.py 2.x | `backend/bot/main.py` — commands, threads, hub-agent |
-| AI | LangGraph + langchain-google-genai | `backend/bot/agent/` — match referee graph |
-| Brackets | Start.gg API | `backend/core/startgg_client.py`, `backend/bot/bracket_sync.py` |
-| Frontend | React 19 + TypeScript 6 + Vite 8 + Tailwind 3 | `frontend-react/` — `@/` alias to `src/` |
-| State | Zustand | `frontend-react/src/store/useHubStore.ts`, `useEditorStore.ts` |
-| Auth | Hub password via Bearer / X-Hub-Password | `backend/api/auth.py` |
-
-## Dev commands
+## Commands
 
 ```powershell
-# Start all 3 services
 python run.py
-
-# Stop all services
 python stop.py
 
-# Python deps — installed via pip; dev deps via uv
-pip install -r requirements.txt
-uv sync --dev          # includes pytest, pytest-asyncio
+$env:AITOB_PG_TEST_URL = 'postgresql://user:password@127.0.0.1:5433/disposable_db'
+python -m pytest backend/tests -q
 
-# Frontend
-cd frontend-react
-npm install
-npm run dev            # Vite :5173
-npm run build          # tsc && vite build
+Set-Location frontend-react
+npm test
+npm run build
 ```
 
-## Frontend routes
-
-- `/login` — enter hub password
-- `/admin/hub` — dashboard (guarded by AuthGuard)
-- `/admin/editor` — overlay editor (guarded by AuthGuard)
-- `/obs` — OBS browser source (no auth, reads overlay config)
-
-## Key conventions
-
-- Frontend proxies ALL `/api`, `/static`, `/assets`, `/ws` to backend in dev
-- Axios interceptor in `src/main.tsx` injects hub password as Bearer + X-Hub-Password
-- Hub password stored in DB (`global_settings` table), fallback `HUB_PASSWORD` env var
-- `.env` is real secrets (in .gitignore), `.env.example` is template
-- Database auto-creates + migrates on startup (`init_db()`)
-- Frontend uses `verbatimModuleSyntax` + `erasableSyntaxOnly` (TS 6.0 strict)
-- LangGraph agent at `backend/bot/agent/graph.py` — match referee with tool calling
-- Hub agent polls every 3s for pending commands (`backend/bot/main.py:poll_hub_commands`)
-- WebSocket at `/ws/hub` — subscribe to tournament_slug for live updates
-- WebSocket at `/ws/overlay/{slot}` — per-slot overlay broadcast
-
-## Testing
-
-```powershell
-# Run all tests
-pytest
-
-# Run with asyncio support
-pytest -p pytest_asyncio
-```
-
-## Spec Kit workflow
-
-Project uses [Spec Kit](https://opencode.ai) with git extension:
-- `speckit.specify` → `speckit.plan` → `speckit.tasks` → `speckit.implement`
-- Feature branches: numbered (`001-feature-name`)
-- Auto-commit hooks enabled for most steps
-- Config at `.specify/extensions/git/git-config.yml`
-
-<!-- SPECKIT START -->
-For additional context about technologies to be used, project structure,
-shell commands, and other important information, read the implementation plan:
-`specs/004-tournament-setup-wizard/plan.md`
-<!-- SPECKIT END -->
+Preserve unrelated user changes. Use PostgreSQL-native concurrency and
+transactions, keep external calls outside database transactions, and run the
+focused tests plus the frontend production build for affected behavior.

@@ -3,7 +3,7 @@
 1. Keep `TOURNAMENT_SETUP_WIZARD_ENABLED=false` while the feature-003
    PostgreSQL/workspace ownership gate is incomplete.
 2. Enable draft creation only after migration receipts, secret-redaction tests,
-   and no-automatic-DQ regression tests pass.
+   and no-speculative-DQ/provider-reconciliation regression tests pass.
 3. Reconcile provider snapshots before retrying an unknown external outcome.
    A failed or timed-out provider start is never retried blindly.
 4. Rotate a workspace AI key through the write-only connection endpoint. A

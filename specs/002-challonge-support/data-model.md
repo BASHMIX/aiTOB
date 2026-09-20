@@ -155,7 +155,7 @@ workflow/audit path and must not create a provider command.
 | `payload`, `deduplication_key` | Safe event data and idempotency key for Discord/OBS handling. |
 | `status`, `attempts`, `next_attempt_at`, `completed_at` | Crash-safe retry state and completion evidence. |
 
-Hub workflow transition plus intended outbox event are inserted in one SQLite
+Hub workflow transition plus intended outbox event are inserted in one PostgreSQL
 transaction. Event types include Discord Call, thread create/update, DQ warning, OBS
 update, match-message close, and next-match announcement. The worker may retry safely;
 a local `called` row without a completed Call event remains visibly pending/failed rather

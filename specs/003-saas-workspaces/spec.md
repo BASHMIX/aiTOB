@@ -84,7 +84,10 @@ An organization can use a clearly identified free service state or assigned plan
 - A stale browser-source link, disabled membership, expired session, or consumed recovery code must fail without disclosing data.
 - A backup restore must retain access to encrypted secrets through a separately protected service key; it must not create a hidden alternate source of truth.
 - Email delivery may be unavailable in development; the system must not claim that verification, invitation, or recovery mail was delivered.
-- Manual single-player DQ remains available to authorized tournament staff; AI DQ and auto-DQ remain prohibited.
+- Authorized single-player DQ remains available to tournament staff. Start.gg
+  may also execute the verified exactly-one-attendee DQ path after its mirrored
+  deadline; zero attendance remains provider-owned native Double-DQ. AI-selected
+  or speculative local DQ remains prohibited.
 
 ## Requirements *(mandatory)*
 
@@ -106,7 +109,10 @@ An organization can use a clearly identified free service state or assigned plan
 - **FR-014**: The system MUST provide organization-level plans, subscriptions, entitlements, and usage limits without inventing commercial prices, trials, or live payment collection; when a specific payment gateway is configured, it MUST support a separately tested sandbox checkout/webhook path.
 - **FR-015**: The system MUST preserve read access and retained data when an entitlement expires; it MUST not delete organizational data solely because of plan state.
 - **FR-016**: The system MUST provide a documented, tested backup, retention, restore, and cutover/rollback procedure that accounts for external Discord and provider effects separately from database restoration.
-- **FR-017**: The system MUST keep manual authorized result reporting and single-player DQ in their approved paths; it MUST prohibit AI approval/execution, AI DQ, and auto-DQ.
+- **FR-017**: The system MUST keep authorized result reporting and single-player
+  DQ in their approved provider-specific paths. It MUST prohibit AI
+  approval/execution and speculative local DQ, never fabricate a winner, and
+  reconcile provider-owned progression.
 
 ### Key Entities
 

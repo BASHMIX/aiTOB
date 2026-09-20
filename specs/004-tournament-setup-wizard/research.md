@@ -236,19 +236,20 @@ duplicate image validation and retention.
 ## 12. Safe presets and automatic disqualification
 
 **Decision**: Seed manual and assisted operating profiles from versioned,
-server-owned defaults. Both require human result approval. Attendance expiry can
-send reminders and organizer escalations only. Remove the current automatic-DQ
-timer path, default-true schema/API field, and UI toggle before enabling assisted
-setup.
+server-owned defaults. Both require human result approval. Remove the generic
+automatic-DQ setting, default-true schema/API field, and UI toggle. Attendance
+is provider-specific: Start.gg owns zero-attendee Double-DQ, its verified
+exactly-one-attendee path may run after the mirrored deadline, and Challonge
+offers authorized single-player DQ only.
 
-**Rationale**: This is required by the project constitution. The current code can
-still call `auto_dq_match` for some paths, so merely hiding the option is
-insufficient.
+**Rationale**: This is required by the project constitution. The deprecated
+`auto_dq_match` entry point is now a non-mutating review shim; every real action
+must use explicit attendance state and the provider-specific command path.
 
 **Alternatives considered**: Permanently forcing the old flag false would leave
-dead and misleading behavior. Delegating DQ to AI or a local timer is prohibited.
-Provider-owned check-in state may be displayed, but aiTOB does not infer that it
-authorizes a DQ.
+dead and misleading behavior. Delegating winner choice to AI or a speculative
+local timer is prohibited. aiTOB acts only on verified attendance and deadline
+state, then confirms the provider result.
 
 ## 13. Readiness, materialization, activation, and external effects
 

@@ -301,9 +301,11 @@ asset deletion until it is replaced/removed.
 | `created_at`, `updated_at`, `updated_by` | Audit fields |
 
 No `auto_dq_enabled` field is permitted in the new profile. Existing tournament
-rows are migrated to safe reminder/escalation behavior and the executable
-automatic-DQ path is removed. Manual single-player DQ remains in its authorized
-operation model.
+rows are migrated away from the old generic automatic-DQ behavior. Attendance
+uses explicit per-entrant state and provider-specific policy: authorized manual
+single-player DQ remains available, Start.gg may resolve exactly one verified
+attendee after the mirrored provider deadline, and zero-attendee progression is
+read back from Start.gg. No AI or generic local timer chooses a winner.
 
 ## `tournament_discord_bindings`
 

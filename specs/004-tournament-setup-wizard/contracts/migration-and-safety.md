@@ -65,19 +65,22 @@ records contain installation/guild identity and encrypted user OAuth refresh
 material only when needed for discovery. Existing per-account bot tokens are not
 silently treated as shared-bot installations.
 
-## Automatic-DQ removal
+## Generic automatic-DQ removal
 
-The implementation must remove executable attendance-timeout calls to
-`auto_dq_match`, change new/default tournament behavior to reminders and human
-escalation, and remove the setting from new API/UI contracts. Existing stored
-`auto_dq_enabled=true` rows are explicitly migrated to false before the new
-dispatcher runs. Manual authorized single-player DQ remains supported.
+The implementation removes executable mutation behavior from `auto_dq_match`
+and removes the generic setting from new API/UI contracts. Existing stored
+`auto_dq_enabled=true` rows are migrated to false. Provider-specific attendance
+uses the shared command service: Start.gg keeps zero attendance on its native
+Double-DQ path, resolves exactly one verified attendee only after the mirrored
+deadline, and starts Hub/broadcast play when both attend. Challonge supports
+authorized single-player DQ only.
 
 Acceptance proves:
 
-- no timer, restart recovery, Discord interaction, or AI proposal disqualifies a
-  player;
-- a timeout produces reminders/escalation only;
+- no AI proposal, unverified identity, or speculative local timer selects a
+  winner;
+- deadline resolution uses fresh entrant/provider state and verifies the remote
+  result before local completion;
 - provider-native completed/DQ state may synchronize inward but is never claimed
   as an aiTOB automatic action.
 - provider-verified or explicitly organizer-confirmed Start-in-wave waits for the

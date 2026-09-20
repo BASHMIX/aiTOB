@@ -1,7 +1,7 @@
 """Irreversibly remove verified legacy integration credentials.
 
-Run only after `migrate_integration_accounts.py` reports success and both provider
-and Discord acceptance checks are recorded.  The caller must create a backup first.
+Run only after both provider and Discord encrypted-account checks succeed. The
+caller must create a PostgreSQL backup first.
 """
 from __future__ import annotations
 

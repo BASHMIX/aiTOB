@@ -178,7 +178,10 @@ An organizer configures a tournament-specific Discord registration period. Durin
 - The workspace encryption service is unavailable; secret changes and AI use fail closed while non-secret draft editing remains available.
 - A user loses permission while the wizard is open; the next protected action is rejected and no stale session can write integration changes.
 - Automatic match dispatch is requested while identities are unverified, provider data is stale, a match is on stream, or the configured automatic-call stop threshold has been reached.
-- A Discord attendance timeout expires; the system reminds and escalates but does not automatically disqualify a player.
+- A Discord attendance timeout expires; the system follows the bound provider
+  policy: Start.gg keeps zero attendees provider-owned and may resolve exactly
+  one verified attendee after the mirrored deadline, while Challonge requires
+  an authorized single-player DQ. It never uses AI or guesses a winner.
 - The remote bracket starts, finishes, or changes after review but before activation; readiness must be refreshed before any state-dependent action.
 - A Start.gg or Challonge start request times out after the provider may have accepted it; the outcome becomes unknown and must be reconciled from a fresh provider read before any retry.
 - Start.gg synchronization and a Dashboard action observe or create the same `CALLED` transition concurrently; one durable Discord call is created for that match occurrence and duplicate observations do not create another message.
@@ -214,7 +217,11 @@ An organizer configures a tournament-specific Discord registration period. Durin
 - **FR-018**: The setup flow MUST offer manual and assisted operating presets, show the behaviors included in each preset, and allow tournament-specific overrides under an advanced section.
 - **FR-019**: Operating settings MUST include attendance source and duration, reminder behavior, organizer escalation, result approval policy, automatic call enablement, maximum concurrent bot-managed matches, automatic-call stop threshold, and stream-match handling where applicable.
 - **FR-020**: The automatic-call stop threshold MUST be described and calculated as a count of unfinished matches rather than remaining players or a bracket label such as Top 8.
-- **FR-021**: Automatic disqualification and AI-controlled disqualification MUST remain prohibited; attendance expiration MUST result in notification or escalation for an authorized human decision.
+- **FR-021**: Generic automatic and AI-controlled winner selection MUST remain
+  prohibited. Attendance expiration MUST follow an explicit provider policy,
+  verify entrants and remote state, and reconcile the provider result. Start.gg
+  zero-attendee Double-DQ remains provider-owned; Challonge exposes no
+  Double-DQ action.
 - **FR-022**: The system MUST refuse assisted dispatch when required player identity links, fresh provider state, resolved entrants, or other readiness conditions are missing.
 - **FR-023**: Discord setup MUST be optional and MUST support reusable workspace connections, server selection, tournament-specific destinations, moderator or organizer escalation, and permission verification.
 - **FR-024**: The system MUST persist an explicit tournament-to-Discord-account binding and MUST not infer a destination from unrelated or legacy global settings.

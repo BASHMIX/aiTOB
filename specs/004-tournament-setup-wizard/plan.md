@@ -38,10 +38,10 @@ calls its players once even when both sources observe it concurrently.
 storage, discord.py 2.x, LangGraph/LangChain provider adapters, React Router 7,
 Zustand 5, Axios, Tailwind CSS 3
 
-**Storage**: PostgreSQL 17 is the sole runtime and test store. Former local-store support is
-limited to explicit tests and migration/recovery tooling. Tournament logos and
-player broadcast images reuse the validated workspace-owned image store and
-current Cloudinary/local URL precedence.
+**Storage**: PostgreSQL 17 is the sole runtime, test, backup, restore, and
+maintenance store. There is no embedded-store adapter or fallback. Tournament
+logos and player broadcast images reuse the validated workspace-owned image
+store and current Cloudinary/local URL precedence.
 
 **Testing**: pytest/pytest-asyncio; disposable PostgreSQL integration tests for
 workspace isolation, concurrency, activation, migration, and outbox behavior;
@@ -64,7 +64,7 @@ never hold a database transaction open during a network call
 session; secrets never enter draft JSON, browser state, URLs, logs, errors, audit
 details, exports, or templates; encrypted credentials fail closed without the
 service key; activation and external effects are idempotent; no automatic or AI
-disqualification; no silent provider Event selection; WCAG-oriented keyboard and
+winner selection; no silent provider Event selection; WCAG-oriented keyboard and
 responsive behavior; preserve existing overlay asset URLs and precedence;
 registration windows and challenge expiry use server time; player fields use the
 canonical `prefix` and `gamertag` vocabulary; configured Gamertag matching is
@@ -84,14 +84,14 @@ tournament-scoped enrollments while reusing verified Workspace player identities
 | Principle | Design evidence | Gate |
 |---|---|---|
 | I. Workspace isolation | Drafts, integration accounts, settings, bindings, readiness results, assets, usage, WebSocket messages, jobs, and bot routing derive `workspace_id` from the authenticated principal or claimed job. Resource lookup uses `(workspace_id, id)` and cross-workspace results are indistinguishable from not found. | PASS |
-| II. PostgreSQL source of truth | Runtime tables, transactions, tests, and maintenance tools target PostgreSQL exclusively, with no fallback or dual write. Completion of feature 003 PostgreSQL/workspace identity gates is a blocking prerequisite. | PASS |
+| II. PostgreSQL source of truth | Runtime tables, transactions, tests, and maintenance tools target PostgreSQL exclusively, with no fallback or dual write. The remaining Feature 004 ownership, foreign-key, and scoped-uniqueness contract failures are blocking. | OPEN |
 | III. Secret and external-effect safety | Gemini/OpenAI credentials use authenticated encryption in `integration_credentials`; OAuth state is hashed and short lived; all public projections are redacted. Activation commits local state first and queues provider/Discord work through idempotent outbox commands. Unknown outcomes reconcile before retry. | PASS |
 | IV. Assets and approved operations | Tournament logos and player images reuse deterministic validation and the workspace-owned image store without hidden AI calls. Attendance and registration failures notify or escalate only. Result reporting and manual single-player DQ keep their authorization and approval paths; automatic/AI DQ is removed and regression-tested. | PASS |
 | V. Verification before cutover | The rollout requires migration fidelity, two-workspace isolation, encrypted-secret, PostgreSQL concurrency, bot routing, provider failure, activation idempotency, asset preservation, and manual acceptance evidence. | PASS |
 
-No constitution exception is required. Implementation MUST stop before wizard
-cutover if the workspace identity/PostgreSQL gates from feature 003 are not
-complete or if the automatic-DQ regression gate fails.
+No constitution exception is required. Rollout MUST remain blocked until the
+open Feature 004 PostgreSQL schema contracts pass and the attendance regression
+suite proves that no AI or speculative timer invents a winner.
 
 ## Project Structure
 
@@ -244,10 +244,13 @@ local activation remains separate and available.
 ### 6. Safe operating profile and future AI capabilities
 
 Manual and assisted presets are immutable seeds copied to a tournament profile,
-then edited through explicit overrides. Both use human result approval. Attendance
-expiry can remind and escalate but cannot disqualify. Existing automatic-DQ
-fields, timer calls, API wording, and UI toggles are removed or permanently
-disarmed as a prerequisite.
+then edited through explicit overrides. Both use human result approval. The old
+generic automatic-DQ setting and AI-selected DQ are removed. Start.gg attendance
+instead uses explicit per-entrant state: zero attendance remains native
+provider-owned Double-DQ, exactly one verified attendee may use the documented
+single-player DQ path after the mirrored deadline, and both present starts the
+Hub/broadcast match automatically. Challonge exposes authorized single-player DQ
+only.
 
 Translation, player conversation, result extraction, opponent confirmation, and
 dispute handling remain visibly unavailable. The data model reserves no generic
@@ -384,8 +387,8 @@ weakened.
 
 ## Post-Design Constitution Re-check
 
-The completed data model and contracts keep workspace ownership on every new
-resource, place runtime state in PostgreSQL, keep credentials behind authenticated
-encryption, separate local commits from idempotent external effects, preserve the
-validated image path, and prohibit automatic/AI DQ. No unresolved clarification
-or constitutional violation remains.
+The design keeps workspace ownership on every new resource, places runtime state
+in PostgreSQL, keeps credentials behind authenticated encryption, separates
+local commits from idempotent external effects, preserves the validated image
+path, and prohibits AI/speculative winner selection. Implementation verification
+still has the schema-contract blockers listed in the Phase 11 plan.

@@ -59,18 +59,12 @@ to it.
 
 ## 4. Backend tests
 
-Fast local suite:
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest backend/tests -q
-```
-
-Required PostgreSQL suite uses a disposable administrator DSN; it must never
-target the application database:
+All tests use PostgreSQL. Configure a disposable administrator DSN; it must
+never target the application database:
 
 ```powershell
 $env:AITOB_PG_TEST_URL = 'postgresql://…/aitob_wizard_test'
-.\.venv\Scripts\python.exe -m pytest backend/tests --postgres -q
+.\.venv\Scripts\python.exe -m pytest backend/tests -q
 ```
 
 The feature-specific acceptance suite must cover:
@@ -111,8 +105,10 @@ The feature-specific acceptance suite must cover:
   validation without a global or hidden Gemini/OpenAI request.
 - Duplicate roster snapshots, bot interactions, scheduled open/close jobs, and
   role grants remain idempotent across restart and two simultaneous tournaments.
-- Attendance timeout/restart/Discord/AI paths never call automatic DQ; reminders
-  and human escalation still occur.
+- Attendance timeout/restart/Discord/AI paths never guess a winner. Start.gg
+  deadline handling verifies per-entrant attendance and provider state; zero
+  attendance remains provider-owned and exactly one attendee uses only the
+  verified single-player DQ path.
 
 Search test output, captured logs, safe database columns, API responses, audit,
 error telemetry, exports, drafts, and templates for the submitted synthetic
@@ -147,7 +143,7 @@ Use local fake adapters or recorded redacted fixtures. Then:
 3. Resolve a multi-Event tournament and verify Next remains blocked until choice.
 4. Add local name/logo/color and confirm the Editor/overlay preview projection.
 5. Configure assisted operation and confirm the summary contains reminders and
-   human escalation, with no automatic DQ.
+   human escalation, with no AI or generic timer selecting a winner.
 6. Skip Discord and AI, save the tournament, and activate local management.
 7. Create another draft, attach fake Discord resources and a fake Gemini/OpenAI
    connection, preview templates, test the connection, and activate.
@@ -210,7 +206,7 @@ Before enabling the wizard activation flag, attach:
 - activation/outbox crash recovery evidence;
 - image/overlay before-and-after comparison;
 - keyboard/RTL/mobile acceptance;
-- no-automatic-DQ and human result-approval evidence;
+- no-speculative-DQ, provider reconciliation, and human result-approval evidence;
 - registration-window, exact entrant-link, hashed challenge, image validation,
   two-tournament routing, and idempotent schedule/role evidence;
 - explicit status of any legacy AI/Discord records: assigned, quarantined, or
