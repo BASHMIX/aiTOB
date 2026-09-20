@@ -110,6 +110,14 @@ POSTGRES_WORKSPACE_TABLES = (
     "provider_snapshot_cache", "stations", "tournament_player_links",
     "tournaments", "user_sessions", "workflow_outbox",
     "workspace_entitlements", "workspace_invitations", "workspace_memberships",
+    "tournament_setup_drafts", "integration_connection_health",
+    "workspace_ai_configs", "provider_scope_bindings", "match_call_occurrences",
+    "tournament_brands", "tournament_operating_profiles", "tournament_discord_bindings",
+    "tournament_registration_configs", "tournament_player_enrollments",
+    "player_identity_verification_challenges", "provider_roster_snapshots",
+    "bot_experience_profiles", "tournament_setup_templates", "tournament_readiness_snapshots",
+    "discord_oauth_states",
+    "provider_oauth_states",
 )
 
 

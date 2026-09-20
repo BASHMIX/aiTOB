@@ -826,7 +826,10 @@ async def _llm_rank_entrants(discord_user: discord.User | discord.Member,
         class _RankResult(BaseModel):
             top: _List[_RankItem] = _Field(description="Up to 3 most likely, best first")
 
-        llm, _ = await _get_llm()
+        # AI ranking is a deliberate assistant use and must resolve the
+        # current workspace's selected BYOK account.  An unscoped call cannot
+        # fall back to a process/global key.
+        llm, _ = await _get_llm(ACTIVE_DISCORD_WORKSPACE_ID)
         ranker = llm.with_structured_output(_RankResult)
 
         # Compact prompt — bound at ~50 candidates so it stays cheap.

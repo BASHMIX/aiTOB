@@ -77,10 +77,18 @@ async def test_enabled_flags_use_only_the_v2_read_snapshot_and_keep_same_local_w
 
     result = await manager.sync_bracket("fixture")
 
-    assert result == {
-        "sets": [{"id": "set-1", "state": int(ProviderSetState.CALLED), "round": "", "fullRoundText": "", "identifier": None, "event_id": "", "event_name": "", "phaseGroup": {"displayIdentifier": ""}, "p1": "TBD", "p2": "TBD", "p1_avatar": None, "p2_avatar": None, "p1_eid": None, "p2_eid": None}],
-        "reason": "manual",
-    }
+    assert result["reason"] == "manual"
+    assert result["sets"] == [{
+        "id": "set-1", "state": int(ProviderSetState.CALLED),
+        "aitob_state": "called", "aitob_state_code": int(ProviderSetState.CALLED),
+        "state_source": "aitob", "provider_set_id": None,
+        "provider_state_raw": None, "provider_revision": None,
+        "provider_updated_at": None, "round": "", "fullRoundText": "",
+        "identifier": None, "event_id": "", "event_name": "",
+        "phaseGroup": {"displayIdentifier": ""}, "p1": "TBD", "p2": "TBD",
+        "p1_avatar": None, "p2_avatar": None, "p1_eid": None, "p2_eid": None,
+        "winner_id": None, "p1_score": None, "p2_score": None,
+    }]
     sync_active_matches.assert_awaited_once()
     save_snapshot.assert_awaited_once_with("fixture", result["sets"])
     assert manager._v2_coordinator is not None

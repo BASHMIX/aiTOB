@@ -5,6 +5,7 @@ interface Tournament {
   name: string;
   game: string;
   raw_data: string;
+  event_id?: string | null;
   auto_dq_enabled?: boolean;
   dq_timer_seconds?: number;
   bot_manage_limit?: string;
@@ -53,6 +54,9 @@ interface Match {
   p1_entrant_id?: string;
   p2_entrant_id?: string;
   is_external?: boolean;
+  p1_prefix?: string;
+  p2_prefix?: string;
+  /** Deprecated aliases retained while old saved overlays are migrated. */
   p1_team?: string;
   p2_team?: string;
   p1_avatar?: string;
@@ -65,6 +69,8 @@ interface Match {
   phase_group?: string;
   p1_cfn?: string;
   p2_cfn?: string;
+  p1_country?: string;
+  p2_country?: string;
   p1_ready?: boolean;
   p2_ready?: boolean;
   called_at?: string;
@@ -109,6 +115,8 @@ interface Station {
   name: string;
   is_stream_station?: boolean;
   event_id?: string;
+  preview_match_id?: string | null;
+  preview_match_json?: string | null;
   overlays?: { overlay_name: string }[];
 }
 

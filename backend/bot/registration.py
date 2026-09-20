@@ -3,9 +3,10 @@ import os
 from backend.core.database import (
     create_or_update_player, get_player, add_hub_command, add_bot_feed,
     sync_player_cfns_to_matches,
+    get_player_avatar_urls, set_player_avatar, retire_media_assets_for_urls,
 )
-from backend.core.image_utils import validate_avatar_quality, validate_avatar_safety
-from backend.core.image_store import store_avatar
+from backend.core.image_utils import validate_avatar_quality
+from backend.core.image_store import store_avatar, delete_stored_avatar
 from backend.bot.messages import get_msg
 
 
@@ -160,16 +161,16 @@ class RegistrationManager:
                 await message.channel.send(f"❌ {msg_q}")
                 return None
 
-            # AI Safety check
-            ok_s, msg_s = await validate_avatar_safety(image_bytes)
-            if not ok_s:
-                await message.channel.send(get_msg("error_safety", lang, reason=msg_s))
-                return None
+            # Registration image handling is deterministic and local.  It must
+            # never consume a workspace AI key or silently call a provider.
 
             # Process + store (Cloudinary when configured, local fallback otherwise).
             p = await get_player(discord_id, workspace_id)
-            filename_id = (p or {}).get('startgg_id') or discord_id
-            saved = await store_avatar(image_bytes, filename_id)
+            old_urls = await get_player_avatar_urls(discord_id, workspace_id)
+            # Discord and Hub uploads use the same stable owner key. Cloudinary
+            # overwrites that object; the fallback store is cleaned after the
+            # new URL has been persisted.
+            saved = await store_avatar(image_bytes, f"player-{discord_id}", fallback_to_database=True)
             # Keep Discord uploads in the same managed-asset ledger as the
             # participant page.  This gives the workspace a durable ownership
             # record and lets the guarded deletion path inspect live references;
@@ -187,6 +188,11 @@ class RegistrationManager:
                     mime_type=getattr(attachment, "content_type", None),
                     byte_size=len(image_bytes),
                 )
+            await set_player_avatar(discord_id, saved, workspace_id)
+            await retire_media_assets_for_urls([url for url in old_urls if url != saved], workspace_id)
+            for old_url in old_urls:
+                if old_url != saved:
+                    await delete_stored_avatar(old_url, preserve_url=saved)
             return saved
 
         except Exception as e:

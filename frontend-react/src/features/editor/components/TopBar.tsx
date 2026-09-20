@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { Save, Edit3, Check, X, Image as ImageIcon, Type, Link as LinkIcon, Undo, Redo } from 'lucide-react';
+import { Save, Edit3, Check, X, Image as ImageIcon, Type, Link as LinkIcon, Undo, Redo, Plus } from 'lucide-react';
 import axios from 'axios';
 import { useEditorStore } from '@/store/useEditorStore';
+import { waitForOverlayCanvasAssets } from '@/utils/overlayAssets';
 
 interface TopBarProps {
   slot: string;
@@ -15,6 +16,8 @@ interface TopBarProps {
 export function TopBar({ slot, stationId, onRename, onSave, onLoadClick, status }: TopBarProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [newName, setNewName] = useState(slot);
+  const [isPreparingSlide, setIsPreparingSlide] = useState(false);
+  const [fontDraft, setFontDraft] = useState('');
   const store = useEditorStore();
 
   const handleRename = () => {
@@ -30,6 +33,18 @@ export function TopBar({ slot, stationId, onRename, onSave, onLoadClick, status 
       alert('Station Browser Source link copied. It follows the station active slide.');
     } catch {
       alert('The station Browser Source link could not be created.');
+    }
+  };
+
+  const playSlide = async () => {
+    if (isPreparingSlide) return;
+    setIsPreparingSlide(true);
+    try {
+      const canvas = document.querySelector<HTMLElement>('[data-overlay-canvas="true"]');
+      await waitForOverlayCanvasAssets(canvas, store.background_url);
+      window.dispatchEvent(new Event('play-slide-preview'));
+    } finally {
+      setIsPreparingSlide(false);
     }
   };
 
@@ -89,12 +104,41 @@ export function TopBar({ slot, stationId, onRename, onSave, onLoadClick, status 
 
           <div className="flex items-center gap-2 bg-[#1a1a1a] rounded px-3 py-1.5 border border-white/5 focus-within:border-accentYellow/50 transition-colors" title="Global Font Family">
             <Type size={14} className="text-white/40" />
-            <input 
-              className="bg-transparent border-none outline-none w-32 placeholder-white/30 text-white" 
-              placeholder="'Inter', sans-serif" 
-              value={store.global_font_family} 
-              onChange={e => store.setGlobalSettings(store.background_url, store.global_font_url, e.target.value)} 
+            <select
+              className="bg-transparent border-none outline-none w-36 text-white text-xs"
+              value={store.global_font_family || ''}
+              onChange={e => {
+                const selected = store.font_library.find(font => font.family === e.target.value);
+                store.setGlobalSettings(store.background_url, selected?.url || store.global_font_url, e.target.value);
+              }}
+              title="Choose a saved global font"
+            >
+              <option className="bg-white text-black" value="">System Default</option>
+              {store.font_library.map(font => <option className="bg-white text-black" key={font.family} value={font.family}>{font.family}</option>)}
+              {store.global_font_family && !store.font_library.some(font => font.family === store.global_font_family) && (
+                <option className="bg-white text-black" value={store.global_font_family}>{store.global_font_family}</option>
+              )}
+            </select>
+            <input
+              className="bg-transparent border-l border-white/10 pl-2 outline-none w-36 placeholder-white/30 text-white text-xs"
+              placeholder="Custom CSS family"
+              value={fontDraft}
+              onChange={e => setFontDraft(e.target.value)}
+              onBlur={() => { if (fontDraft.trim()) store.setGlobalSettings(store.background_url, store.global_font_url, fontDraft.trim()); }}
             />
+            <button
+              type="button"
+              className="text-accentYellow hover:text-white"
+              title="Add current family and Google Font URL to saved list"
+              onClick={() => {
+                const family = (fontDraft.trim() || store.global_font_family).trim();
+                if (!family) return;
+                const next = [...store.font_library.filter(font => font.family !== family), { family, url: store.global_font_url.trim() }];
+                store.setFontLibrary(next);
+                store.setGlobalSettings(store.background_url, store.global_font_url, family);
+                setFontDraft('');
+              }}
+            ><Plus size={13} /></button>
           </div>
         </div>
       </div>
@@ -123,11 +167,12 @@ export function TopBar({ slot, stationId, onRename, onSave, onLoadClick, status 
         </div>
 
         <button 
-          onClick={() => window.dispatchEvent(new Event('play-slide-preview'))}
+          onClick={playSlide}
+          disabled={isPreparingSlide}
           className="flex items-center gap-2 bg-[#00ffcc]/20 hover:bg-[#00ffcc]/30 text-[#00ffcc] border border-[#00ffcc]/40 px-4 py-1.5 rounded-full text-sm font-bold transition-all hover:scale-105 active:scale-95"
           title="Play PowerPoint slide animation sequence for all elements"
         >
-          ▶ Play Slide
+          {isPreparingSlide ? 'Preparing Images…' : '▶ Play Slide'}
         </button>
 
         <button 

@@ -3,9 +3,15 @@ import { ParticipantsTable } from './ParticipantsTable';
 import { useHubStore } from '@/store/useHubStore';
 import axios from 'axios';
 
+function parseServerTimestamp(value: string): Date {
+  const normalized = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value) ? value : `${value}Z`;
+  return new Date(normalized);
+}
+
 export function TournamentSettings() {
-  const { currentSlug, setCurrentSlug, tournaments, providerProfile, setProviderProfile } = useHubStore();
+  const { currentSlug, currentEventId, events, setCurrentSlug, tournaments, providerProfile, setProviderProfile } = useHubStore();
   const currentTournament = tournaments.find(t => t.slug === currentSlug);
+  const selectedEvent = events.find(event => String(event.id) === String(currentEventId));
   let tournamentMeta: any = {};
   try { tournamentMeta = currentTournament?.raw_data ? JSON.parse(currentTournament.raw_data) : {}; } catch { /* malformed legacy data */ }
   const startAt = tournamentMeta.starts_at;
@@ -18,6 +24,10 @@ export function TournamentSettings() {
   const [preview, setPreview] = useState<any>(null);
   const [providerUsage, setProviderUsage] = useState<{ used: number; limit: number | null; remaining: number | null } | null>(null);
   const [challongeConnection, setChallongeConnection] = useState<{ enabled: boolean; connected: boolean } | null>(null);
+  const [gameMetadata, setGameMetadata] = useState<{ event_id?: string; event_name?: string; game_name?: string; metadata_source?: 'provider' | 'cache'; metadata_stale?: boolean; metadata_warning?: string; characters?: Array<{ id: string; name: string; image_url?: string; images?: Array<{ url: string; type?: string }> }>; stages?: Array<{ id: string; name: string }> } | null>(null);
+  const [gameMetadataError, setGameMetadataError] = useState(false);
+  const [gameMetadataErrorMessage, setGameMetadataErrorMessage] = useState('');
+  const [metadataRefreshing, setMetadataRefreshing] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -48,6 +58,48 @@ export function TournamentSettings() {
       .then(res => setProviderUsage(res.data))
       .catch(() => setProviderUsage(null));
   }, [currentTournament?.provider_type, currentSlug]);
+
+  useEffect(() => {
+    let active = true;
+    setGameMetadata(null);
+    setGameMetadataError(false);
+    if (!currentSlug || currentTournament?.provider_type === 'challonge') return () => { active = false; };
+    // A tournament can contain multiple games. Always prefer the event the
+    // organizer selected in the Hub; the stored event_id is only a fallback
+    // for legacy tournaments.
+    if (events.length > 1 && !currentEventId) return () => { active = false; };
+    const selectedEventId = currentEventId || currentTournament?.event_id;
+    if (!selectedEventId) return () => { active = false; };
+    axios.get(`/api/tournaments/${encodeURIComponent(currentSlug)}/game-metadata`, { params: { event_id: selectedEventId } })
+      .then(res => {
+        if (!active) return;
+        // Never render a catalog for a different event. This protects against
+        // a stale API worker returning the tournament's legacy first event.
+        if (res.data?.event_id && String(res.data.event_id) !== String(selectedEventId)) {
+          setGameMetadata(null);
+          setGameMetadataError(true);
+          setGameMetadataErrorMessage('The provider returned metadata for a different Event. Refresh the selected Event before continuing.');
+          return;
+        }
+        setGameMetadata(res.data);
+        if (!res.data?.characters?.length) {
+          setGameMetadataError(true);
+          setGameMetadataErrorMessage('Start.gg returned no playable character catalog for this Event. Verify that the Event game is configured at the provider.');
+        } else {
+          setGameMetadataError(false);
+          setGameMetadataErrorMessage('');
+        }
+      })
+      .catch((error) => {
+        if (!active) return;
+        setGameMetadata(null);
+        setGameMetadataError(true);
+        setGameMetadataErrorMessage(
+          error?.response?.data?.message || error?.response?.data?.detail || 'Could not reach Start.gg. Check the provider connection and retry.'
+        );
+      });
+    return () => { active = false; };
+  }, [currentSlug, currentEventId, events.length, currentTournament?.provider_type, currentTournament?.event_id]);
 
 
 
@@ -143,7 +195,7 @@ export function TournamentSettings() {
   };
 
   const providerSyncLabel = currentTournament?.provider_last_synced_at
-    ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(currentTournament.provider_last_synced_at))
+    ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(parseServerTimestamp(currentTournament.provider_last_synced_at))
     : 'Not synced yet';
 
   return (
@@ -167,15 +219,50 @@ export function TournamentSettings() {
             <button 
               onClick={async () => {
                 if (!currentSlug) return;
+                if (metadataRefreshing) return;
+                setMetadataRefreshing(true);
                 try {
-                  const res = await axios.post(`/api/tournaments/${encodeURIComponent(currentSlug)}/refresh`);
-                  alert(res.data.message);
-                  globalRefresh();
-                } catch (e: any) { alert(e?.response?.data?.message || e?.response?.data?.detail || "Refresh failed."); }
+                  const selectedEventId = currentEventId || currentTournament?.event_id;
+                  if (!selectedEventId) throw new Error('Select an Event before refreshing its character catalog.');
+
+                  // Refresh the selected Event catalog independently from the
+                  // larger tournament snapshot. A transient failure in the
+                  // entrants/sets refresh must not hide a valid game catalog.
+                  const metadataResponse = await axios.get(
+                    `/api/tournaments/${encodeURIComponent(currentSlug)}/game-metadata`,
+                    { params: { event_id: selectedEventId, refresh: true } },
+                  );
+                  if (
+                    String(metadataResponse.data?.event_id || '') !== String(selectedEventId)
+                    || !metadataResponse.data?.characters?.length
+                  ) {
+                    throw new Error('Start.gg did not return characters for the selected Event.');
+                  }
+                  setGameMetadata(metadataResponse.data);
+                  setGameMetadataError(false);
+                  setGameMetadataErrorMessage('');
+
+                  try {
+                    const res = await axios.post(`/api/tournaments/${encodeURIComponent(currentSlug)}/refresh`);
+                    await globalRefresh();
+                    alert(`${res.data.message} Character catalog: ${metadataResponse.data.characters.length}.`);
+                  } catch (refreshError: any) {
+                    const warning = refreshError?.response?.data?.message || refreshError?.response?.data?.detail || 'Tournament participants refresh failed.';
+                    alert(`Character catalog refreshed (${metadataResponse.data.characters.length}). ${warning}`);
+                  }
+                } catch (e: any) {
+                  const message = e?.response?.data?.message || e?.response?.data?.detail || e?.message || "Metadata refresh failed.";
+                  setGameMetadataError(true);
+                  setGameMetadataErrorMessage(message);
+                  alert(message);
+                } finally {
+                  setMetadataRefreshing(false);
+                }
               }}
-              className="bg-blue-900/50 text-blue-200 border border-blue-800 text-xs px-3 py-1.5 rounded hover:bg-blue-900 transition-colors flex items-center gap-1"
+              disabled={metadataRefreshing}
+              className="bg-blue-900/50 text-blue-200 border border-blue-800 text-xs px-3 py-1.5 rounded hover:bg-blue-900 transition-colors flex items-center gap-1 disabled:opacity-50 disabled:cursor-wait"
             >
-              Refresh Metadata
+              {metadataRefreshing ? 'Refreshing…' : 'Refresh Metadata'}
             </button>
             <button 
               onClick={resetHubData}
@@ -199,6 +286,30 @@ export function TournamentSettings() {
                 {action.action.replaceAll('_', ' ')}: {action.availability === 'remote' ? 'Provider-supported' : action.availability === 'local' ? 'Hub-local' : 'Unavailable'}
               </span>
             ))}
+          </div>
+        )}
+        {currentTournament?.provider_type === 'startgg' && gameMetadata && (
+          <div className="rounded border border-accentYellow/20 bg-accentYellow/5 px-3 py-2 text-xs text-textDim">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+              <span className="font-bold text-accentYellow">{gameMetadata.game_name || 'Game not specified'}</span>
+              <span>Event: {gameMetadata.event_name || events.find(event => String(event.id) === String(currentEventId))?.name || 'Selected event'}</span>
+              <span>{gameMetadata.characters?.length || 0} playable characters available</span>
+              {gameMetadata.metadata_source === 'cache' && <span className="font-semibold text-accentYellow">Cached</span>}
+            </div>
+            {gameMetadata.metadata_stale && <p className="mt-1 text-[11px] text-accentYellow/90">{gameMetadata.metadata_warning || 'Showing the last successful catalog while the provider is unavailable.'} Refresh Metadata after the connection is restored.</p>}
+            <p className="mt-1 text-[11px] text-textDim">Choose a character in each participant row below. The selection is an aiTOB organizer override and does not change Start.gg.</p>
+          </div>
+        )}
+        {currentTournament?.provider_type === 'startgg' && gameMetadataError && (
+          <div className="rounded border border-red-500/30 bg-red-950/20 px-3 py-2 text-[10px] text-red-200">
+            <div><strong>{selectedEvent?.game || tournamentMeta.game || 'Game metadata'}</strong> · Event: {selectedEvent?.name || currentEventId || 'selected'} · Character catalog unavailable.</div>
+            <div className="mt-1">{gameMetadataErrorMessage || 'Start.gg did not return the selected Event metadata.'}</div>
+            <div className="mt-1 text-red-100/80">Use <strong>Refresh Metadata</strong> after the provider connection is restored. No catalog from another Event is used.</div>
+          </div>
+        )}
+        {currentTournament?.provider_type === 'startgg' && events.length > 1 && !currentEventId && (
+          <div className="rounded border border-white/10 bg-appDark/60 px-3 py-2 text-xs text-textDim">
+            Select an Event in the top navigation to load its game, characters, flags, and participants.
           </div>
         )}
         {currentTournament?.provider_type === 'challonge' && (
@@ -249,7 +360,7 @@ export function TournamentSettings() {
             {providerUsage && <div className="text-[10px] text-blue-200">Tracked by this aiTOB build this month: {providerUsage.used} request(s). Challonge account-wide usage is shown in its Developer Portal.</div>}
           </div>
         )}
-        <ParticipantsTable />
+        <ParticipantsTable characters={gameMetadata?.characters || []} gameName={gameMetadata?.game_name || ''} />
       </div>
 
       {/* Register Tournament */}

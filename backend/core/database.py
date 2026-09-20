@@ -323,6 +323,56 @@ async def list_players_for_workspace(workspace_id: str | None = None) -> list[di
             return [dict(row) for row in await cursor.fetchall()]
 
 
+async def get_player_avatar_urls(discord_id: str, workspace_id: str | None = None) -> list[str]:
+    """Return all known avatar URLs for a player to facilitate rotation and cleanup."""
+    if not discord_id:
+        return []
+    urls: list[str] = []
+    p = await get_player(str(discord_id), workspace_id)
+    if p and p.get("avatar_path"):
+        urls.append(str(p["avatar_path"]))
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        m_query = "SELECT storage_url FROM media_assets WHERE owner_type = 'player' AND owner_id = ? AND deleted_at IS NULL"
+        m_params: list = [str(discord_id)]
+        if workspace_id is not None:
+            m_query += " AND (workspace_id IS NULL OR workspace_id = ?)"
+            m_params.append(workspace_id)
+        try:
+            async with db.execute(m_query, m_params) as cursor:
+                rows = await cursor.fetchall()
+                for r in rows:
+                    if r[0] and str(r[0]) not in urls:
+                        urls.append(str(r[0]))
+        except Exception:
+            pass
+    return urls
+
+
+async def set_player_avatar(discord_id: str, avatar_path: str, workspace_id: str | None = None) -> None:
+    """Update avatar_path for a registered player."""
+    await create_or_update_player(str(discord_id), workspace_id=workspace_id, avatar_path=avatar_path)
+
+
+async def retire_media_assets_for_urls(urls: list[str], workspace_id: str | None = None) -> None:
+    """Soft-delete media assets matching the given URLs when replaced."""
+    clean_urls = [str(u) for u in urls if u]
+    if not clean_urls:
+        return
+    async with aiosqlite.connect(DB_PATH) as db:
+        placeholders = ", ".join(["?"] * len(clean_urls))
+        query = f"UPDATE media_assets SET deleted_at = CURRENT_TIMESTAMP WHERE storage_url IN ({placeholders}) AND deleted_at IS NULL"
+        params: list = list(clean_urls)
+        if workspace_id is not None:
+            query += " AND (workspace_id IS NULL OR workspace_id = ?)"
+            params.append(workspace_id)
+        try:
+            await db.execute(query, params)
+            await db.commit()
+        except Exception:
+            pass
+
+
 async def is_active_platform_admin(user_id: str) -> bool:
     """Return the platform-admin bit through the storage boundary.
 
@@ -670,6 +720,72 @@ async def get_tournament_workspace_id(slug: str) -> str | None:
         async with db.execute("SELECT workspace_id FROM tournaments WHERE slug = ?", (slug,)) as cursor:
             row = await cursor.fetchone()
     return str(row[0]) if row and row[0] else None
+
+
+async def get_tournament_game_metadata(slug: str, event_id: str, workspace_id: str | None = None) -> dict | None:
+    """Return cached Start.gg game catalog metadata for a specific event."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        query = "SELECT game_metadata_json FROM tournaments WHERE slug = ?"
+        params: list = [slug]
+        if workspace_id is not None:
+            query += " AND (workspace_id IS NULL OR workspace_id = ?)"
+            params.append(workspace_id)
+        async with db.execute(query, params) as cursor:
+            row = await cursor.fetchone()
+            if not row or not row[0]:
+                return None
+            try:
+                data = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                if isinstance(data, dict):
+                    if str(data.get("event_id")) == str(event_id):
+                        return data
+                    if str(event_id) in data and isinstance(data[str(event_id)], dict):
+                        return data[str(event_id)]
+                return None
+            except Exception:
+                return None
+
+
+async def set_tournament_game_metadata(
+    slug: str,
+    event_id: str,
+    metadata: dict,
+    workspace_id: str | None = None,
+) -> None:
+    """Cache game catalog metadata for an event in the tournament row."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        query = "SELECT game_metadata_json FROM tournaments WHERE slug = ?"
+        params: list = [slug]
+        if workspace_id is not None:
+            query += " AND (workspace_id IS NULL OR workspace_id = ?)"
+            params.append(workspace_id)
+        existing_json = None
+        async with db.execute(query, params) as cursor:
+            row = await cursor.fetchone()
+            if row and row[0]:
+                existing_json = row[0]
+
+        data = {}
+        if existing_json:
+            try:
+                data = json.loads(existing_json) if isinstance(existing_json, str) else existing_json
+                if not isinstance(data, dict):
+                    data = {}
+            except Exception:
+                data = {}
+
+        if not data.get("event_id") or str(data.get("event_id")) == str(event_id):
+            payload = {**metadata, "event_id": str(event_id)}
+        else:
+            payload = metadata
+
+        update_query = "UPDATE tournaments SET game_metadata_json = ?, game_metadata_synced_at = CURRENT_TIMESTAMP WHERE slug = ?"
+        update_params = [json.dumps(payload), slug]
+        if workspace_id is not None:
+            update_query += " AND (workspace_id IS NULL OR workspace_id = ?)"
+            update_params.append(workspace_id)
+        await db.execute(update_query, update_params)
+        await db.commit()
 
 
 async def get_fresh_provider_locator_alias(
@@ -1542,6 +1658,26 @@ async def get_station_active_overlay(station_id: str, workspace_id: str | None =
             row = await cursor.fetchone()
             return row[0] if row else None
 
+
+async def set_station_preview(
+    station_id: str,
+    match_id: str | None,
+    workspace_id: str | None = None,
+    match_data: dict | None = None,
+) -> dict | None:
+    """Set or clear the preview match for a station."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        storage_id = await _station_storage_id(db, station_id, workspace_id)
+        if storage_id is None:
+            return None
+        preview_json = json.dumps(match_data) if match_data else None
+        await db.execute(
+            "UPDATE stations SET preview_match_id = ?, preview_match_json = ? WHERE id = ?",
+            (match_id, preview_json, storage_id),
+        )
+        await db.commit()
+    return await get_station(station_id, workspace_id)
+
 async def delete_station(station_id: str, workspace_id: str | None = None):
     async with aiosqlite.connect(DB_PATH) as db:
         storage_id = await _station_storage_id(db, station_id, workspace_id)
@@ -1602,6 +1738,247 @@ async def remove_station_overlay(station_id: str, overlay_name: str, workspace_i
             (storage_id, overlay_name),
         )
         await db.commit()
+
+# ── Station Queue ──────────────────────────────────────────────────────────
+async def check_players_busy(
+    entrant_ids: list[str] | None = None,
+    player_names: list[str] | None = None,
+    exclude_set_id: str | None = None,
+    workspace_id: str | None = None,
+) -> dict[str, dict]:
+    """Find which players are currently busy playing in an active/called match on any station."""
+    entrant_set = {str(e).strip() for e in (entrant_ids or []) if str(e).strip()}
+    name_set = {str(n).strip().lower() for n in (player_names or []) if str(n).strip() and str(n).strip().lower() not in {"tbd", "unknown", "none"}}
+    if not entrant_set and not name_set:
+        return {}
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        query = """
+            SELECT am.set_id, am.station_id, am.status, am.p1_name, am.p2_name,
+                   am.p1_entrant_id, am.p2_entrant_id, s.name as station_name
+            FROM active_matches am
+            LEFT JOIN stations s ON (s.id = am.station_id OR s.public_id = am.station_id)
+            WHERE am.status IN ('called', 'in_progress')
+        """
+        params: list = []
+        if exclude_set_id:
+            query += " AND am.set_id != ?"
+            params.append(exclude_set_id)
+        if workspace_id is not None:
+            query += " AND am.workspace_id = ?"
+            params.append(workspace_id)
+
+        async with db.execute(query, params) as cursor:
+            rows = await cursor.fetchall()
+
+    busy: dict[str, dict] = {}
+    for r in rows:
+        match = dict(r)
+        st_name = match.get("station_name") or match.get("station_id") or "another station"
+        # Check P1
+        p1_eid = str(match.get("p1_entrant_id") or "").strip()
+        p1_n = str(match.get("p1_name") or "").strip()
+        if p1_eid and p1_eid in entrant_set:
+            busy[p1_eid] = {
+                "player_name": p1_n,
+                "station_id": match.get("station_id"),
+                "station_name": st_name,
+                "set_id": match.get("set_id"),
+            }
+        if p1_n and p1_n.lower() in name_set:
+            busy[p1_n.lower()] = {
+                "player_name": p1_n,
+                "station_id": match.get("station_id"),
+                "station_name": st_name,
+                "set_id": match.get("set_id"),
+            }
+
+        # Check P2
+        p2_eid = str(match.get("p2_entrant_id") or "").strip()
+        p2_n = str(match.get("p2_name") or "").strip()
+        if p2_eid and p2_eid in entrant_set:
+            busy[p2_eid] = {
+                "player_name": p2_n,
+                "station_id": match.get("station_id"),
+                "station_name": st_name,
+                "set_id": match.get("set_id"),
+            }
+        if p2_n and p2_n.lower() in name_set:
+            busy[p2_n.lower()] = {
+                "player_name": p2_n,
+                "station_id": match.get("station_id"),
+                "station_name": st_name,
+                "set_id": match.get("set_id"),
+            }
+
+    return busy
+
+
+async def get_station_queue(station_id: str, workspace_id: str | None = None) -> list[dict]:
+    """Fetch queued matches for a station in sorted order, with match info and busy player status."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        storage_id = await _station_storage_id(db, station_id, workspace_id)
+        if storage_id is None:
+            return []
+
+        query = """
+            SELECT sq.id as queue_id, sq.station_id, sq.set_id, sq.sort_order, sq.created_at as queued_at,
+                   am.*
+            FROM station_queue sq
+            LEFT JOIN active_matches am ON am.set_id = sq.set_id
+            WHERE sq.station_id = ?
+            ORDER BY sq.sort_order ASC, sq.id ASC
+        """
+        async with db.execute(query, (storage_id,)) as cursor:
+            rows = await cursor.fetchall()
+            items = [dict(r) for r in rows]
+
+    if not items:
+        return []
+
+    eids = []
+    names = []
+    for it in items:
+        if it.get("p1_entrant_id"): eids.append(str(it["p1_entrant_id"]))
+        if it.get("p2_entrant_id"): eids.append(str(it["p2_entrant_id"]))
+        if it.get("p1_name"): names.append(str(it["p1_name"]))
+        if it.get("p2_name"): names.append(str(it["p2_name"]))
+
+    busy_map = await check_players_busy(entrant_ids=eids, player_names=names, workspace_id=workspace_id)
+
+    for it in items:
+        it_busy = []
+        p1_eid = str(it.get("p1_entrant_id") or "")
+        p1_name = str(it.get("p1_name") or "")
+        p2_eid = str(it.get("p2_entrant_id") or "")
+        p2_name = str(it.get("p2_name") or "")
+
+        p1_conflict = busy_map.get(p1_eid) or (busy_map.get(p1_name.lower()) if p1_name else None)
+        if p1_conflict:
+            it_busy.append({
+                "player": p1_name or p1_conflict["player_name"],
+                "station_name": p1_conflict["station_name"],
+                "station_id": p1_conflict["station_id"],
+                "set_id": p1_conflict["set_id"]
+            })
+        p2_conflict = busy_map.get(p2_eid) or (busy_map.get(p2_name.lower()) if p2_name else None)
+        if p2_conflict:
+            it_busy.append({
+                "player": p2_name or p2_conflict["player_name"],
+                "station_name": p2_conflict["station_name"],
+                "station_id": p2_conflict["station_id"],
+                "set_id": p2_conflict["set_id"]
+            })
+        it["busy_players"] = it_busy
+
+    return items
+
+
+async def enqueue_station_match(station_id: str, set_id: str, workspace_id: str | None = None) -> bool:
+    """Enqueue a match to a station's stream queue."""
+    if not station_id or not set_id:
+        return False
+    async with aiosqlite.connect(DB_PATH) as db:
+        storage_id = await _station_storage_id(db, station_id, workspace_id)
+        if storage_id is None:
+            raise ValueError("Station not found in workspace")
+
+        existing = await (await db.execute(
+            "SELECT id FROM station_queue WHERE station_id = ? AND set_id = ?",
+            (storage_id, set_id)
+        )).fetchone()
+        if existing:
+            return True
+
+        async with db.execute(
+            "SELECT MAX(sort_order) FROM station_queue WHERE station_id = ?", (storage_id,)
+        ) as c:
+            row = await c.fetchone()
+            next_order = (row[0] + 1) if (row and row[0] is not None) else 0
+
+        await db.execute(
+            "INSERT INTO station_queue (workspace_id, station_id, set_id, sort_order) VALUES (?, ?, ?, ?)",
+            (workspace_id, storage_id, set_id, next_order)
+        )
+        await db.commit()
+        return True
+
+
+async def reorder_station_queue(station_id: str, ordered_set_ids: list[str], workspace_id: str | None = None) -> bool:
+    """Update sort order for all matches in the station queue."""
+    if not station_id or not ordered_set_ids:
+        return False
+    async with aiosqlite.connect(DB_PATH) as db:
+        storage_id = await _station_storage_id(db, station_id, workspace_id)
+        if storage_id is None:
+            raise ValueError("Station not found in workspace")
+
+        for order, set_id in enumerate(ordered_set_ids):
+            await db.execute(
+                "UPDATE station_queue SET sort_order = ? WHERE station_id = ? AND set_id = ?",
+                (order, storage_id, set_id)
+            )
+        await db.commit()
+        return True
+
+
+async def dequeue_station_match(station_id: str, set_id: str, workspace_id: str | None = None) -> bool:
+    """Remove a match from a station queue and re-compact sort orders."""
+    if not station_id or not set_id:
+        return False
+    async with aiosqlite.connect(DB_PATH) as db:
+        storage_id = await _station_storage_id(db, station_id, workspace_id)
+        if storage_id is None:
+            raise ValueError("Station not found in workspace")
+
+        await db.execute(
+            "DELETE FROM station_queue WHERE station_id = ? AND set_id = ?",
+            (storage_id, set_id)
+        )
+        async with db.execute(
+            "SELECT id FROM station_queue WHERE station_id = ? ORDER BY sort_order ASC, id ASC",
+            (storage_id,)
+        ) as c:
+            rows = await c.fetchall()
+            for idx, r in enumerate(rows):
+                await db.execute(
+                    "UPDATE station_queue SET sort_order = ? WHERE id = ?",
+                    (idx, r[0])
+                )
+        await db.commit()
+        return True
+
+
+async def advance_station_queue(station_id: str, workspace_id: str | None = None) -> dict | None:
+    """Promote the top queued match for a station, dequeueing it."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        storage_id = await _station_storage_id(db, station_id, workspace_id)
+        if storage_id is None:
+            return None
+
+        async with db.execute(
+            "SELECT id, set_id FROM station_queue WHERE station_id = ? ORDER BY sort_order ASC, id ASC LIMIT 1",
+            (storage_id,)
+        ) as c:
+            row = await c.fetchone()
+            if not row:
+                return None
+            queue_id, set_id = row[0], row[1]
+
+        await db.execute("DELETE FROM station_queue WHERE id = ?", (queue_id,))
+        async with db.execute(
+            "SELECT id FROM station_queue WHERE station_id = ? ORDER BY sort_order ASC, id ASC",
+            (storage_id,)
+        ) as c:
+            rows = await c.fetchall()
+            for idx, r in enumerate(rows):
+                await db.execute("UPDATE station_queue SET sort_order = ? WHERE id = ?", (idx, r[0]))
+        await db.commit()
+
+    return await get_active_match(set_id, workspace_id)
+
 
 # ── Active Matches ─────────────────────────────────────────────────────────
 async def assign_station_to_active_match(
@@ -1666,6 +2043,46 @@ async def get_active_matches(tournament_slug: str = None, event_id: str = None, 
                 {where} ORDER BY active_matches.created_at""", params
         ) as cursor:
             return [dict(r) for r in await cursor.fetchall()]
+
+
+def apply_player_overrides_to_match(match: dict, overrides: dict) -> dict:
+    """Apply player overrides (custom display name, avatar, prefix, etc.) to a match."""
+    updated = dict(match)
+    if not overrides:
+        return updated
+    p1_eid = str(updated.get("p1_entrant_id") or "")
+    p2_eid = str(updated.get("p2_entrant_id") or "")
+    if p1_eid and p1_eid in overrides:
+        ov = overrides[p1_eid]
+        if ov.get("name"): updated["p1_name"] = ov["name"]
+        if ov.get("avatar_url"): updated["p1_avatar"] = ov["avatar_url"]
+        if ov.get("prefix") or ov.get("team"):
+            prefix_val = ov.get("prefix") or ov.get("team")
+            updated["p1_prefix"] = prefix_val
+            updated["p1_team"] = prefix_val
+        if ov.get("country"): updated["p1_country"] = ov["country"]
+        if ov.get("cfn"): updated["p1_cfn"] = ov["cfn"]
+        if ov.get("character") or ov.get("character_name"):
+            updated["p1_character"] = ov.get("character") or ov.get("character_name")
+        if ov.get("character_id"): updated["p1_character_id"] = ov["character_id"]
+        if ov.get("character_image_url"): updated["p1_character_image"] = ov["character_image_url"]
+
+    if p2_eid and p2_eid in overrides:
+        ov = overrides[p2_eid]
+        if ov.get("name"): updated["p2_name"] = ov["name"]
+        if ov.get("avatar_url"): updated["p2_avatar"] = ov["avatar_url"]
+        if ov.get("prefix") or ov.get("team"):
+            prefix_val = ov.get("prefix") or ov.get("team")
+            updated["p2_prefix"] = prefix_val
+            updated["p2_team"] = prefix_val
+        if ov.get("country"): updated["p2_country"] = ov["country"]
+        if ov.get("cfn"): updated["p2_cfn"] = ov["cfn"]
+        if ov.get("character") or ov.get("character_name"):
+            updated["p2_character"] = ov.get("character") or ov.get("character_name")
+        if ov.get("character_id"): updated["p2_character_id"] = ov["character_id"]
+        if ov.get("character_image_url"): updated["p2_character_image"] = ov["character_image_url"]
+
+    return updated
 
 
 def serialize_active_match_for_display(match: dict) -> dict:
@@ -1759,7 +2176,13 @@ async def get_match_occupying_station(station_id: str, exclude_set_id: str = Non
             return dict(row) if row else None
 
 
-async def upsert_active_match(set_id: str, workspace_id: str | None = None, **kwargs):
+async def upsert_active_match(set_id: str | dict, workspace_id: str | None = None, **kwargs):
+    if isinstance(set_id, dict):
+        match_data = dict(set_id)
+        set_id = str(match_data.pop("set_id"))
+        workspace_id = match_data.pop("workspace_id", workspace_id)
+        kwargs = {**match_data, **kwargs}
+
     async with aiosqlite.connect(DB_PATH) as db:
         # Get valid columns
         valid_cols = []

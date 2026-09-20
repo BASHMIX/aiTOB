@@ -2,6 +2,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { HubDashboard } from './features/hub/HubDashboard';
 import { EditorDashboard } from './features/editor/EditorDashboard';
 import { OBSViewer } from './features/obs/OBSViewer';
+import { TournamentSetupPage } from './features/tournament-setup';
 
 import { LoginPage } from './features/auth/LoginPage';
 import { AccountActionPage } from './features/auth/AccountActionPage';
@@ -18,6 +19,9 @@ function App() {
         <Route path="/accept-invitation" element={<AccountActionPage kind="invite" />} />
         <Route path="/admin/hub" element={<AuthGuard><HubDashboard /></AuthGuard>} />
         <Route path="/admin/editor" element={<AuthGuard><EditorDashboard /></AuthGuard>} />
+        <Route path="/admin/tournaments/new" element={<AuthGuard><TournamentSetupPage /></AuthGuard>} />
+        <Route path="/admin/tournaments/setup/:draftId" element={<AuthGuard><TournamentSetupPage /></AuthGuard>} />
+        <Route path="/admin/tournaments/setup/:draftId/:step" element={<AuthGuard><TournamentSetupPage /></AuthGuard>} />
         <Route path="/obs" element={<OBSViewer />} />
       </Routes>
     </Router>

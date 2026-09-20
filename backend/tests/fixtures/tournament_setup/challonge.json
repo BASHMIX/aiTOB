@@ -1,0 +1,38 @@
+{
+  "tournament": {
+    "id": "fixture-challonge-bracket-001",
+    "type": "tournaments",
+    "attributes": {
+      "name": "aiTOB Fixture Bracket",
+      "url": "aitob-fixture-bracket",
+      "state": "underway",
+      "tournament_type": "single elimination",
+      "game_name": "Street Fighter 6",
+      "starts_at": "2026-09-13T15:00:00Z",
+      "updated_at": "2026-09-13T14:00:00Z"
+    }
+  },
+  "participants": [
+    {"id": "fixture-challonge-player-001", "type": "participants", "attributes": {"name": "Nova", "display_name": "Nova", "prefix": "AIT", "gamertag": "Nova"}},
+    {"id": "fixture-challonge-player-002", "type": "participants", "attributes": {"name": "Rook", "display_name": "Rook", "prefix": "BOT", "gamertag": "Rook"}}
+  ],
+  "matches": [
+    {
+      "id": "fixture-challonge-match-001",
+      "type": "matches",
+      "attributes": {
+        "state": "open",
+        "round": 1,
+        "identifier": "M1",
+        "player1_id": "fixture-challonge-player-001",
+        "player2_id": "fixture-challonge-player-002",
+        "points_by_participant": [
+          {"participant_id": "fixture-challonge-player-001", "score": 0},
+          {"participant_id": "fixture-challonge-player-002", "score": 0}
+        ],
+        "revision": "1",
+        "updated_at": "2026-09-13T14:00:00Z"
+      }
+    }
+  ]
+}

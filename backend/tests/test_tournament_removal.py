@@ -54,6 +54,17 @@ async def test_safe_removal_cleans_local_tournament_projection_and_releases_its_
 
 
 @pytest.mark.asyncio
+async def test_removal_allows_provider_matches_that_have_not_started(removal_db):
+    """Imported matches waiting for a call are local projections, not live work."""
+    await database.upsert_active_match("remove-pending", tournament_slug=removal_db, status="not_started")
+
+    await database.delete_tournament(removal_db)
+
+    assert await database.get_tournament(removal_db) is None
+    assert await database.get_active_match("remove-pending") is None
+
+
+@pytest.mark.asyncio
 async def test_reset_active_matches_is_workspace_scoped_for_colliding_slugs(tmp_path, monkeypatch):
     """Resetting one tenant's Hub projection cannot wipe a sibling tenant."""
     monkeypatch.setattr(database, "DB_PATH", str(tmp_path / "reset-scope.sqlite"))

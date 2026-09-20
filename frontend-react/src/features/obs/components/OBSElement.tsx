@@ -1,5 +1,6 @@
 import React from 'react';
 import { getAnimationStyles } from '../utils';
+import { overlayImageLayout, overlayImagePlaceholder, resolveOverlayImageSource } from '@/utils/overlayAssets';
 
 interface OBSElementProps {
   id: string;
@@ -117,6 +118,7 @@ export const OBSElement: React.FC<OBSElementProps> = ({
         style={{
           color: el.color || '#fff',
           fontSize: `${el.fontSize || 24}px`,
+          fontFamily: el.fontFamily || undefined,
           fontWeight: el.fontWeight || 'normal',
           fontStyle: el.fontStyle || 'normal',
           textAlign: el.textAlign || 'left',
@@ -140,14 +142,21 @@ export const OBSElement: React.FC<OBSElementProps> = ({
     const imgShadow = el.shadowColor
       ? `drop-shadow(${el.shadowOffsetX || 0}px ${el.shadowOffsetY || 0}px ${el.shadowBlur || 0}px ${el.shadowColor})`
       : 'none';
+    const imageLayout = overlayImageLayout(id, el.width, el.height);
     content = (
       <img
-        src={el.src}
+        src={resolveOverlayImageSource(id, el.src)}
+        alt=""
+        data-overlay-element-id={id}
+        onError={(event) => {
+          const fallback = overlayImagePlaceholder(id);
+          if (event.currentTarget.getAttribute('src') !== fallback) {
+            event.currentTarget.src = fallback;
+          }
+        }}
         className={glitchClass}
         style={{
-          width: '100%',
-          height: '100%',
-          objectFit: 'contain',
+          ...imageLayout,
           filter: imgShadow
         }}
       />

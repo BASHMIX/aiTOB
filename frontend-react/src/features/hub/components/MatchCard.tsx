@@ -271,12 +271,18 @@ function StationMenu({ match, stations, onAction, onOpenChange }: { match: Match
             return (
               <button
                 key={s.id}
-                disabled={isOccupied}
-                onClick={() => { setOpen(false); onAction("assignStation", match, s.id); }}
-                title={isStream ? "Stream station — assigning flags this match for stream" : undefined}
+                onClick={() => {
+                  setOpen(false);
+                  if (isOccupied) {
+                    onAction("enqueueStation", match, s.id);
+                  } else {
+                    onAction("assignStation", match, s.id);
+                  }
+                }}
+                title={isOccupied ? `Station occupied — click to add to ${s.name} queue` : (isStream ? "Stream station — assigning flags this match for stream" : undefined)}
                 className={`w-full text-left px-3 py-1.5 text-xs transition-colors rounded flex items-center justify-between
                   ${isOccupied
-                    ? "text-red-400/60 bg-red-950/5 cursor-not-allowed border border-red-900/10 mb-0.5"
+                    ? "text-yellow-300 hover:bg-yellow-500/15 border border-yellow-500/25 mb-0.5 cursor-pointer"
                     : s.id === match.stationId
                       ? "text-[var(--tone-send)] bg-[var(--tone-send-hover)] font-semibold"
                       : "text-gray-200 hover:bg-[var(--foreground-5)]"
@@ -286,7 +292,11 @@ function StationMenu({ match, stations, onAction, onOpenChange }: { match: Match
                   {isStream && <span className="flex-shrink-0" title="Stream station">📺</span>}
                   <span className="truncate">{s.name}</span>
                 </span>
-                {isOccupied && <span className="text-[8px] leading-none text-red-500 font-extrabold px-1 py-0.5 rounded bg-red-500/10 border border-red-500/20 flex-shrink-0">OCCUPIED</span>}
+                {isOccupied && (
+                  <span className="text-[8px] leading-none text-yellow-400 font-bold px-1.5 py-0.5 rounded bg-yellow-400/10 border border-yellow-400/30 flex-shrink-0">
+                    + Add to Queue
+                  </span>
+                )}
               </button>
             );
           })}
@@ -382,10 +392,26 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
   }, [match.status, match.startedAt, match.calledAt, dqTimerSeconds, autoDqEnabled, showTimer]);
 
   return (
-    <div className={`flex flex-col rounded-lg border transition-all duration-200
+    <div
+      draggable={!isDropdownOpen}
+      onDragStart={(e) => {
+        const setId = String(match.raw?.set_id || match.raw?.id || match.id || "");
+        e.dataTransfer.setData("text/plain", setId);
+        e.dataTransfer.setData("application/json", JSON.stringify({
+          setId,
+          round: match.round,
+          p1: match.players[0]?.name,
+          p2: match.players[1]?.name,
+          raw: match.raw,
+          isLocal: match.isLocal,
+        }));
+        e.dataTransfer.effectAllowed = "copyMove";
+      }}
+      title="Drag and drop onto a station card to assign or queue"
+      className={`flex flex-col rounded-lg border transition-all duration-200 cursor-grab active:cursor-grabbing
       ${isDropdownOpen 
         ? "z-50 relative shadow-[0_0_20px_rgba(255,200,0,0.15)] border-accentYellow/40 bg-black/40 scale-[1.01] overflow-visible" 
-        : "z-10 relative border-white/10 overflow-hidden"
+        : "z-10 relative border-white/10 hover:border-white/30 overflow-hidden"
       }
       ${PANEL_TONE[meta.tone]}
     `}>

@@ -366,9 +366,11 @@ async def transition_match(
     elif to_status == "complete":
         # The `on_stream` overlay ends with the match — free the station the
         # instant it completes so it's available for the next stream match.
+        station_to_advance = match.get("station_id")
         update_kwargs["station_id"] = None
 
     elif to_status == "not_started":
+        station_to_advance = None
         update_kwargs["p1_score"] = 0
         update_kwargs["p2_score"] = 0
         update_kwargs["p1_ready"] = False
@@ -377,10 +379,32 @@ async def transition_match(
         update_kwargs["started_at"] = None
         update_kwargs["dq_player"] = None
         update_kwargs["lobby_password"] = None
+    else:
+        station_to_advance = None
 
     await upsert_active_match(
         set_id, workspace_id=match.get("workspace_id") or workspace_id, **update_kwargs,
     )
+
+    if station_to_advance:
+        try:
+            from backend.core.database import advance_station_queue, assign_station_to_active_match
+            ws = match.get("workspace_id") or workspace_id
+            next_match = await advance_station_queue(station_to_advance, workspace_id=ws)
+            if next_match:
+                next_set_id = next_match["set_id"]
+                await assign_station_to_active_match(
+                    next_set_id, station_to_advance, workspace_id=ws
+                )
+                await transition_match(
+                    next_set_id, "in_progress",
+                    workspace_id=ws,
+                    skip_provider=True
+                )
+                await hub_mgr.broadcast_to_slot(station_to_advance, {"type": "match_update"}, ws)
+        except Exception as queue_err:
+            print(f"Error advancing station queue for {station_to_advance}: {queue_err}")
+
     await hub_mgr.broadcast({"type": "match_update", "_workspace_id": match.get("workspace_id")})
     return {"ok": True, "status": to_status}
 

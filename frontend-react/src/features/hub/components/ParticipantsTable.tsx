@@ -1,11 +1,30 @@
 import { useState, useEffect } from 'react';
 import { useHubStore } from '@/store/useHubStore';
 import axios from 'axios';
+import { countryCode, countryFlagEmoji } from '@/utils/country';
 
-export function ParticipantsTable() {
+interface CharacterOption {
+  id: string;
+  name: string;
+  image_url?: string;
+  images?: Array<{ url: string; type?: string }>;
+}
+
+interface ParticipantsTableProps {
+  characters?: CharacterOption[];
+  gameName?: string;
+}
+
+function flagForCountry(value: unknown): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '—';
+  return countryFlagEmoji(raw) || raw;
+}
+
+export function ParticipantsTable({ characters = [], gameName = '' }: ParticipantsTableProps) {
   const { tournaments, currentSlug, currentEventId, events } = useHubStore();
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ name: '', team: '', country: '', cfn: '' });
+  const [editForm, setEditForm] = useState({ name: '', prefix: '', country: '', cfn: '' });
   const [overrides, setOverrides] = useState<Record<string, any>>({});
   const [links, setLinks] = useState<Record<string, any>>({});
   const [players, setPlayers] = useState<any[]>([]);
@@ -17,6 +36,7 @@ export function ParticipantsTable() {
     .replace(/[أإآ]/g, 'ا')
     .replace(/ى/g, 'ي')
     .replace(/[^\p{L}\p{N}]/gu, '');
+
 
   useEffect(() => {
     const fetchParticipantData = async () => {
@@ -76,15 +96,15 @@ export function ParticipantsTable() {
       const res = await axios.get(`/api/players/overrides/${entrant.id}`);
       const ov = res.data;
       setEditForm({
-        name: ov.display_name || entrant.name || '',
-        team: ov.team || entrant.team || '',
+        name: ov.display_name || entrant.gamertag || entrant.name || '',
+        prefix: ov.prefix || ov.team || entrant.prefix || entrant.team || '',
         country: ov.country || entrant.country || '',
         cfn: ov.cfn || entrant.cfn || ''
       });
     } catch (e) {
       setEditForm({
-        name: entrant.name || '',
-        team: entrant.team || '',
+        name: entrant.gamertag || entrant.name || '',
+        prefix: entrant.prefix || entrant.team || '',
         country: entrant.country || '',
         cfn: entrant.cfn || ''
       });
@@ -92,18 +112,46 @@ export function ParticipantsTable() {
   };
 
   const handleSave = async (id: string) => {
+    const rawCountry = editForm.country.trim();
+    const normalizedCountry = rawCountry ? countryCode(rawCountry) : '';
+    if (rawCountry && !normalizedCountry) {
+      alert('Enter a valid country code or English country name (for example: JO, UK, USA, Jordan).');
+      return;
+    }
+    const normalizedForm = { ...editForm, country: normalizedCountry || '' };
     try {
-      await axios.patch(`/api/players/overrides/${id}`, editForm);
-      setOverrides(prev => ({ ...prev, [id]: { ...prev[id], ...editForm } }));
+      await axios.patch(`/api/players/overrides/${id}`, normalizedForm);
+      setOverrides(prev => ({ ...prev, [id]: { ...prev[id], ...normalizedForm } }));
       setEditingId(null);
     } catch (e) {
       alert("Failed to save override");
     }
   };
 
-  const handleAvatarUpload = async (id: string, file: File) => {
+  const handleCharacterChange = async (entrantId: string, character: CharacterOption | null) => {
+    const previous = overrides[entrantId] || {};
+    const next = {
+      character: character?.name || '',
+      character_id: character?.id || '',
+      character_image_url: character?.image_url || character?.images?.[0]?.url || '',
+    };
+    setOverrides(prev => ({ ...prev, [entrantId]: { ...prev[entrantId], ...next } }));
+    try {
+      await axios.patch(`/api/players/overrides/${entrantId}`, {
+        ...next,
+        tournament_slug: currentSlug,
+        event_id: currentEventId || currentTournament?.event_id || '',
+      });
+    } catch (e: any) {
+      setOverrides(prev => ({ ...prev, [entrantId]: previous }));
+      alert(e?.response?.data?.detail || 'Failed to save character selection');
+    }
+  };
+
+  const handleAvatarUpload = async (id: string, file: File, discordId?: string) => {
     const formData = new FormData();
     formData.append('avatar', file);
+    if (discordId) formData.append('discord_id', discordId);
     try {
       const res = await axios.post(`/api/players/overrides/${id}/avatar`, formData);
       const newUrl = res.data.avatar_url;
@@ -166,11 +214,12 @@ export function ParticipantsTable() {
         <table className="w-full text-left text-sm text-white">
           <thead className="text-xs text-textDim uppercase bg-appDark/50">
             <tr>
-              <th className="px-2 py-2">Player Name</th>
+              <th className="px-2 py-2">Gamertag</th>
+              <th className="px-2 py-2 min-w-36">Character</th>
               <th className="px-2 py-2">aiTOB Player</th>
               <th className="px-2 py-2">Avatar</th>
               <th className="px-2 py-2">Display Name</th>
-              <th className="px-2 py-2">Team</th>
+              <th className="px-2 py-2">Prefix</th>
               <th className="px-2 py-2">Flag</th>
               <th className="px-2 py-2">CFN</th>
               <th className="px-2 py-2">Actions</th>
@@ -180,7 +229,7 @@ export function ParticipantsTable() {
             {entrants.map((e: any, i: number) => {
               const ov = overrides[e.id] || {};
               const link = links[String(e.id)];
-              const entrantName = typeof e === 'string' ? e : String(e.name || '');
+              const entrantName = typeof e === 'string' ? e : String(e.gamertag || e.name || '');
               const normalizedName = normalizePlayerName(entrantName);
               const startggCandidate = e.provider_user_id
                 ? players.filter(player => String(player.startgg_id || '') === String(e.provider_user_id))
@@ -193,7 +242,27 @@ export function ParticipantsTable() {
                 : nameCandidates.length === 1 ? nameCandidates[0] : null;
               return (
                 <tr key={e.id || i} className="border-b border-white/5 hover:bg-white/5">
-                  <td className="px-2 py-2 text-textDim">{e.name || e}</td>
+                  <td className="px-2 py-2 text-textDim">{e.gamertag || e.name || e}</td>
+                  <td className="px-2 py-2 min-w-36">
+                    {characters.length > 0 ? (
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={ov.character || e.character || ''}
+                          onChange={event => handleCharacterChange(String(e.id), characters.find(character => character.name === event.target.value) || null)}
+                          className="w-36 bg-appDark border border-white/10 rounded px-2 py-1 text-xs text-white focus:border-accentYellow focus:ring-1 focus:ring-accentYellow"
+                          aria-label={`Choose ${gameName || 'game'} character for ${entrantName}`}
+                        >
+                          <option value="">Not selected</option>
+                          {characters.map(character => <option key={character.id} value={character.name}>{character.name}</option>)}
+                        </select>
+                        {ov.character_image_url && (
+                          <img src={ov.character_image_url} alt="" className="h-6 w-6 rounded object-contain border border-white/10" />
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-textDim" title="No character catalog was returned for the selected event">—</span>
+                    )}
+                  </td>
                   <td className="px-2 py-2 min-w-48">
                     {link ? (
                       <div className="flex items-center gap-2">
@@ -244,7 +313,7 @@ export function ParticipantsTable() {
                           type="file" 
                           className="hidden" 
                           accept="image/*"
-                          onChange={(ev) => ev.target.files?.[0] && handleAvatarUpload(e.id, ev.target.files[0])}
+                           onChange={(ev) => ev.target.files?.[0] && handleAvatarUpload(e.id, ev.target.files[0], links[String(e.id)]?.discord_id)}
                         />
                       </label>
                     </div>
@@ -252,8 +321,8 @@ export function ParticipantsTable() {
                   {editingId === e.id ? (
                     <>
                       <td className="px-2 py-1"><input className="w-full bg-appDark border border-white/10 rounded px-2 py-1 text-xs" value={editForm.name} onChange={ev => setEditForm({...editForm, name: ev.target.value})} placeholder="Display Name" /></td>
-                      <td className="px-2 py-1"><input className="w-full bg-appDark border border-white/10 rounded px-2 py-1 text-xs" value={editForm.team} onChange={ev => setEditForm({...editForm, team: ev.target.value})} placeholder="Prefix" /></td>
-                      <td className="px-2 py-1"><input className="w-full bg-appDark border border-white/10 rounded px-2 py-1 text-xs" value={editForm.country} onChange={ev => setEditForm({...editForm, country: ev.target.value})} placeholder="e.g. US" /></td>
+                      <td className="px-2 py-1"><input className="w-full bg-appDark border border-white/10 rounded px-2 py-1 text-xs" value={editForm.prefix} onChange={ev => setEditForm({...editForm, prefix: ev.target.value})} placeholder="Prefix" /></td>
+                      <td className="px-2 py-1"><input className="w-full min-w-24 bg-appDark border border-white/10 rounded px-2 py-1 text-xs uppercase" value={editForm.country} onChange={ev => setEditForm({...editForm, country: ev.target.value})} placeholder="JO / UK / USA" title="ISO code or English country name" /></td>
                       <td className="px-2 py-1"><input className="w-full bg-appDark border border-white/10 rounded px-2 py-1 text-xs" value={editForm.cfn} onChange={ev => setEditForm({...editForm, cfn: ev.target.value})} placeholder="CFN" /></td>
                       <td className="px-2 py-1 flex gap-2">
                         <button onClick={() => handleSave(e.id)} className="text-statusGreen hover:text-green-400 text-xs font-bold">Save</button>
@@ -262,17 +331,17 @@ export function ParticipantsTable() {
                     </>
                   ) : (
                     <>
-                      <td className="px-2 py-2 font-medium">{ov.name || e.displayName || e.name || '—'}</td>
-                      <td className="px-2 py-2">{ov.team || e.team || '—'}</td>
-                      <td className="px-2 py-2 uppercase">{ov.country || e.country || '—'}</td>
+                      <td className="px-2 py-2 font-medium">{ov.name || e.display_name || e.gamertag || e.name || '—'}</td>
+                      <td className="px-2 py-2">{ov.prefix || ov.team || e.prefix || e.team || '—'}</td>
+                      <td className="px-2 py-2 uppercase" title={ov.country || e.country || undefined}>{flagForCountry(ov.country || e.country)}</td>
                       <td className="px-2 py-2">{ov.cfn || e.cfn || '—'}</td>
                       <td className="px-2 py-2">
                         <div className="flex gap-2">
                           <button onClick={() => handleEditClick(e)} className="text-accentYellow hover:text-yellow-400 text-xs font-bold">Edit</button>
-                          {(ov.name || ov.team || ov.country || ov.cfn || ov.avatar_url) && (
+                          {(ov.name || ov.prefix || ov.team || ov.country || ov.cfn || ov.character || ov.avatar_url) && (
                             <button 
                               onClick={async () => {
-                                if (confirm(`Reset overrides for ${e.name}?`)) {
+                                if (confirm(`Reset overrides for ${e.gamertag || e.name}?`)) {
                                   await axios.delete(`/api/players/overrides/${e.id}`);
 
                                   setOverrides(prev => {

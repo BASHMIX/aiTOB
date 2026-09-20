@@ -1,9 +1,13 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Literal
 from datetime import datetime
 
 class Player(BaseModel):
     discord_id: str
+    # Canonical Feature 004 vocabulary. Legacy aliases remain readable at the
+    # adapter boundary but are not used by new wizard/registration payloads.
+    prefix: Optional[str] = None
+    gamertag: Optional[str] = None
     startgg_id: Optional[str] = None
     gamer_tag: Optional[str] = None
     cfn_id: Optional[str] = None
@@ -23,7 +27,7 @@ class Tournament(BaseModel):
     stream_slot: Optional[str] = None
     raw_data: Optional[str] = None
     dq_timer_seconds: int = 600
-    auto_dq_enabled: bool = True
+    auto_dq_enabled: bool = False
     bot_manage_limit: Optional[str] = "off"
     bot_manage_finish: Optional[str] = "off"
     registration_deadline: Optional[datetime] = None
@@ -41,6 +45,10 @@ class ActiveMatch(BaseModel):
     p2_entrant_id: Optional[str] = None
     p1_discord: Optional[str] = None
     p2_discord: Optional[str] = None
+    p1_prefix: Optional[str] = None
+    p2_prefix: Optional[str] = None
+    # Deprecated read aliases for saved overlays created before prefix became
+    # the canonical broadcast vocabulary.
     p1_team: Optional[str] = None
     p2_team: Optional[str] = None
     p1_country: Optional[str] = None
@@ -103,8 +111,74 @@ class HubCommand(BaseModel):
 class PlayerOverride(BaseModel):
     id: str
     display_name: Optional[str] = None
-    team: Optional[str] = None
+    prefix: Optional[str] = None
+    team: Optional[str] = None  # Deprecated read alias.
     country: Optional[str] = None
     cfn: Optional[str] = None
     avatar_url: Optional[str] = None
     updated_at: Optional[datetime] = None
+
+
+# Feature 004 canonical vocabulary and wizard state models.  The legacy models
+# above remain readable while migrations are applied; new contracts should use
+# these types so `prefix` and `gamertag` cannot be confused with tournament or
+# display names.
+WizardStep = Literal["provider", "tournament", "discord", "assistant", "review"]
+DraftStatus = Literal["editing", "ready", "materialized", "abandoned"]
+ReadinessState = Literal["ready", "warning", "blocked"]
+ProviderType = Literal["startgg", "challonge"]
+ProviderCapabilityState = Literal["supported", "unsupported", "unknown"]
+RegistrationState = Literal[
+    "awaiting_provider", "awaiting_discord_link", "awaiting_identity",
+    "awaiting_image", "awaiting_review", "ready", "rejected", "needs_review",
+]
+DiscordLinkState = Literal["unlinked", "resolving", "linked", "not_in_guild", "invalid", "conflict"]
+ImagePolicy = Literal["disabled", "optional", "required"]
+
+
+class CanonicalPlayer(BaseModel):
+    """Workspace player projection used by new APIs and provider adapters."""
+
+    id: Optional[str] = None
+    workspace_id: str
+    discord_id: Optional[str] = None
+    prefix: Optional[str] = None
+    gamertag: str
+    country: Optional[str] = None
+    image_asset_id: Optional[str] = None
+    preferred_language: str = "en"
+
+
+class ReadinessCheck(BaseModel):
+    code: str
+    step: WizardStep
+    field_path: Optional[str] = None
+    requirement: Literal["required", "optional"]
+    state: ReadinessState
+    message: str
+    remediation: Optional[str] = None
+    retryable: bool = False
+
+
+class ProviderCapability(BaseModel):
+    state: ProviderCapabilityState
+    reason_code: str
+
+
+class StartInWaveStatus(BaseModel):
+    state: Literal["verified_enabled", "verified_disabled", "unsupported", "unknown"]
+    observed_at: Optional[datetime] = None
+    monitoring_mode: Literal["off", "provider_verified", "organizer_confirmed"] = "off"
+    monitoring_state: Literal[
+        "not_applicable", "awaiting_bracket_start", "monitoring", "blocked"
+    ] = "not_applicable"
+
+
+class TournamentSetupDraftModel(BaseModel):
+    id: str
+    workspace_id: str
+    revision: int = 1
+    status: DraftStatus = "editing"
+    current_step: WizardStep = "provider"
+    completed_steps: List[WizardStep] = []
+    validation: Dict[str, List[ReadinessCheck]] = {}

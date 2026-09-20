@@ -118,6 +118,17 @@ export function ActiveMatchCard({ match }: { match: any }) {
     ));
   };
 
+  const enqueueStation = async (stationId: string, stationName: string) => {
+    try {
+      await axios.post(`/api/stations/${stationId}/queue`, { set_id: match.set_id });
+      setNotice({ text: `Queued on ${stationName} ✓`, ok: true });
+      const fresh = await axios.get('/api/active-matches');
+      setMatches(fresh.data.matches || []);
+    } catch (error: any) {
+      setNotice({ text: error.response?.data?.detail || 'Could not add to queue.', ok: false });
+    }
+  };
+
   // ── Swap ───────────────────────────────────────────────────────────
   const toggleSwap = async () => {
     const newSwap = !isSwapped;
@@ -245,7 +256,7 @@ export function ActiveMatchCard({ match }: { match: any }) {
   }, [match.status, match.started_at, match.called_at, dqTimerSeconds, showTimer]);
 
   return (
-    <div id={`active-match-${match.set_id}`} style={{ borderColor: withAccentAlpha(accent, 0.5) }} className={`bg-cardDark border rounded-lg flex flex-col shadow-md transition-all relative ${dqOpen ? 'z-30' : 'z-10'}`}>
+    <div id={`active-match-${match.set_id}`} style={{ borderColor: withAccentAlpha(accent, 0.5) }} className={`bg-cardDark border rounded-lg flex flex-col shadow-md transition-all relative ${dqOpen || stationOpen ? 'z-30' : 'z-10'}`}>
 
       {/* ── Header ── */}
       <div className="flex items-center justify-between px-3 py-2 bg-appDark border-b border-white/10 rounded-t-lg">
@@ -290,11 +301,18 @@ export function ActiveMatchCard({ match }: { match: any }) {
                   return (
                     <button
                       key={s.id}
-                      disabled={isOccupied}
-                      onClick={() => { setStationOpen(false); assignStation(s.id); }}
+                      onClick={() => {
+                        setStationOpen(false);
+                        if (isOccupied) {
+                          enqueueStation(s.id, s.name);
+                        } else {
+                          assignStation(s.id);
+                        }
+                      }}
+                      title={isOccupied ? `Station occupied — click to add to ${s.name} queue` : undefined}
                       className={`w-full text-left px-2.5 py-1.5 text-[10px] transition-colors rounded flex items-center justify-between mb-0.5
                         ${isOccupied
-                          ? "text-red-400/50 bg-red-950/10 cursor-not-allowed border border-red-900/10"
+                          ? "text-yellow-300 hover:bg-yellow-500/15 border border-yellow-500/25 cursor-pointer"
                           : s.id === match.station_id
                             ? "text-statusGreen bg-statusGreen/10 font-bold"
                             : "text-gray-200 hover:bg-white/5"
@@ -302,8 +320,8 @@ export function ActiveMatchCard({ match }: { match: any }) {
                     >
                       <span className="truncate pr-1">{s.name}</span>
                       {isOccupied && (
-                        <span className="text-[7px] leading-none text-red-500 font-extrabold px-1 py-0.5 rounded bg-red-500/10 border border-red-500/20 flex-shrink-0">
-                          OCCUPIED
+                        <span className="text-[8px] leading-none text-yellow-400 font-bold px-1.5 py-0.5 rounded bg-yellow-400/10 border border-yellow-400/30 flex-shrink-0">
+                          + Add to Queue
                         </span>
                       )}
                     </button>

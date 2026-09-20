@@ -42,6 +42,18 @@ export function IntegrationAccounts() {
   const [destinationDrafts, setDestinationDrafts] = useState<Record<string, { external_id: string; display_name: string }>>({});
   const [busy, setBusy] = useState<string | null>(null);
 
+  const signInProvider = async (provider: 'startgg' | 'challonge') => {
+    setBusy(`oauth:${provider}`);
+    setMessage(null);
+    try {
+      const response = await axios.post(`/api/auth/providers/${provider}/connect`, { return_step: 'provider' });
+      window.location.assign(response.data.authorization_url);
+    } catch (error: any) {
+      setMessage({ text: error.response?.data?.detail || `Could not start ${provider} sign-in.`, ok: false });
+      setBusy(null);
+    }
+  };
+
   const load = async () => {
     try {
       const [accountsResponse, environmentResponse] = await Promise.all([
@@ -212,6 +224,9 @@ export function IntegrationAccounts() {
           <button type="button" onClick={saveStartggToken} disabled={busy === 'startgg:save'} className="rounded-lg border border-accentYellow/35 bg-accentYellow/10 px-3 py-2 text-xs font-bold text-accentYellow transition-colors hover:bg-accentYellow/20 disabled:opacity-50">
             {busy === 'startgg:save' ? 'Saving…' : startggConfigured ? 'Rotate token' : 'Save token'}
           </button>
+          <button type="button" onClick={() => void signInProvider('startgg')} disabled={busy === 'oauth:startgg'} className="rounded-lg border border-sky-300/30 bg-sky-300/10 px-3 py-2 text-xs font-bold text-sky-100 transition-colors hover:bg-sky-300/20 disabled:opacity-50">
+            {busy === 'oauth:startgg' ? 'Opening…' : 'Sign in with Start.gg'}
+          </button>
           <button type="button" onClick={testStartggConnection} disabled={!startggConfigured || busy === 'startgg:test'} className="rounded-lg border border-white/10 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-white/10 disabled:opacity-50">
             {busy === 'startgg:test' ? 'Testing…' : 'Test connection'}
           </button>
@@ -228,7 +243,7 @@ export function IntegrationAccounts() {
       </section>}
 
       {showAccountControls && <section className="rounded-xl border border-white/10 bg-cardDark p-4 shadow-sm sm:p-5">
-        <div className="mb-4"><h2 className="text-sm font-bold text-white">Add an account</h2><p className="mt-1 text-xs text-textDim">Create an identity first; credentials and destinations are attached only to that account.</p></div>
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-sm font-bold text-white">Add an account</h2><p className="mt-1 text-xs text-textDim">Sign in to create a provider account automatically, or create an identity for a manual token.</p></div><div className="flex flex-wrap gap-2"><button type="button" onClick={() => void signInProvider('challonge')} disabled={busy === 'oauth:challonge'} className="rounded-lg border border-blue-300/30 bg-blue-300/10 px-3 py-2 text-xs font-bold text-blue-100 transition-colors hover:bg-blue-300/20 disabled:opacity-50">{busy === 'oauth:challonge' ? 'Opening…' : 'Sign in with Challonge'}</button></div></div>
         <div className="grid gap-3 md:grid-cols-3">
           <label className="space-y-1.5"><span className="text-[10px] font-mono uppercase tracking-wider text-textDim">Provider</span><select className="w-full rounded-lg border border-white/10 bg-appDark px-3 py-2 text-sm text-white outline-none focus:border-accentYellow/60" value={draft.provider_type} onChange={(event) => setDraft({ ...draft, provider_type: event.target.value as AccountProviderType })}><option value="discord">Discord</option><option value="challonge">Challonge</option><option value="startgg">Start.gg</option></select></label>
           <label className="space-y-1.5"><span className="text-[10px] font-mono uppercase tracking-wider text-textDim">{providerMeta[draft.provider_type].identity}</span><input className="w-full rounded-lg border border-white/10 bg-appDark px-3 py-2 text-sm text-white outline-none focus:border-accentYellow/60" placeholder="Account identity" value={draft.external_account_id} onChange={(event) => setDraft({ ...draft, external_account_id: event.target.value })} /></label>

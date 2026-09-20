@@ -27,15 +27,9 @@ export function AISettings() {
     try {
       const { key_configured, last_test_status, last_tested_at, last_test_message, ...payload } = config;
       await axios.patch('/api/ai/config', payload);
-      if (apiKey.trim()) await axios.put('/api/ai/config/key', { api_key: apiKey.trim() });
-      setApiKey(''); await load(); setMessage('AI & Automation settings saved.');
+      if (apiKey.trim()) await axios.put(`/api/ai/connections/${config.provider_type}/credential`, { api_key: apiKey.trim() });
+      setApiKey(''); await load(); setMessage('AI & Automation settings saved. Your workspace uses its own provider billing.');
     } catch (error: any) { setMessage(error?.response?.data?.message || 'Could not save AI service settings.'); }
-    finally { setBusy(false); }
-  };
-  const migrate = async () => {
-    setBusy(true); setMessage('');
-    try { const result = (await axios.post('/api/ai/config/migrate-legacy-key')).data; await load(); setMessage(result.migrated ? 'Legacy key copied into the encrypted AI service store. The legacy value was retained.' : 'No legacy AI key was found.'); }
-    catch (error: any) { setMessage(error?.response?.data?.message || 'Legacy-key migration failed.'); }
     finally { setBusy(false); }
   };
   const test = async () => {
@@ -69,9 +63,9 @@ export function AISettings() {
       {([['request_limit', 'Requests / hour'], ['token_limit', 'Tokens / hour'], ['context_char_limit', 'Context characters'], ['response_char_limit', 'Response characters']] as Array<[keyof Config, string]>).map(([key, label]) => <label key={key} className="flex flex-col gap-1.5 text-xs text-textDim">{label}<input type="number" value={Number(config[key])} onChange={(e) => update(key, Number(e.target.value))} className="rounded-md border border-white/10 bg-appDark px-3 py-2 text-sm text-white" /></label>)}
     </div>
     <div className="rounded-xl border border-white/10 bg-cardDark p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-sm font-semibold text-white">Encrypted service key</p><p className="mt-1 text-xs text-textDim">{config.key_configured ? 'Configured — never returned to the browser.' : 'Not configured.'}</p></div><button type="button" onClick={migrate} disabled={busy} className="rounded border border-white/15 px-3 py-2 text-xs text-textDim hover:text-white disabled:opacity-40">Import legacy key once</button></div>
+      <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-sm font-semibold text-white">Workspace provider connection</p><p className="mt-1 text-xs text-textDim">{config.key_configured ? `${config.provider_type === 'gemini' ? 'Gemini' : 'OpenAI'} key configured — never returned to the browser.` : 'Add a key owned and billed by this workspace.'}</p></div></div>
       <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Enter a replacement key; leave empty to retain" className="mt-3 w-full rounded-md border border-white/10 bg-appDark px-3 py-2 text-sm text-white" />
-      <p className="mt-2 text-[10px] text-textDim">The encryption master key belongs to the service environment, not this database. Legacy Gemini settings are retained until a later audited removal.</p>
+      <p className="mt-2 text-[10px] text-textDim">aiTOB does not sell AI tokens. You may keep Gemini and OpenAI connections and switch between them; each provider bills the workspace directly. A connection test may consume a small amount of quota.</p>
     </div>
     <div className="flex flex-wrap items-center gap-3"><button type="button" onClick={save} disabled={busy} className="rounded bg-accentYellow px-4 py-2 text-xs font-bold text-black disabled:opacity-40">Save AI & Automation</button><button type="button" onClick={test} disabled={busy || !config.key_configured} className="rounded border border-white/15 px-4 py-2 text-xs font-bold text-white disabled:opacity-40">Test connection</button><span className="text-xs text-textDim">Last test: {config.last_test_status}{config.last_tested_at ? ` · ${new Date(config.last_tested_at).toLocaleString()}` : ''}</span></div>
     {config.last_test_message && <p className="text-xs text-textDim">{config.last_test_message}</p>}

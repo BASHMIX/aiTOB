@@ -1,164 +1,22 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { TopNavigation } from '@/components/layout/TopNavigation';
 import { TournamentSettings } from './components/TournamentSettings';
 import { ActiveMatchStatus } from './components/ActiveMatchStatus';
 import { ActiveStreamsStatus } from './components/ActiveStreamsStatus';
 import { TournamentOperationsCards } from './components/TournamentOperationsCards';
 import { MatchDashboard } from './components/MatchDashboard';
-import { Conflicts } from './components/Conflicts';
-import { OrganizerConsole } from './components/OrganizerConsole';
+import { OrganizerConsole, type OrganizerConsoleOpenRequest } from './components/OrganizerConsole';
+import { NotificationCenter } from './components/NotificationCenter';
 import { SettingsWorkspace } from './components/SettingsWorkspace';
 import aiTobLogo from '@/assets/aitob-logo.svg';
 import { DispatcherMasterSwitch } from './components/DispatcherMasterSwitch';
+import { ConnectionLines } from './components/ConnectionLines';
 import { useHubStore } from '@/store/useHubStore';
 import { useHubSocket } from '@/hooks/useHubSocket';
 import axios from 'axios';
 
 const PREFERRED_SLUG = 'FNC1stStartGG';
 
-// ── ComfyUI Bezier Node Connections ─────────────────────────────────────
-function ConnectionLines() {
-  const { matches } = useHubStore();
-  const [lines, setLines] = useState<{ id: string; path: string }[]>([]);
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  // Connection exists if match is called/live and assigned to a station
-  const activeMatches = matches.filter(
-    (m) => (m.status === 'in_progress' || m.status === 'called') && m.station_id
-  );
-
-  const calculateLines = useCallback(() => {
-    if (!containerRef.current) return;
-    const containerRect = containerRef.current.getBoundingClientRect();
-    const newLines: { id: string; path: string }[] = [];
-
-    activeMatches.forEach((m) => {
-      const matchEl = document.getElementById(`active-match-${m.set_id}`);
-      const stationEl = document.getElementById(`station-${m.station_id}`);
-
-      if (matchEl && stationEl) {
-        const mRect = matchEl.getBoundingClientRect();
-        const sRect = stationEl.getBoundingClientRect();
-
-        // Start point: bottom center of the active match card
-        const startX = (mRect.left + mRect.right) / 2 - containerRect.left;
-        const startY = mRect.bottom - containerRect.top;
-
-        // End point: top center of the station card
-        const endX = (sRect.left + sRect.right) / 2 - containerRect.left;
-        const endY = sRect.top - containerRect.top;
-
-        // Curved Bezier node connection curve (down and then up)
-        const cpY1 = startY + 60;
-        const cpY2 = endY - 60;
-        // Avoid exactly 0-width bounding boxes which break SVG gradients and filters in some browsers
-        const adjustedEndX = Math.abs(startX - endX) < 0.1 ? endX + 0.1 : endX;
-        const path = `M ${startX} ${startY} C ${startX} ${cpY1}, ${adjustedEndX} ${cpY2}, ${adjustedEndX} ${endY}`;
-
-        newLines.push({
-          id: `${m.set_id}-${m.station_id}`,
-          path,
-        });
-      }
-    });
-
-    // Check if lines actually changed to prevent state thrashing
-    const serializedNew = JSON.stringify(newLines);
-    const serializedOld = JSON.stringify(lines);
-    if (serializedNew !== serializedOld) {
-      setLines(newLines);
-    }
-  }, [activeMatches, lines]);
-
-  useEffect(() => {
-    calculateLines();
-
-    if (!containerRef.current) return;
-    
-    // Listen to container resizing
-    const observer = new ResizeObserver(() => {
-      calculateLines();
-    });
-    observer.observe(containerRef.current);
-
-    const handleScrollOrUpdate = () => {
-      calculateLines();
-    };
-
-    // Listen to parent tab scroll container
-    const scrollEl = containerRef.current.parentElement;
-    if (scrollEl) {
-      scrollEl.addEventListener('scroll', handleScrollOrUpdate);
-    }
-    
-    window.addEventListener('resize', handleScrollOrUpdate);
-
-    // Dynamic interval polling to keep paths aligned during animation expansions
-    const iv = setInterval(calculateLines, 150);
-
-    return () => {
-      observer.disconnect();
-      if (scrollEl) {
-        scrollEl.removeEventListener('scroll', handleScrollOrUpdate);
-      }
-      window.removeEventListener('resize', handleScrollOrUpdate);
-      clearInterval(iv);
-    };
-  }, [calculateLines]);
-
-  return (
-    <div ref={containerRef} className="absolute inset-0 pointer-events-none z-20">
-      <svg className="w-full h-full absolute inset-0">
-        <defs>
-          <linearGradient id="flow-glow" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.85" />
-            <stop offset="50%" stopColor="#eab308" stopOpacity="0.85" />
-            <stop offset="100%" stopColor="#22c55e" stopOpacity="0.85" />
-          </linearGradient>
-          <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="3.5" result="blur" />
-            <feComposite in="SourceGraphic" in2="blur" operator="over" />
-          </filter>
-        </defs>
-        {lines.map((l) => (
-          <g key={l.id}>
-            {/* Background glowing line */}
-            <path
-              d={l.path}
-              fill="none"
-              stroke="#eab308"
-              strokeWidth="5"
-              strokeOpacity="0.18"
-              filter="url(#glow)"
-            />
-            {/* Foreground node connection line with flow animation */}
-            <path
-              d={l.path}
-              fill="none"
-              stroke="url(#flow-glow)"
-              strokeWidth="2.5"
-              strokeDasharray="9,6"
-              className="comfy-flow-line"
-            />
-          </g>
-        ))}
-      </svg>
-      {/* Inline styles for the animated flow */}
-      <style>{`
-        @keyframes comfyFlow {
-          to {
-            stroke-dashoffset: -30;
-          }
-        }
-        .comfy-flow-line {
-          animation: comfyFlow 1.8s linear infinite;
-        }
-      `}</style>
-    </div>
-  );
-}
-
-// ── Main Dashboard ──────────────────────────────────────────────────────
 export function HubDashboard() {
   const {
     setTournaments,
@@ -174,6 +32,8 @@ export function HubDashboard() {
 
   const [isRefetching, setIsRefetching] = useState(false);
   const [activeTab, setActiveTab] = useState<'active' | 'registration' | 'system'>('active');
+  const [consoleOpenRequest, setConsoleOpenRequest] = useState<OrganizerConsoleOpenRequest | null>(null);
+  const [notificationRefreshSignal, setNotificationRefreshSignal] = useState(0);
 
   const loadData = useCallback(async () => {
     setIsRefetching(true);
@@ -232,6 +92,7 @@ export function HubDashboard() {
 
   useHubSocket(useCallback((evt) => {
     if (evt.type === 'match_update' || evt.type === 'status_update') {
+      setNotificationRefreshSignal((signal) => signal + 1);
       loadData();
     }
   }, [loadData]));
@@ -255,6 +116,10 @@ export function HubDashboard() {
           </div>
         </div>
         <div className="flex items-center gap-3">
+          <NotificationCenter
+            refreshSignal={notificationRefreshSignal}
+            onOpenNotification={(target) => setConsoleOpenRequest({ ...target, requestId: `${Date.now()}-${target.focusKey || target.tab}` })}
+          />
           <DispatcherMasterSwitch />
         </div>
       </header>
@@ -309,7 +174,7 @@ export function HubDashboard() {
       <main className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 items-start h-[calc(100vh-140px)]">
         {/* Left Column (Tabs) */}
 
-        <div className="lg:col-span-6 xl:col-span-7 flex flex-col gap-4 h-full pb-10">
+        <div className="lg:col-span-9 xl:col-span-9 flex flex-col gap-4 h-full pb-10">
           <div className="flex items-center gap-1 bg-cardDark/50 p-1 rounded-lg border border-white/5 w-fit">
             <button
               onClick={() => setActiveTab('active')}
@@ -342,6 +207,18 @@ export function HubDashboard() {
             )}
             {activeTab === 'registration' && (
               <div className="animate-fadeIn">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-accentYellow/20 bg-accentYellow/5 px-4 py-3">
+                  <div>
+                    <p className="text-sm font-semibold text-white">Tournament registration</p>
+                    <p className="mt-1 text-xs text-textDim">Create a tournament with the guided provider, Discord, registration, and AI setup.</p>
+                  </div>
+                  <a
+                    href="/admin/tournaments/new"
+                    className="inline-flex min-h-11 items-center rounded-lg bg-accentYellow px-4 py-2.5 text-xs font-bold text-black transition hover:brightness-110"
+                  >
+                    + NEW TOURNAMENT WIZARD
+                  </a>
+                </div>
                 <TournamentSettings />
               </div>
             )}
@@ -354,7 +231,7 @@ export function HubDashboard() {
         </div>
 
         {/* Middle Column (Match Dashboard) */}
-        <div data-match-dashboard className="lg:col-span-3 bg-cardDark rounded-lg shadow-md flex flex-col h-full border border-white/5 overflow-hidden">
+        <div data-match-dashboard className="lg:col-span-3 lg:col-start-10 bg-cardDark rounded-lg shadow-md flex flex-col h-full border border-white/5 overflow-hidden">
           <div className="p-3 border-b border-white/10 flex items-center justify-between">
             <h2 className="text-accentYellow font-bold text-sm tracking-widest uppercase">Match Dashboard</h2>
             <button
@@ -372,13 +249,9 @@ export function HubDashboard() {
           <MatchDashboard />
         </div>
 
-        {/* Right Column */}
-        <div className="lg:col-span-3 xl:col-span-2 flex flex-col gap-4 h-full pr-1">
-          <Conflicts />
-        </div>
       </main>
 
-      <OrganizerConsole />
+      <OrganizerConsole openRequest={consoleOpenRequest} />
     </div>
   );
 }

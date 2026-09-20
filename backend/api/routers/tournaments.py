@@ -8,13 +8,15 @@ from backend.core.database import (
     get_all_player_overrides, set_tournament_streams, get_tournament_streams,
     get_stations, set_tournament_sync_status, get_bracket_snapshot,
     get_live_sync_state_v2, get_setting, cancel_pending_dispatcher_work,
+    get_tournament_game_metadata, set_tournament_game_metadata,
 )
 from backend.core.providers.registry import get_provider, get_provider_for_tournament
 from backend.core.contracts.tournament_types import ProviderSet, ProviderTournament
-from backend.core.provider_sync_manager import sync_manager
+from backend.core.provider_sync_manager import sync_manager, serialize_set
 from backend.core.provider_projection import tournament_provider_projection
 from backend.core.challonge_resolution import resolution_service
 from backend.core.provider_feature_flags import get_provider_feature_flags
+from backend.core.tournament_lifecycle import run_tournament_lifecycle
 from backend.core.providers.challonge.client import ChallongeError, ChallongeRateLimitError
 from backend.core.database import persist_challonge_identity
 from backend.core.entitlements import EntitlementLimitExceeded, require_workspace_capacity
@@ -50,30 +52,18 @@ def _dispatcher_service_alive(value: str | None) -> bool:
 def provider_reference(tournament: dict) -> str:
     """Keep the durable numeric ID in DB but carry optional community scope upstream."""
     remote_id = str(tournament.get("provider_tournament_id") or tournament.get("slug"))
+    # Start.gg's GraphQL tournament argument is a public slug.  The numeric
+    # provider id remains the durable identity, but reads/syncs must use the
+    # slug or the API returns a null tournament.
+    if tournament.get("provider_type") == "startgg":
+        return str(tournament.get("slug") or remote_id)
     community = tournament.get("provider_subdomain")
     return f"{remote_id}@{community}" if tournament.get("provider_type") == "challonge" and community else remote_id
 
 
 def serialize_provider_set_for_frontend(ps: ProviderSet) -> dict:
-    """Map ProviderSet to frontend-compatible dict format."""
-    return {
-        "id": ps.id,
-        "state": int(ps.state),
-        "round": ps.round_name,
-        "fullRoundText": ps.round_name,
-        "identifier": ps.identifier,
-        "event_id": ps.event_id,
-        "event_name": ps.event_name,
-        "phaseGroup": {
-            "displayIdentifier": ps.phase_group
-        },
-        "p1": ps.entrant1.name if ps.entrant1 else "TBD",
-        "p2": ps.entrant2.name if ps.entrant2 else "TBD",
-        "p1_avatar": ps.entrant1.avatar_url if ps.entrant1 else None,
-        "p2_avatar": ps.entrant2.avatar_url if ps.entrant2 else None,
-        "p1_eid": ps.entrant1.id if ps.entrant1 else None,
-        "p2_eid": ps.entrant2.id if ps.entrant2 else None,
-    }
+    """Backward-compatible alias for the single provider-set serializer."""
+    return serialize_set(ps)
 
 
 def serialize_tournament_for_frontend(info: ProviderTournament) -> dict:
@@ -83,6 +73,8 @@ def serialize_tournament_for_frontend(info: ProviderTournament) -> dict:
         "name": info.name,
         "starts_at": info.starts_at,
         "provider_state": info.state,
+        "provider_state_raw": info.state,
+        "state_source": "provider",
         "group_stage_enabled": info.group_stage_enabled,
         "events": [
             {
@@ -94,10 +86,15 @@ def serialize_tournament_for_frontend(info: ProviderTournament) -> dict:
                         {
                             "id": entrant.id,
                             "name": entrant.name,
+                            "prefix": entrant.prefix,
+                            "gamertag": entrant.gamertag,
+                            "cfn": entrant.cfn,
+                            "country": entrant.country,
                             "provider_user_id": entrant.user_id,
                             "participants": [
                                 {
                                     "user": {
+                                        "id": entrant.user_id,
                                         "images": [
                                             {
                                                 "type": "profile",
@@ -139,6 +136,59 @@ async def api_provider_profile(slug: str, principal: SessionPrincipal = Depends(
         raise HTTPException(status_code=404, detail="Tournament not found")
     provider = await get_provider_for_tournament(slug, _workspace(principal))
     return tournament_provider_projection(tournament, provider)
+
+
+@router.post("/{slug:path}/lifecycle")
+async def api_tournament_lifecycle(slug: str, body: dict[str, object], principal: SessionPrincipal = Depends(require_permission("tournament.manage"))):
+    """Start or reset the remote bracket through its provider adapter."""
+    action = str(body.get("action") or "").strip().lower()
+    if action not in {"start", "reset"}:
+        raise HTTPException(status_code=422, detail="Lifecycle action must be start or reset.")
+    tournament = await get_tournament(slug, _workspace(principal))
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    if not get_provider_feature_flags().provider_start_enabled:
+        raise HTTPException(status_code=409, detail="Provider tournament lifecycle actions are disabled by the current rollout setting.")
+    try:
+        result = await run_tournament_lifecycle(tournament, action, workspace_id=_workspace(principal))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not result.success:
+        raise HTTPException(status_code=409, detail=result.error_message or f"Could not {action} the provider tournament.")
+    workspace_id = _workspace(principal)
+    try:
+        await sync_manager.sync_bracket(
+            slug,
+            workspace_id=workspace_id,
+            reason=f"lifecycle-{action}",
+            # Start.gg can leave the event/phase activity flag completed after
+            # Reset Bracket even though its sets are reusable.  Read the
+            # provider snapshot explicitly so the Hub repopulates the reset
+            # matches instead of publishing an empty projection.
+            ignore_activity_guard=(action == "reset"),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Provider changed state, but Hub sync failed: {exc}") from exc
+    await hub_mgr.broadcast({"type": "match_update", "_workspace_id": workspace_id})
+    diagnostics = result.diagnostics if isinstance(result.diagnostics, dict) else {}
+    affected_count = diagnostics.get("affected_set_count")
+    message = f"Tournament {action} requested."
+    if action == "reset" and affected_count is not None:
+        try:
+            suffix = "" if int(affected_count) == 1 else "es"
+        except (TypeError, ValueError):
+            suffix = "es"
+        if int(affected_count) == 0:
+            message = "No provider match results changed. The Start.gg bracket is still started; the token API cannot reset its bracket lifecycle."
+        else:
+            message = f"Provider match results reset ({affected_count} match{suffix} affected). The Start.gg bracket may still be started because the token API cannot reset its bracket lifecycle."
+    return {
+        "ok": True,
+        "action": action,
+        "provider_type": tournament.get("provider_type") or "startgg",
+        "message": message,
+        "diagnostics": diagnostics,
+    }
 
 
 @router.get("/{slug:path}/dispatcher-status", summary="Get actual dispatcher status for one tournament")
@@ -289,7 +339,7 @@ async def api_add_tournament(body: AddTournamentRequest, principal: SessionPrinc
     operation_id="fetchTournamentSets"
 )
 async def api_get_sets(slug: str, principal: SessionPrincipal = Depends(require_permission("workspace.read"))):
-    """Read SQLite cache; at most one stale-on-open refresh may run in background."""
+    """Read the durable provider snapshot; a stale-on-open refresh may run in background."""
     t = await get_tournament(slug, _workspace(principal))
     if not t:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tournament not found")
@@ -314,7 +364,13 @@ async def api_get_sets(slug: str, principal: SessionPrincipal = Depends(require_
     response_model=MessageResponse,
 )
 async def api_sync_bracket(slug: str, principal: SessionPrincipal = Depends(require_permission("tournament.manage"))):
-    """One rate-aware external refresh, initiated by the T.O. from the Hub."""
+    """One rate-aware external refresh, initiated by the T.O. from the Hub.
+
+    An explicit Hub sync is also the organizer's read-only preview action. For
+    Start.gg we therefore load seeded sets from created/completed phases too;
+    the provider still enforces its lifecycle for mutations such as calling or
+    reporting a result. Background/live syncs keep the normal activity guard.
+    """
     tournament = await get_tournament(slug, _workspace(principal))
     if not tournament:
         raise HTTPException(status_code=404, detail="Tournament not found")
@@ -325,10 +381,25 @@ async def api_sync_bracket(slug: str, principal: SessionPrincipal = Depends(requ
         )
     try:
         workspace_id = _workspace(principal)
+        if tournament.get("provider_type") == "startgg":
+            # The organizer explicitly asked to see the seeded bracket. Keep
+            # that choice on the tournament so the 45-second reconciliation
+            # loop does not immediately hide it again while the provider phase
+            # is still CREATED after Reset or before Start.
+            await update_tournament_settings(slug, workspace_id, ignore_activity_guard=True)
         if workspace_id:
-            await sync_manager.sync_bracket(slug, workspace_id=workspace_id, reason="manual")
+            await sync_manager.sync_bracket(
+                slug,
+                workspace_id=workspace_id,
+                reason="manual",
+                ignore_activity_guard=tournament.get("provider_type") == "startgg",
+            )
         else:
-            await sync_manager.sync_bracket(slug, reason="manual")
+            await sync_manager.sync_bracket(
+                slug,
+                reason="manual",
+                ignore_activity_guard=tournament.get("provider_type") == "startgg",
+            )
         await hub_mgr.broadcast({"type": "match_update", "_workspace_id": _workspace(principal)})
         return MessageResponse(message="Bracket synchronized.", ok=True)
     except Exception as exc:
@@ -441,7 +512,19 @@ async def api_refresh_tournament(slug: str, principal: SessionPrincipal = Depend
         # response explicit so the UI can show setup guidance without claiming
         # that the stream is absent or silently falling back to a global token.
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    info = await provider.fetch_tournament(provider_reference(t or {"slug": slug}))
+    try:
+        info = await provider.fetch_tournament(provider_reference(t or {"slug": slug}))
+    except Exception as exc:
+        # Provider outages are an expected integration failure, not an
+        # unhandled API crash. Keep the response actionable for the organizer
+        # and retain the concrete exception class in the server log.
+        exc_name = type(exc).__name__
+        print(f"[TOURNAMENT_REFRESH] provider lookup failed: {exc_name}: {exc}")
+        if exc_name in {"ConnectError", "ConnectTimeout", "ReadTimeout", "WriteTimeout", "PoolTimeout", "TimeoutException"}:
+            detail = "Cannot reach api.start.gg:443 from the API server (TCP/TLS connection failed before GraphQL). Check the firewall, proxy, or network route, then retry."
+        else:
+            detail = f"Start.gg metadata refresh failed ({exc_name}). Check the provider connection, then retry."
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=detail) from exc
     if not info:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Could not find tournament: {slug}")
 
@@ -465,6 +548,85 @@ async def api_refresh_tournament(slug: str, principal: SessionPrincipal = Depend
         for s in info.streams
     ], _workspace(principal))
     return MessageResponse(message="Tournament data refreshed.", ok=True)
+
+
+@router.get(
+    "/{slug:path}/game-metadata",
+    summary="Fetch the provider game catalog for this tournament event",
+    operation_id="getTournamentGameMetadata",
+)
+async def api_tournament_game_metadata(
+    slug: str,
+    event_id: str | None = None,
+    principal: SessionPrincipal = Depends(require_permission("workspace.read")),
+    refresh: bool = False,
+):
+    """Return Start.gg-owned character/stage IDs for the selected event."""
+    workspace_id = _workspace(principal)
+    tournament = await get_tournament(slug, workspace_id)
+    if not tournament:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tournament not found")
+    if tournament.get("provider_type") != "startgg":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Game catalog is unavailable for this provider.")
+    selected_event_id = event_id or tournament.get("event_id")
+    if not selected_event_id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Tournament event is not selected.")
+    # Read the exact Event cache before contacting Start.gg. It is used only as
+    # a same-Event outage fallback; catalogs are never borrowed from another
+    # Event in a multi-game tournament.
+    try:
+        cached = await get_tournament_game_metadata(slug, str(selected_event_id), workspace_id)
+    except Exception:
+        cached = None
+    # Ordinary Hub renders are local and instant once an Event was fetched
+    # successfully. Only the explicit Refresh Metadata action spends a
+    # provider request and replaces the catalog.
+    if cached and not refresh:
+        return {**cached, "metadata_source": "cache", "metadata_stale": False}
+
+    provider = await get_provider_for_tournament(slug, workspace_id) if workspace_id else await get_provider_for_tournament(slug)
+    fetch_catalog = getattr(provider, "fetch_event_game_metadata", None)
+    if fetch_catalog is None:
+        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="This provider does not expose a game catalog.")
+    try:
+        metadata = await fetch_catalog(str(selected_event_id))
+        if not isinstance(metadata, dict):
+            raise ValueError("Start.gg returned an invalid game catalog response.")
+        returned_event_id = metadata.get("event_id")
+        if returned_event_id is not None and str(returned_event_id) != str(selected_event_id):
+            raise ValueError("Start.gg returned metadata for a different Event.")
+        if not isinstance(metadata.get("characters"), list) or not metadata.get("characters"):
+            # Do not replace a previously useful catalog with a transient empty
+            # provider projection. The exception path below may serve the last
+            # successful catalog for this exact Event.
+            raise RuntimeError("Start.gg returned no playable characters for the selected Event.")
+        await set_tournament_game_metadata(
+            slug,
+            str(selected_event_id),
+            metadata,
+            workspace_id,
+        )
+        return {**metadata, "metadata_source": "provider", "metadata_stale": False}
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except Exception as exc:
+        # Keep the client response generic, but leave a redacted diagnostic in
+        # the API log so a provider outage, account binding problem, and
+        # unsupported catalog query can be distinguished during troubleshooting.
+        exc_name = type(exc).__name__
+        print(f"[GAME_METADATA] provider lookup failed: {exc_name}: {exc}")
+        if cached and cached.get("event_id") is not None and str(cached.get("event_id")) == str(selected_event_id):
+            return {
+                **cached,
+                "metadata_source": "cache",
+                "metadata_stale": True,
+                "metadata_warning": "Start.gg could not refresh this Event; showing its last successful character catalog.",
+            }
+        if exc_name in {"ConnectError", "ConnectTimeout", "ReadTimeout", "WriteTimeout", "PoolTimeout", "TimeoutException"}:
+            detail = "Cannot reach api.start.gg:443 from the API server (TCP/TLS connection failed before GraphQL). The character catalog cannot be loaded until that route is restored."
+        else:
+            detail = f"Start.gg game catalog lookup failed ({exc_name}). Verify the selected Event and provider connection."
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=detail) from exc
 
 
 @router.post(
@@ -502,15 +664,37 @@ async def api_list_tournament_events(slug: str, principal: SessionPrincipal = De
         raw = json.loads(t.get("raw_data") or "{}")
     except Exception:
         raw = {}
-    events = [
-        {
-            "id": str(ev.get("id")),
-            "name": ev.get("name") or "",
-            "game": (ev.get("videogame") or {}).get("name") or "",
-        }
-        for ev in (raw.get("events") or [])
-        if ev.get("id") is not None
-    ]
+    source_events = raw.get("events") or []
+    # Wizard-materialized tournaments preserve the redacted provider preview
+    # under ``provider.scopes`` rather than copying the legacy raw tournament
+    # payload. Project that selected Event shape here as well so the Hub can
+    # restore event scope after a reload.
+    if not source_events:
+        provider_preview = raw.get("provider") if isinstance(raw.get("provider"), dict) else {}
+        source_events = provider_preview.get("scopes") or []
+        if not source_events and isinstance(provider_preview.get("selected_scope"), dict):
+            source_events = [provider_preview["selected_scope"]]
+
+    events = []
+    def fact_value(value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        # Wizard previews use fact wrappers while legacy provider snapshots
+        # keep the GraphQL ``videogame { name }`` object.
+        return value.get("value") or value.get("name")
+
+    for ev in source_events:
+        if not isinstance(ev, dict) or ev.get("id", ev.get("external_id")) is None:
+            continue
+        game = fact_value(ev.get("game"))
+        if not game:
+            game = fact_value(ev.get("videogame"))
+        name = fact_value(ev.get("name"))
+        events.append({
+            "id": str(ev.get("id", ev.get("external_id"))),
+            "name": name or "",
+            "game": game or "",
+        })
     return {"events": events}
 
 
@@ -660,6 +844,10 @@ async def api_update_tournament_settings(slug: str, body: PatchTournamentSetting
     # future "send null to clear" can't be quietly swallowed. Unsent fields are
     # left untouched.
     d = body.model_dump(exclude_unset=True)
+    # Preserve the legacy request shape for old clients, but never allow a
+    # caller or stale UI to re-arm automatic disqualification.
+    if "auto_dq_enabled" in d:
+        d["auto_dq_enabled"] = False
     if not await get_tournament(slug, _workspace(principal)):
         raise HTTPException(status_code=404, detail="Tournament not found")
     await update_tournament_settings(slug, _workspace(principal), **d)

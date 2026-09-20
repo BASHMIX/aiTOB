@@ -1,61 +1,52 @@
-import os
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_google_genai import ChatGoogleGenerativeAI
-from dotenv import load_dotenv
 
 from .agent_state import MatchState
 from .schemas import MatchResultExtraction
 
-load_dotenv()
-
-# ── Lazy LLM init ────────────────────────────────────────────────────────
-# The API key may live in the DB (set via Hub settings) rather than .env.
-# We defer instantiation until first use so the DB is already available.
-_llm = None
-_extractor_llm = None
+# ── Workspace-owned lazy LLM init ────────────────────────────────────────
+# The legacy graph is retained for match-thread compatibility, but it must use
+# the authenticated workspace's selected BYOK account.  There is deliberately
+# no process-global key, environment fallback, or cross-workspace LLM cache.
 # Result inference is intentionally unavailable until a durable Result Claims
 # workflow exists. Kept explicit so historical benchmark tests do not imply
 # that model output is an accepted tournament result.
 AI_REFEREE_RESULT_INFERENCE_ENABLED = False
 
-async def _get_llm():
-    """Return the LLM, initializing it on first call using the key from DB or env."""
-    global _llm, _extractor_llm
-    if _llm is not None:
-        return _llm, _extractor_llm
+async def _get_llm(workspace_id: str | None = None):
+    """Return the selected workspace Gemini LLM and result extractor.
 
-    # Try DB first, fall back to env
-    api_key = None
-    try:
-        import sys, os as _os
-        root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
-        if root not in sys.path:
-            sys.path.append(root)
-        from backend.core.database import get_setting, get_connection
-        api_key = (
-            await get_setting("GOOGLE_API_KEY")
-            or await get_setting("GEMINI_API_KEY")
-            or await get_connection("GOOGLE_API_KEY")
-            or await get_connection("GEMINI_API_KEY")
-        )
-    except Exception:
-        pass
+    ``workspace_id`` is required even though the result-referee graph is
+    currently inert. Requiring it here prevents a future graph node or legacy
+    caller from silently falling back to a platform/global credential.
+    """
+    from backend.core.ai_service import (
+        AIConfigurationError,
+        _workspace_api_key,
+        get_workspace_ai_config,
+    )
 
-    api_key = api_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    if not workspace_id or not str(workspace_id).strip():
+        raise AIConfigurationError("An authenticated workspace is required for AI use.")
+    config = await get_workspace_ai_config(str(workspace_id))
+    if config.get("mode") == "disabled":
+        raise AIConfigurationError("Organizer Assistant is disabled.")
+    if config.get("provider_type") != "gemini":
+        # The match-thread graph requires Gemini's LangChain structured output
+        # object. Workspace OpenAI requests use the provider-neutral
+        # ``backend.core.ai_service.AIService`` path instead of an implicit
+        # Gemini fallback.
+        raise AIConfigurationError("The match assistant graph requires the selected Gemini connection.")
+    api_key = await _workspace_api_key(str(workspace_id), config)
 
-    if not api_key:
-        raise RuntimeError(
-            "No Gemini API key found. Set GOOGLE_API_KEY in Hub Settings or in your .env file."
-        )
-
-    _llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
+    llm = ChatGoogleGenerativeAI(
+        model=str(config.get("model") or "gemini-2.5-flash"),
         temperature=0,
         api_key=api_key,
     )
-    _extractor_llm = _llm.with_structured_output(MatchResultExtraction)
-    return _llm, _extractor_llm
+    extractor_llm = llm.with_structured_output(MatchResultExtraction)
+    return llm, extractor_llm
 
 async def evaluate_chat(state: MatchState) -> dict:
     """Disable legacy AI-referee result inference pending Result Claims.
@@ -80,12 +71,21 @@ workflow.add_edge("evaluate_chat", END)
 memory = MemorySaver()
 app = workflow.compile(checkpointer=memory)
 
-async def process_message(thread_id: int, author_id: int, author_name: str, message_content: str):
+async def process_message(
+    thread_id: int,
+    author_id: int,
+    author_name: str,
+    message_content: str,
+    *,
+    workspace_id: str | None = None,
+):
     """
     Called by the Discord bot when a message is received in a match thread.
     Returns the new state of the graph.
     """
     config = {"configurable": {"thread_id": str(thread_id)}}
+    if workspace_id:
+        config["configurable"]["workspace_id"] = str(workspace_id)
     
     # Get current state to fetch the chat history
     current_state_snapshot = app.get_state(config)

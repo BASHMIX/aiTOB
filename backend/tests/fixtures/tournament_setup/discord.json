@@ -1,0 +1,19 @@
+{
+  "guild": {"id": "fixture-discord-guild-001", "name": "aiTOB Fixture Guild"},
+  "channels": [
+    {"id": "fixture-discord-channel-001", "name": "tournament-registration", "type": "text"},
+    {"id": "fixture-discord-channel-002", "name": "match-calls", "type": "text"}
+  ],
+  "roles": [
+    {"id": "fixture-discord-role-001", "name": "Verified Player"},
+    {"id": "fixture-discord-role-002", "name": "Tournament Moderator"}
+  ],
+  "member": {"id": "303608372999000111", "username": "fixture_player", "display_name": "Nova", "bot": false},
+  "permissions": {
+    "view_channel": true,
+    "send_messages": true,
+    "embed_links": true,
+    "manage_nicknames": true,
+    "manage_roles": true
+  }
+}

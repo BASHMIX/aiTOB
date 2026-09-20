@@ -46,6 +46,7 @@ export function useEditorWebSocket(
           useEditorStore.getState().setElements(data.elements);
         }
         useEditorStore.getState().setGlobalSettings(data.background_url || '', data.global_font_url || '', data.global_font_family || '');
+        if (Array.isArray(data.font_library)) useEditorStore.getState().setFontLibrary(data.font_library);
       };
     };
 

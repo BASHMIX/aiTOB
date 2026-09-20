@@ -84,7 +84,12 @@ projection is authoritative for controls:
     "call": { "kind": "local", "enabled": true, "label": "Call in aiTOB" },
     "start": { "kind": "local", "enabled": true, "label": "Start locally" },
     "report_score": { "kind": "remote", "enabled": true, "label": "Report to Challonge" },
-    "dq": { "kind": "unavailable", "enabled": false, "reason": "Challonge DQ verification is not enabled." }
+    "dq": {
+      "kind": "remote",
+      "enabled": true,
+      "label": "Disqualify",
+      "targets": ["p1", "p2"]
+    }
   }
 }
 ```
@@ -101,6 +106,32 @@ and initially reports `pending`/`acknowledged_unverified`; `snapshot_verified` i
 observable through match/command status. A successful response states whether it was
 `remote_applied` or `local_only`; it never says "reported to Start.gg" for a
 provider-neutral operation.
+
+For Start.gg, the canonical interaction during the provider-owned called window is:
+
+`POST /api/active-matches/{set_id}/attendance`
+
+```json
+{ "player": "p1", "state": "present" }
+```
+
+`player` is `p1` or `p2`; `state` is `present` or `withdrawn`. The authenticated
+Discord entrant and an organizer using manual aiTOB controls call the same command
+service. The command records actor, source, call occurrence, and provider deadline,
+then submits the corresponding provider-authorized per-entrant attendance transition.
+An acknowledgement never completes the match or selects a winner.
+
+`markSetCalled` starts or confirms the Start.gg native called/check-in flow. The
+response may expose `provider_timer.deadline` or `provider_timer.duration_seconds`
+only when read from or accepted by Start.gg; otherwise it exposes
+`provider_timer.managed_by="startgg"` with an unknown deadline. It MUST NOT substitute
+the Hub's local `dq_timer_seconds`.
+
+At deadline, Start.gg resolves the bracket: the sole present entrant advances, while
+neither present becomes double-DQ. aiTOB learns this only from a newer snapshot.
+`POST /api/active-matches/{set_id}/dq` remains the organizer-only immediate result
+operation for providers such as Challonge that support single-player DQ; Challonge
+projects only `targets: ["p1", "p2"]` and never exposes `both`.
 
 Station/OBS actions are Hub-local unless the action projection explicitly exposes a
 verified `remote` stream queue. Challonge is local-only in this release.

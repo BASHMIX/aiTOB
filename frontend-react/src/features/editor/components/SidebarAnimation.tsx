@@ -4,6 +4,7 @@ export function SidebarAnimation() {
   const store = useEditorStore();
   const selId = store.selectedId;
   const selEl = selId ? store.elements[selId] : null;
+  const selectedIds = store.selectedIds.length ? store.selectedIds : (selId ? [selId] : []);
 
   if (!selEl || !selId) {
     return null;
@@ -26,9 +27,12 @@ export function SidebarAnimation() {
   };
 
   const updateAnim = (updates: Partial<typeof anim>) => {
-    if (!selId) return;
-    store.updateElement(selId, {
-      animation: { ...anim, ...updates }
+    if (!selectedIds.length) return;
+    selectedIds.forEach((id) => {
+      const element = store.elements[id];
+      if (!element) return;
+      const current = element.animation || anim;
+      store.updateElement(id, { animation: { ...current, ...updates } });
     });
   };
 
@@ -41,7 +45,7 @@ export function SidebarAnimation() {
   return (
     <div className="mb-3 p-2 bg-[#333] rounded border border-[#444]">
       <div className="flex justify-between items-center mb-2">
-        <h4 className="text-[11px] text-[#00ffcc] uppercase tracking-wider font-bold">Animation</h4>
+        <h4 className="text-[11px] text-[#00ffcc] uppercase tracking-wider font-bold">Animation {selectedIds.length > 1 && <span className="text-white/60 normal-case">({selectedIds.length} selected)</span>}</h4>
         <button
           onClick={triggerPreview}
           className="bg-[#00ffcc] text-[#111] hover:bg-[#00d4aa] px-2 py-0.5 rounded text-[10px] font-bold flex items-center gap-1 transition-all"

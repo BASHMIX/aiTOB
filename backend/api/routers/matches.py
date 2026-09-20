@@ -6,6 +6,7 @@ from backend.core.database import (
     get_all_player_overrides, add_bot_feed, add_hub_command, get_match_occupying_station,
     get_station_stream_id, get_station, get_available_stream_station,
     update_station, add_planned_stream, remove_planned_stream, serialize_active_match_for_display,
+    apply_player_overrides_to_match,
 )
 from backend.core.providers.registry import get_provider_for_tournament
 from backend.core.score_reporting import report_score_to_provider
@@ -132,17 +133,31 @@ async def api_active_matches(
     # tenant data is never exposed without a trusted session.
     matches = await get_active_matches(tournament_slug, event_id, _ws(principal)) if principal else []
     overrides = await get_all_player_overrides(_ws(principal)) if principal else {}
+    tournament_game_cache: dict[str, str] = {}
     for m in matches:
-        p1_eid = m.get("p1_entrant_id")
-        p2_eid = m.get("p2_entrant_id")
-        if p1_eid and p1_eid in overrides:
-            ov = overrides[p1_eid]
-            if ov.get("name"): m["p1_name"] = ov["name"]
-            if ov.get("avatar_url"): m["p1_avatar"] = ov["avatar_url"]
-        if p2_eid and p2_eid in overrides:
-            ov = overrides[p2_eid]
-            if ov.get("name"): m["p2_name"] = ov["name"]
-            if ov.get("avatar_url"): m["p2_avatar"] = ov["avatar_url"]
+        m.setdefault("game_name", "")
+        # Older imports may not have populated tournaments.game. Resolve the
+        # selected event's videogame from the stored provider snapshot without
+        # making a provider request on every dashboard refresh.
+        if not m.get("game_name") and m.get("tournament_slug"):
+            slug = str(m["tournament_slug"])
+            if slug not in tournament_game_cache:
+                from backend.core.database import get_tournament
+                tournament = await get_tournament(slug, _ws(principal))
+                game_name = str((tournament or {}).get("game") or "")
+                if not game_name:
+                    try:
+                        import json
+                        raw = json.loads((tournament or {}).get("raw_data") or "{}")
+                        event_id = str(m.get("event_id") or "")
+                        events = raw.get("events") or raw.get("tournament", {}).get("events", [])
+                        event = next((item for item in events if str(item.get("id")) == event_id), None) if event_id else None
+                        game_name = str((event or {}).get("game") or ((event or {}).get("videogame") or {}).get("name") or "")
+                    except (TypeError, ValueError, AttributeError):
+                        game_name = ""
+                tournament_game_cache[slug] = game_name
+            m["game_name"] = tournament_game_cache[slug]
+        m.update(apply_player_overrides_to_match(m, overrides))
         # Pure serialization: no provider request and no workflow effect.
         m.update(serialize_active_match_for_display(m))
         m["actions"] = _action_projection(m)
@@ -266,7 +281,7 @@ async def api_call_match(set_id: str, principal: SessionPrincipal = Depends(requ
         await hub_mgr.broadcast({"type": "match_update", "_workspace_id": _ws(principal)})
         return MessageResponse(message="Players called locally; Discord delivery is queued.", ok=True)
     from backend.core.match_state import call_match_core
-    result = await call_match_core(set_id, workspace_id=_ws(principal))
+    result = await call_match_core(set_id, source="dashboard", workspace_id=_ws(principal))
     if result.get("error"):
         code = status.HTTP_404_NOT_FOUND if result["error"] == "Match not found" else status.HTTP_400_BAD_REQUEST
         raise HTTPException(status_code=code, detail=result["error"])

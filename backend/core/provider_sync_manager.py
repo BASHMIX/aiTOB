@@ -12,6 +12,7 @@ from typing import Any
 
 from backend.core.contracts import ITournamentProviderV2, ProviderSnapshotRequestV2, SnapshotScope
 from backend.core.contracts.tournament_types import ProviderSet
+from backend.core.provider_serialization import serialize_provider_set
 from backend.core.database import (
     get_tournament,
     save_bracket_snapshot,
@@ -29,6 +30,12 @@ from backend.core.sync_coordinator import LiveSyncScheduler, SyncCoordinator
 
 def provider_reference(tournament: dict) -> str:
     remote_id = str(tournament.get("provider_tournament_id") or tournament.get("slug"))
+    # Start.gg's GraphQL ``tournament(slug:)`` argument accepts the public
+    # slug, not the numeric tournament id stored for provider identity.  Keep
+    # the numeric id for ownership/binding, but use the slug for reads and
+    # post-reset synchronization.
+    if tournament.get("provider_type") == "startgg":
+        return str(tournament.get("slug") or remote_id)
     community = tournament.get("provider_subdomain")
     if tournament.get("provider_type") == "challonge" and community:
         return f"{remote_id}@{community}"
@@ -36,23 +43,14 @@ def provider_reference(tournament: dict) -> str:
 
 
 def serialize_set(provider_set: ProviderSet) -> dict[str, Any]:
-    """Stable frontend snapshot shape; does not expose provider credentials."""
-    return {
-        "id": provider_set.id,
-        "state": int(provider_set.state),
-        "round": provider_set.round_name,
-        "fullRoundText": provider_set.round_name,
-        "identifier": provider_set.identifier,
-        "event_id": provider_set.event_id,
-        "event_name": provider_set.event_name,
-        "phaseGroup": {"displayIdentifier": provider_set.phase_group},
-        "p1": provider_set.entrant1.name if provider_set.entrant1 else "TBD",
-        "p2": provider_set.entrant2.name if provider_set.entrant2 else "TBD",
-        "p1_avatar": provider_set.entrant1.avatar_url if provider_set.entrant1 else None,
-        "p2_avatar": provider_set.entrant2.avatar_url if provider_set.entrant2 else None,
-        "p1_eid": provider_set.entrant1.id if provider_set.entrant1 else None,
-        "p2_eid": provider_set.entrant2.id if provider_set.entrant2 else None,
-    }
+    """Serialize a provider set without conflating provider and Hub state.
+
+    ``state`` is retained as the legacy, provider-agnostic aiTOB state code.
+    New consumers should use ``aitob_state``/``aitob_state_code`` and inspect
+    ``provider_state_raw`` when they need the provider's original value.
+    No provider credentials or request data are exposed here.
+    """
+    return serialize_provider_set(provider_set)
 
 
 class ProviderSyncManager:
@@ -140,6 +138,7 @@ class ProviderSyncManager:
         *,
         workspace_id: str | None = None,
         reason: str = "manual",
+        ignore_activity_guard: bool | None = None,
     ) -> dict:
         """Fetch and cache the current provider bracket exactly once per tournament."""
         async with self._locks[(workspace_id, tournament_slug)]:
@@ -207,6 +206,11 @@ class ProviderSyncManager:
                     and isinstance(provider, ITournamentProviderV2)
                 )
                 if use_v2_reads:
+                    allow_completed_bracket = (
+                        bool(tournament.get("ignore_activity_guard"))
+                        if ignore_activity_guard is None
+                        else bool(ignore_activity_guard)
+                    )
                     request = ProviderSnapshotRequestV2(
                         provider_type="startgg",
                         # Legacy unowned fixtures preserve the old V2 contract
@@ -217,7 +221,7 @@ class ProviderSyncManager:
                         tournament_id=provider_reference(tournament),
                         scope=SnapshotScope.ACTIVE_MATCHES,
                         options={
-                            "ignore_activity_guard": bool(tournament.get("ignore_activity_guard")),
+                            "ignore_activity_guard": allow_completed_bracket,
                         },
                     )
                     snapshot = await self._get_v2_coordinator().run_snapshot(
@@ -229,11 +233,37 @@ class ProviderSyncManager:
                     ):
                         raise ValueError("Start.gg V2 snapshot returned an invalid sets payload.")
                 else:
+                    allow_completed_bracket = (
+                        bool(tournament.get("ignore_activity_guard"))
+                        if ignore_activity_guard is None
+                        else bool(ignore_activity_guard)
+                    )
                     provider_sets = await provider.fetch_sets(
                         provider_reference(tournament),
-                        ignore_activity_guard=bool(tournament.get("ignore_activity_guard")),
+                        ignore_activity_guard=allow_completed_bracket,
                     )
                 await sync_active_matches(tournament_slug, provider_sets, trusted_workspace_id)
+                # Edge-triggered provider CALLED observations share the same
+                # durable occurrence ledger as Dashboard calls.  The provider
+                # revision (or updated timestamp) is the stable transition
+                # version; repeated snapshots and worker restarts are safe.
+                if trusted_workspace_id:
+                    from backend.core.contracts.tournament_types import ProviderSetState
+                    from backend.core.match_commands import record_called_occurrence
+                    for observed in provider_sets:
+                        if getattr(observed, "state", None) is not ProviderSetState.CALLED:
+                            continue
+                        version = str(getattr(observed, "provider_revision", None) or getattr(observed, "provider_updated_at", None) or getattr(observed, "provider_state_raw", None) or "called")
+                        try:
+                            await record_called_occurrence(
+                                str(trusted_workspace_id), str(tournament_slug), str(observed.id), version,
+                                source="provider_sync", called_at=getattr(observed, "provider_updated_at", None),
+                                payload={"provider_revision": version},
+                            )
+                        except Exception:
+                            # A legacy/migrating tournament may not yet have the
+                            # occurrence table; the bracket projection remains usable.
+                            continue
                 serialized = [serialize_set(item) for item in provider_sets]
                 if trusted_workspace_id:
                     await save_bracket_snapshot(tournament_slug, serialized, trusted_workspace_id)

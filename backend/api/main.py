@@ -597,8 +597,12 @@ async def get_obs_overlay_data(station_id: str, x_overlay_token: str | None = He
         "station": station,
         "overlay_name": overlay_name,
         "config": base_config,
-        "active_match": active_match
-        ,"tournament_name": tournament_name
+        "active_match": active_match,
+        "tournament_name": tournament_name,
+        "preview_mode": broadcast_state.get("preview_mode", False),
+        "next_match": broadcast_state.get("next_match"),
+        "next_match_tbd": broadcast_state.get("next_match_tbd", True),
+        "busy_players": broadcast_state.get("busy_players", []),
     }
 
 # Redirect root to docs or frontend

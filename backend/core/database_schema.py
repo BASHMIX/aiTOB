@@ -381,6 +381,18 @@ TABLE_SCHEMAS = [
     )
     ''',
     '''
+    CREATE TABLE IF NOT EXISTS station_queue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        workspace_id TEXT,
+        station_id TEXT NOT NULL,
+        set_id TEXT NOT NULL,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (workspace_id, station_id, set_id),
+        FOREIGN KEY (station_id) REFERENCES stations(id)
+    )
+    ''',
+    '''
     CREATE TABLE IF NOT EXISTS active_matches (
         set_id TEXT PRIMARY KEY,
         tournament_slug TEXT,
@@ -779,6 +791,7 @@ INDEXES = [
     ,"CREATE INDEX IF NOT EXISTS idx_error_events_created ON error_events(created_at)"
     ,"CREATE UNIQUE INDEX IF NOT EXISTS uq_stations_workspace_public_id ON stations(workspace_id, public_id)"
     ,"CREATE INDEX IF NOT EXISTS idx_overlay_access_station ON overlay_access_tokens(workspace_id, station_id, revoked_at)"
+    ,"CREATE INDEX IF NOT EXISTS idx_station_queue_lookup ON station_queue(station_id, sort_order)"
 ]
 
 # ── Safe migrations (add new columns if missing) ─────────────────
@@ -929,4 +942,10 @@ MIGRATIONS = [
     "ALTER TABLE stations ADD COLUMN room_name_or_id TEXT",
     "ALTER TABLE stations ADD COLUMN room_password TEXT",
     "ALTER TABLE oauth_states ADD COLUMN account_id TEXT",
+    "CREATE TABLE IF NOT EXISTS station_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, workspace_id TEXT, station_id TEXT NOT NULL, set_id TEXT NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE (workspace_id, station_id, set_id), FOREIGN KEY (station_id) REFERENCES stations(id))",
+    "CREATE INDEX IF NOT EXISTS idx_station_queue_lookup ON station_queue(station_id, sort_order)",
+    "ALTER TABLE stations ADD COLUMN preview_match_id TEXT",
+    "ALTER TABLE stations ADD COLUMN preview_match_json TEXT",
+    "ALTER TABLE tournaments ADD COLUMN game_metadata_json TEXT",
+    "ALTER TABLE tournaments ADD COLUMN game_metadata_synced_at TIMESTAMP",
 ]

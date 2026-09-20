@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useHubStore } from '@/store/useHubStore';
 import axios from 'axios';
+import { removeTournamentFromHub, tournamentRemovalConfirmation } from '@/features/hub/tournamentRemoval';
 
 export function TopNavigation() {
   const {
@@ -32,9 +33,13 @@ export function TopNavigation() {
         } else if (evs.length === 0) {
           setCurrentEventId(null);
         } else {
-          // Keep a still-valid persisted selection; otherwise force a fresh pick.
+          // Prefer the event explicitly selected in the wizard. Keep a still-
+          // valid persisted selection for older cards, otherwise force a pick.
+          const wizardEvent = currentTournament?.event_id
+            ? evs.find((event: any) => String(event.id) === String(currentTournament.event_id))
+            : null;
           const stillValid = currentEventId && evs.some((e: any) => String(e.id) === String(currentEventId));
-          if (!stillValid) setCurrentEventId(null);
+          if (!stillValid) setCurrentEventId(wizardEvent?.id || null);
         }
       } catch (e) {
         console.error('load events', e);
@@ -42,7 +47,7 @@ export function TopNavigation() {
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentSlug, isChallonge]);
+  }, [currentSlug, isChallonge, currentTournament?.event_id]);
 
   const globalRefresh = async () => {
     setIsRefreshing(true);
@@ -61,14 +66,15 @@ export function TopNavigation() {
   };
 
   const deleteTournament = async () => {
-    if (!currentSlug || !confirm(`Are you sure you want to delete the tournament '${currentSlug}'?`)) return;
+    if (!currentSlug) return;
+    const slug = currentSlug;
+    const name = currentTournament?.name || slug;
+    if (!window.confirm(tournamentRemovalConfirmation(name))) return;
     try {
-      await axios.delete(`/api/tournaments/${currentSlug}`);
-      // Refresh the tournament list from the server to be sure
-      const tourneysRes = await axios.get('/api/tournaments');
-      const updatedTournaments = tourneysRes.data.tournaments || [];
+      const { tournaments: updatedTournaments, matches: updatedMatches } = await removeTournamentFromHub(slug);
       setTournaments(updatedTournaments);
-      removePinnedTournament(currentSlug);
+      setMatches(updatedMatches);
+      removePinnedTournament(slug);
       
       // Select the next available or null
       if (updatedTournaments.length > 0) {
@@ -78,7 +84,10 @@ export function TopNavigation() {
       }
     } catch (err) {
       console.error("Failed to delete tournament", err);
-      alert("Failed to delete tournament.");
+      const detail = axios.isAxiosError(err) && err.response?.data?.detail
+        ? String(err.response.data.detail)
+        : 'Could not remove the tournament.';
+      alert(detail);
     }
   };
 
@@ -145,7 +154,7 @@ export function TopNavigation() {
           <div className="flex items-center gap-2 border-l border-white/20 pl-4">
             <span>Event:</span>
             {events.length === 1 ? (
-              <span className="text-white font-bold">{events[0].name}</span>
+              <span className="text-white font-bold">{events[0].name}{events[0].game ? ` · ${events[0].game}` : ''}</span>
             ) : (
               <select
                 className={`bg-transparent border-none focus:ring-0 text-sm p-0 cursor-pointer hover:text-accentYellow font-bold ${currentEventId ? 'text-white' : 'text-accentYellow animate-pulse'}`}
@@ -156,7 +165,7 @@ export function TopNavigation() {
                 <option className="text-black" value="">[ Select Event ▼ ]</option>
                 {events.map((ev) => (
                   <option key={ev.id} className="text-black" value={ev.id}>
-                    [ {ev.name} ▼ ]
+                    [ {ev.name}{ev.game ? ` · ${ev.game}` : ''} ▼ ]
                   </option>
                 ))}
               </select>

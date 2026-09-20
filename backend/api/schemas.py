@@ -193,6 +193,11 @@ class CreateStationRequest(BaseModel):
     name: str = Field(description="Station display name", min_length=1, examples=["Station 1"])
 
 
+class BroadcastPreviewRequest(BaseModel):
+    """Select an existing not-started match for local broadcast preview."""
+    set_id: str = Field(description="Existing local active match set ID", min_length=1)
+
+
 class UpdateStationRequest(BaseModel):
     name: Optional[str] = Field(default=None, description="Station display name", min_length=1, examples=["Station 1 - Stream"])
     event_id: Optional[str] = Field(
@@ -261,6 +266,14 @@ class SetActiveOverlayRequest(BaseModel):
     overlay_name: Optional[str] = Field(default=None, description="Active overlay name (pass null to hide)", examples=["default"])
 
 
+class EnqueueMatchRequest(BaseModel):
+    set_id: str = Field(description="Set ID to enqueue to station", min_length=1)
+
+
+class ReorderQueueRequest(BaseModel):
+    set_ids: list[str] = Field(description="List of set IDs in new order")
+
+
 class PatchSettingsRequest(BaseModel):
     global_language: Optional[str] = Field(default=None, description="Bilingual prompt language setting", examples=["ar"])
     current_theme: Optional[str] = Field(default=None, description="Dashboard theme selection", examples=["pro"])
@@ -311,6 +324,10 @@ class AIServiceSecretRequest(BaseModel):
 
 class AIAssistantRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2_000)
+
+
+class AIConnectionTestRequest(BaseModel):
+    model: Optional[str] = Field(default=None, min_length=1, max_length=160)
 
 
 class IntegrationAccountRequest(BaseModel):

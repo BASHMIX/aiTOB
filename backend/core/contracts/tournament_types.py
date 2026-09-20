@@ -26,6 +26,12 @@ class ProviderEntrant:
     # entrants are T.O.-added by name with no linked user. Used by the hub to
     # resolve the player's Discord ID via the players table.
     user_id: Optional[str] = None
+    # Optional provider profile facts.  Providers may not expose all of these
+    # fields, so they remain additive and never affect match identity.
+    prefix: Optional[str] = None
+    gamertag: Optional[str] = None
+    cfn: Optional[str] = None
+    country: Optional[str] = None
 
 @dataclass(frozen=True)
 class ProviderSet:

@@ -37,3 +37,15 @@ def tournament_provider_projection(tournament: dict, provider: ITournamentProvid
         "provider_subdomain": tournament.get("provider_subdomain"),
         **provider_capability_projection(provider),
     }
+
+
+def reviewed_identity_projection(tournament: dict, provider_facts: dict | None = None, local_brand: dict | None = None) -> dict:
+    """Project one canonical identity to Hub, Editor and overlay consumers."""
+    from backend.core.tournament_brand import project_tournament_brand
+    brand = project_tournament_brand(provider_facts or {}, local_brand or {}, logo_url=tournament.get("logo_url"))
+    value = brand.as_dict()
+    value.update({"tournament_id": tournament.get("slug") or tournament.get("id"), "provider_type": tournament.get("provider_type"), "event_id": tournament.get("event_id")})
+    return value
+
+
+project_reviewed_identity = reviewed_identity_projection

@@ -1,20 +1,34 @@
 import { useMemo, useState } from 'react';
 import axios from 'axios';
+import { useNavigate } from 'react-router-dom';
 import { useHubStore } from '@/store/useHubStore';
 import startGgLogo from '@/assets/Start.gg.svg';
 import challongeLogo from '@/assets/challonge-logo.svg';
 import { tournamentAccent, withAccentAlpha } from './tournamentAccent';
+import { removeTournamentFromHub, tournamentRemovalConfirmation } from '../tournamentRemoval';
+import { getApiErrorMessage, reopenTournamentSetup } from '@/features/tournament-setup/api';
+
+// PostgreSQL TIMESTAMP values are serialized without an offset. They are
+// stored as UTC by the API, so make that explicit before comparing with the
+// browser clock; otherwise the card appears stale by the user's timezone.
+function parseServerTimestamp(value: string): number {
+  const normalized = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value) ? value : `${value}Z`;
+  return new Date(normalized).getTime();
+}
 
 function freshnessLabel(lastSyncedAt?: string | null, syncStatus?: string) {
   if (syncStatus === 'error') return 'Sync needs attention';
   if (!lastSyncedAt) return 'Not synced yet';
-  const ageMs = Date.now() - new Date(lastSyncedAt).getTime();
+  const ageMs = Date.now() - parseServerTimestamp(lastSyncedAt);
   if (!Number.isFinite(ageMs)) return syncStatus || 'Unknown';
   const minutes = Math.max(0, Math.floor(ageMs / 60000));
   return minutes < 1 ? 'Synced just now' : `Synced ${minutes}m ago`;
 }
 
+const actionButtonClass = 'min-h-8 min-w-[4.5rem] rounded-md border px-3 py-1.5 text-xs font-bold transition-colors disabled:cursor-wait disabled:opacity-50';
+
 export function TournamentOperationsCards() {
+  const navigate = useNavigate();
   const {
     tournaments, matches, pinnedTournamentSlugs, currentSlug, currentEventId,
     events, setCurrentSlug, setTournaments, setMatches, removePinnedTournament,
@@ -40,7 +54,40 @@ export function TournamentOperationsCards() {
       setTournaments(tournamentsResponse.data.tournaments || []);
       setMatches(matchesResponse.data.matches || []);
     } catch (error: any) {
-      setMessage(error.response?.data?.detail || 'Could not synchronize this tournament.');
+      setMessage(getApiErrorMessage(error, 'Could not synchronize this tournament.'));
+    } finally {
+      setBusySlug(null);
+    }
+  };
+
+  const runLifecycle = async (slug: string, name: string, action: 'start' | 'reset') => {
+    const prompt = action === 'start'
+      ? `Start the ${name} bracket on its provider now?`
+      : `Reset match results for ${name} through the provider API now? This clears provider match results and states, then reloads the bracket in aiTOB. It does not reset the provider bracket lifecycle from STARTED to CREATED.`;
+    if (!window.confirm(prompt)) return;
+    setBusySlug(`${action}:${slug}`);
+    setMessage(null);
+    try {
+      const response = await axios.post(`/api/tournaments/${encodeURIComponent(slug)}/lifecycle`, { action });
+      setMessage(response.data.message || `Tournament ${action} requested.`);
+      const [tournamentsResponse, matchesResponse] = await Promise.all([axios.get('/api/tournaments'), axios.get('/api/active-matches')]);
+      setTournaments(tournamentsResponse.data.tournaments || []);
+      setMatches(matchesResponse.data.matches || []);
+    } catch (error: any) {
+      setMessage(getApiErrorMessage(error, `Could not ${action} this tournament.`));
+    } finally {
+      setBusySlug(null);
+    }
+  };
+
+  const editTournament = async (slug: string) => {
+    setBusySlug(`edit:${slug}`);
+    setMessage(null);
+    try {
+      const draft = await reopenTournamentSetup(slug);
+      navigate(`/admin/tournaments/setup/${encodeURIComponent(draft.id)}/provider`);
+    } catch (error: any) {
+      setMessage(getApiErrorMessage(error, 'Could not reopen this tournament setup.'));
     } finally {
       setBusySlug(null);
     }
@@ -55,27 +102,23 @@ export function TournamentOperationsCards() {
       await axios.patch(`/api/tournaments/${encodeURIComponent(slug)}/settings`, { accent_color: accentColor });
     } catch (error: any) {
       setTournaments(previous);
-      setMessage(error.response?.data?.detail || 'Could not save this tournament colour.');
+      setMessage(getApiErrorMessage(error, 'Could not save this tournament colour.'));
     }
   };
 
   const removeTournament = async (slug: string, name: string) => {
-    const confirmed = window.confirm(
-      `Remove “${name}” from aiTOB?\n\nThis removes its local Hub data only. It never changes the provider bracket. Removal is blocked while the tournament has an active match.`,
-    );
+    const confirmed = window.confirm(tournamentRemovalConfirmation(name));
     if (!confirmed) return;
     setBusySlug(`remove:${slug}`);
     setMessage(null);
     try {
-      await axios.delete(`/api/tournaments/${encodeURIComponent(slug)}`);
+      const { tournaments: remaining, matches: refreshedMatches } = await removeTournamentFromHub(slug);
       removePinnedTournament(slug);
-      const [tournamentsResponse, matchesResponse] = await Promise.all([axios.get('/api/tournaments'), axios.get('/api/active-matches')]);
-      const remaining = tournamentsResponse.data.tournaments || [];
       setTournaments(remaining);
-      setMatches(matchesResponse.data.matches || []);
+      setMatches(refreshedMatches);
       if (currentSlug === slug) setCurrentSlug(remaining[0]?.slug || null);
     } catch (error: any) {
-      setMessage(error.response?.data?.detail || 'Could not remove the tournament.');
+      setMessage(getApiErrorMessage(error, 'Could not remove the tournament.'));
     } finally {
       setBusySlug(null);
     }
@@ -159,7 +202,7 @@ export function TournamentOperationsCards() {
                 </button>
               </div>
             </div>
-            <div className="mt-3 grid grid-cols-2 gap-2 text-center">
+            <div className="mt-3 grid grid-cols-4 gap-2 text-center">
               {[['Called', called, 'text-blue-200'], ['Ready', ready, 'text-statusGreen'], ['Live', live, ''], ['Conflicts', conflicts, conflicts ? 'text-statusRed' : 'text-textLight']].map(([label, value, color]) => (
                 <div key={String(label)} className="rounded-md bg-black/20 px-2 py-2">
                   <strong style={label === 'Live' ? { color: accent } : undefined} className={`block text-base ${color}`}>{value}</strong>
@@ -167,11 +210,23 @@ export function TournamentOperationsCards() {
                 </div>
               ))}
             </div>
-            <div className="mt-3 flex justify-end">
+            <div className="mt-3 grid grid-cols-4 gap-2">
+              <button type="button" onClick={(event) => {
+                event.stopPropagation();
+                void runLifecycle(tournament.slug, tournament.name, 'start');
+              }} disabled={isBusy} title="Start provider bracket" className={`${actionButtonClass} w-full border-statusGreen/30 text-statusGreen hover:bg-statusGreen/10`}>Start</button>
+              <button type="button" onClick={(event) => {
+                event.stopPropagation();
+                void runLifecycle(tournament.slug, tournament.name, 'reset');
+              }} disabled={isBusy} title="Reset provider match results" className={`${actionButtonClass} w-full border-amber-300/30 text-amber-200 hover:bg-amber-300/10`}>Reset</button>
               <button type="button" onClick={(event) => {
                 event.stopPropagation();
                 void sync(tournament.slug);
-              }} disabled={isBusy} className="rounded-md border border-white/15 px-3 py-1.5 text-xs font-bold text-textLight hover:bg-white/5 disabled:opacity-50">{busySlug === `sync:${tournament.slug}` ? 'Syncing…' : 'Sync'}</button>
+              }} disabled={isBusy} title="Sync tournament data" className={`${actionButtonClass} w-full border-white/15 text-textLight hover:bg-white/5`}>Sync</button>
+              <button type="button" onClick={(event) => {
+                event.stopPropagation();
+                void editTournament(tournament.slug);
+              }} disabled={isBusy} title="Edit tournament setup" className={`${actionButtonClass} w-full border-accentYellow/40 text-accentYellow hover:bg-accentYellow/10`}>Edit</button>
             </div>
           </article>
         );

@@ -1,0 +1,67 @@
+backend/core\action_proposals.py:108:        match = await database.get_active_match(match_id)
+backend/core\action_proposals.py:267:    match = await database.get_active_match(current["match_id"]) if current.get("match_id") else None
+backend/core\database.py:1522:async def assign_station_to_active_match(
+backend/core\database.py:1542:async def get_used_station_ids(exclude_set_id: str, workspace_id: str | None = None) -> set:
+backend/core\database.py:1597:async def get_active_match(set_id: str, workspace_id: str | None = None):
+backend/core\database.py:1662:async def upsert_active_match(set_id: str, workspace_id: str | None = None, **kwargs):
+backend/core\database.py:2051:async def update_active_match(match_id: str, *, workspace_id: str | None = None, **kwargs) -> bool:
+backend/core\database.py:3604:    return await get_active_match(match_id) or {}
+backend/bot\match_threads.py:103:    await update_active_match(
+backend/bot\match_threads.py:164:    await update_active_match(
+backend/bot\match_threads.py:204:    await update_active_match(
+backend/bot\match_threads.py:287:        match = await (get_active_match(self.set_id, self.workspace_id)
+backend/bot\match_threads.py:288:                       if self.workspace_id is not None else get_active_match(self.set_id))
+backend/bot\match_threads.py:304:        match = await (get_active_match(self.set_id, self.workspace_id)
+backend/bot\match_threads.py:305:                       if self.workspace_id is not None else get_active_match(self.set_id))
+backend/bot\match_threads.py:323:            await update_active_match(
+backend/bot\match_threads.py:330:        match = await (get_active_match(self.set_id, self.workspace_id)
+backend/bot\match_threads.py:331:                       if self.workspace_id is not None else get_active_match(self.set_id))
+backend/bot\match_threads.py:397:        await update_active_match(
+backend/bot\match_threads.py:461:    match = await get_active_match(set_id, workspace_id)
+backend/bot\match_threads.py:542:    match = await get_active_match(set_id, workspace_id)
+backend/bot\match_threads.py:552:    match = await get_active_match(set_id, workspace_id)
+backend/bot\main.py:924:    match = await get_active_match(event["match_id"], event.get("workspace_id"))
+backend/bot\main.py:1173:    match = await get_active_match(set_id)
+backend/bot\main.py:1612:            match = await get_active_match(set_id, workspace_id)
+backend/bot\main.py:1625:            match = await get_active_match(set_id, workspace_id)
+backend/bot\main.py:1636:            match = await get_active_match(set_id, workspace_id)
+backend/bot\main.py:1647:                        await update_active_match(set_id, station_id=station["id"])
+backend/bot\main.py:1648:                        match = await get_active_match(set_id, match.get("workspace_id"))
+backend/bot\main.py:1669:            match = await get_active_match(set_id, workspace_id)
+backend/core\auto_dispatcher\service.py:74:        selected_match = await database.get_active_match(selected.set_id)
+backend/core\match_commands.py:51:        match = await database.get_active_match(match_id, self._workspace_id)
+backend/core\match_commands.py:365:            match = await database.get_active_match(match_id, self._workspace_id)
+backend/core\match_commands.py:395:        match = await database.get_active_match(match_id, self.workspace_id)
+backend/core\match_state.py:135:    match = await get_active_match(set_id)
+backend/core\match_state.py:161:    match = await get_active_match(set_id)
+backend/core\match_state.py:232:    await upsert_active_match(set_id, workspace_id=match.get("workspace_id"), **update_kwargs)
+backend/core\match_state.py:237:    match = await get_active_match(set_id)
+backend/core\match_state.py:271:        await update_active_match(set_id, status="complete", dq_player=None, station_id=None)
+backend/core\match_state.py:321:    await update_active_match(set_id, status="complete", dq_player=dq_eid, station_id=None)
+backend/core\match_state.py:327:    match = await get_active_match(set_id)
+backend/api\routers\matches.py:169:    await upsert_active_match(sid, workspace_id=_ws(principal), **values)
+backend/api\routers\matches.py:184:    m = await get_active_match(set_id, _ws(principal))
+backend/api\routers\matches.py:228:    m = await get_active_match(set_id, _ws(principal))
+backend/api\routers\matches.py:260:    m = await get_active_match(set_id, _ws(principal))
+backend/api\routers\matches.py:287:    m = await get_active_match(set_id, _ws(principal))
+backend/api\routers\matches.py:297:    await upsert_active_match(set_id, **{f"{player}_ready": True})
+backend/api\routers\matches.py:298:    match = await get_active_match(set_id, _ws(principal))
+backend/api\routers\matches.py:314:    m = await get_active_match(set_id, _ws(principal))
+backend/api\routers\matches.py:318:    await upsert_active_match(set_id, is_stream_match=body.is_stream_match)
+backend/api\routers\matches.py:332:                await upsert_active_match(set_id, station_id=station["id"])
+backend/api\routers\matches.py:346:            await upsert_active_match(set_id, station_id=None)
+backend/api\routers\matches.py:361:    m = await get_active_match(set_id, _ws(principal))
+backend/api\routers\matches.py:424:    m = await get_active_match(set_id, _ws(principal))
+backend/api\routers\matches.py:450:    m = await get_active_match(set_id, _ws(principal))
+backend/api\routers\matches.py:525:    existing_match = await get_active_match(set_id, _ws(principal))
+backend/api\routers\matches.py:549:    await upsert_active_match(set_id, **d)
+backend/api\routers\matches.py:553:        m = await get_active_match(set_id, _ws(principal))
+backend/api\routers\matches.py:564:                m = await get_active_match(set_id, _ws(principal))
+backend/api\routers\matches.py:572:                    await upsert_active_match(set_id, is_stream_match=True)
+backend/api\routers\matches.py:580:                    await upsert_active_match(set_id, is_stream_match=False)
+backend/api\routers\matches.py:652:    m = await get_active_match(set_id, _ws(principal)) if set_id else None
+backend/api\routers\matches.py:678:    await upsert_active_match(set_id, p1_score=p1_score, p2_score=p2_score)
+backend/api\routers\planned_streams.py:56:    m = await get_active_match(body.set_id, principal.workspace_id)
+backend/api\routers\planned_streams.py:63:        await upsert_active_match(body.set_id, workspace_id=principal.workspace_id, **fields)
+backend/core\recovery.py:59:            current = await database.get_active_match(match_id, workspace_id)
+backend/core\score_reporting.py:23:        match = await get_active_match(set_id)

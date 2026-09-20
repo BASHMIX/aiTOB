@@ -47,6 +47,7 @@ def get_client() -> "StartGGClient":
 
 class StartGGClient:
     MAX_RETRIES = 3
+    TRANSPORT_RETRY_BASE_SECONDS = 0.5
 
     def __init__(self, token: str | None = None, *, provider_account_id: str | None = None):
         self.token = token or ""
@@ -157,6 +158,39 @@ class StartGGClient:
                     continue
                 print(f"[STARTGG] HTTP Error: {e.response.status_code} - {e.response.text}")
                 raise Exception(f"Start.gg HTTP Error: {e.response.status_code}")
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as e:
+                # DNS, TCP/TLS, proxy and connection-pool acquisition failures
+                # happen before GraphQL receives the request. This is the
+                # narrow transport class that is safe to retry even though the
+                # client is also used for mutations. Read/write timeouts are
+                # intentionally not retried because their remote outcome can
+                # be unknown.
+                self.last_error = {
+                    "operation": "transport",
+                    "category": "provider_unavailable",
+                    "type": type(e).__name__,
+                    "message": str(e)[:300],
+                }
+                if attempt < self.MAX_RETRIES:
+                    wait = min(self.TRANSPORT_RETRY_BASE_SECONDS * (2 ** attempt), 4.0)
+                    print(
+                        f"[STARTGG] Transport unavailable ({type(e).__name__}), "
+                        f"retry {attempt + 1}/{self.MAX_RETRIES} in {wait:g}s"
+                    )
+                    await asyncio.sleep(wait)
+                    last_exception = e
+                    continue
+                print(f"[STARTGG] Query transport failed after retries: {type(e).__name__}")
+                raise
+            except httpx.TransportError as e:
+                self.last_error = {
+                    "operation": "transport",
+                    "category": "provider_unavailable",
+                    "type": type(e).__name__,
+                    "message": str(e)[:300],
+                }
+                print(f"[STARTGG] Query transport failed without retry: {type(e).__name__}")
+                raise
             except Exception as e:
                 print(f"[STARTGG] Query failed: {e}")
                 raise e
@@ -400,6 +434,27 @@ class StartGGClient:
         except Exception as e:
             print(f"Failed to reset set: {e}")
             return False
+
+    async def reset_set_with_dependencies(
+        self,
+        set_id: str,
+        *,
+        reset_dependent_sets: bool,
+    ) -> Dict[str, Any]:
+        """Reset a set and return Start.gg's affected-set metadata.
+
+        Start.gg exposes no separate ``resetBracket`` mutation.  Its bracket
+        reset behavior is represented by resetting root sets with
+        ``resetDependentSets=true``.  This response-shaped method is kept
+        separate from the legacy boolean ``reset_set`` match command.
+        """
+        return await self.query(
+            queries.RESET_SET_WITH_DEPENDENCIES,
+            {
+                "setId": str(set_id),
+                "resetDependentSets": bool(reset_dependent_sets),
+            },
+        )
 
     async def mark_in_progress(self, set_id: str) -> bool:
         """Mark a set as In Progress on Start.gg."""

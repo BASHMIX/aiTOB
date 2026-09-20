@@ -232,7 +232,10 @@ class ChallongeProvider(ITournamentProvider, ITournamentProviderV2):
     async def report_winner_only(self, set_id, winner_id):
         return await self.report_score(set_id, winner_id, "", "", 1, 0)
     async def start_tournament(self, slug_or_id: str):
-        return ProviderSetResult(False, str(slug_or_id), error_message="Challonge lifecycle actions are not enabled in Phase 4.")
+        return ProviderSetResult(False, str(slug_or_id), error_message="Challonge remote tournament start is not enabled until the provider mutation is verified by aiTOB.")
+
+    async def reset_tournament(self, slug_or_id: str):
+        return ProviderSetResult(False, str(slug_or_id), error_message="Challonge remote tournament reset is not enabled until the provider mutation is verified by aiTOB.")
     async def mark_in_progress(self, set_id):
         return ProviderSetResult(False, set_id, error_message="Challonge lifecycle actions are not enabled in Phase 4.")
     async def mark_dq(self, set_id, winner_id):

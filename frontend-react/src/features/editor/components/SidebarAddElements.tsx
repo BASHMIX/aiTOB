@@ -33,13 +33,22 @@ export function SidebarAddElements() {
 
       <h2 className="text-[#00ffcc] uppercase tracking-wide mb-3 font-bold">Live Data Hooks</h2>
       <div className="flex gap-2 mb-3">
-        <select className="flex-1 bg-[#3a3a3a] border border-[#555] rounded px-2 py-1.5 focus:border-[#00ffcc] outline-none" value={addId} onChange={e => setAddId(e.target.value)}>
+        <select className="flex-1 bg-[#3a3a3a] border border-[#555] rounded px-2 py-1.5 focus:border-[#00ffcc] outline-none text-xs" value={addId} onChange={e => setAddId(e.target.value)}>
           <option value="">-- Select Data Field --</option>
-          {['p1_name', 'p2_name', 'p1_score', 'p2_score', 'p1_team', 'p2_team', 'tournament_round', 'tournament_name', 'p1_avatar', 'p2_avatar', 'p1_flag', 'p2_flag']
-            .filter(id => !store.elements[id] || !store.elements[id].visible)
-            .map((id) => (
-              <option key={id} value={id}>{id}</option>
-          ))}
+          <optgroup label="Current Match">
+            {['p1_name', 'p2_name', 'p1_score', 'p2_score', 'p1_prefix', 'p2_prefix', 'p1_country', 'p2_country', 'p1_cfn', 'p2_cfn', 'p1_character', 'p2_character', 'game_name', 'tournament_round', 'tournament_name', 'p1_avatar', 'p2_avatar', 'p1_character_image', 'p2_character_image', 'p1_flag', 'p2_flag']
+              .filter(id => !store.elements[id] || !store.elements[id].visible)
+              .map((id) => (
+                <option key={id} value={id}>{id}</option>
+            ))}
+          </optgroup>
+          <optgroup label="Next Match (Stream Queue)">
+            {['next_p1_name', 'next_p2_name', 'next_p1_score', 'next_p2_score', 'next_p1_prefix', 'next_p2_prefix', 'next_p1_country', 'next_p2_country', 'next_p1_character', 'next_p2_character', 'next_round_name', 'next_match_number', 'next_match_status', 'next_p1_avatar', 'next_p2_avatar', 'next_p1_flag', 'next_p2_flag']
+              .filter(id => !store.elements[id] || !store.elements[id].visible)
+              .map((id) => (
+                <option key={id} value={id}>{id}</option>
+            ))}
+          </optgroup>
         </select>
         <button
           className="bg-[#00ffcc] text-[#111] font-bold px-3 rounded hover:bg-[#00d4aa]"

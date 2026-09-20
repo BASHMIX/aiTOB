@@ -8,6 +8,12 @@
 
 **Input**: User description: "Add Challonge as a fully supported tournament provider alongside Start.gg, with a provider selector per tournament, synchronization, match lifecycle controls, score and DQ reporting, dashboard support, and safe migration of existing Start.gg tournaments. Also fix immediate startup synchronization so bot responses never use stale bracket matches."
 
+## Clarifications
+
+### Session 2026-09-20
+
+- Q: How must Start.gg handle individual attendance confirmation or withdrawal from Discord and manual aiTOB controls during a called match? → A: Each entrant can be marked `present` or `withdrawn` through verified Discord self-service or an authorized organizer action; withdrawal is not an immediate DQ result. Start.gg owns the deadline and resolves one present entrant as the advancer or neither present as double-DQ when the deadline expires.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Connect and synchronize a Challonge tournament (Priority: P1)
@@ -58,6 +64,8 @@ As a tournament organizer, I can operate Start.gg and Challonge tournaments in t
 1. **Given** tournaments from both providers, **When** the organizer selects either tournament, **Then** its provider is visible and only its matches, events, and valid controls are shown.
 2. **Given** existing Start.gg tournament records, **When** the feature is deployed, **Then** they continue to resolve to Start.gg without organizer migration work.
 3. **Given** a provider capability is not available, **When** the organizer views or acts on the tournament, **Then** unsupported controls are absent or disabled with a clear explanation.
+4. **Given** a Start.gg match is called with a provider-owned attendance deadline, **When** either entrant confirms attendance or withdraws through their verified Discord interaction or an authorized organizer records it manually in aiTOB, **Then** the same per-entrant attendance intent is durably recorded and submitted to Start.gg without declaring a winner.
+5. **Given** one Start.gg entrant withdraws during the called window, **When** the provider deadline expires, **Then** Start.gg advances the other entrant only if that entrant appeared; if neither entrant appeared, Start.gg records double-DQ, and aiTOB mirrors the resulting provider snapshot.
 
 ---
 
@@ -153,7 +161,7 @@ As a Challonge organizer, I can load a tournament using its numeric ID, normal C
 - **FR-024**: The system MUST paginate tournament, participant, and match retrieval until the requested provider collection is complete or a visible provider error occurs.
 - **FR-025**: The Challonge loading UI MUST make subdomain/community scoping optional and disabled by default; leaving it empty MUST NOT block direct ID or normal URL loading.
 - **FR-026**: The system MUST persist provider state, Hub workflow state, Discord workflow fields, and synchronization/command state independently; a conflict MUST NOT replace the Hub lifecycle state.
-- **FR-027**: The system MUST create a durable provider command record before every remote mutation and MUST mark that mutation verified only after a newer authoritative snapshot confirms the expected result, winner, advancement, and remote state.
+- **FR-027**: The system MUST create a durable provider command record before every remote mutation and MUST mark that mutation verified only after a newer authoritative snapshot confirms the resulting remote state. For intent commands such as DQ, aiTOB MUST NOT prescribe or infer a winner or advancement beyond the selected transition.
 - **FR-028**: The system MUST reconcile organizer-originated remote changes, including result, DQ/forfeit, reset/reopen, changed entrants/seeding/bracket structure, deletion/cancellation, newly available downstream matches, and tournament completion.
 - **FR-029**: The system MUST resume Hub calls, readiness, attendance deadlines, station/overlay intent, Discord references, pending commands, retry/backoff, snapshots, and reviewable conflicts after restart.
 - **FR-030**: The system MUST continue Hub-local operations during provider/internet failure while clearly exposing remote operations as pending, retrying, failed, conflict, or needs-review; one provider's outage or rate limit MUST NOT halt another provider.
@@ -169,6 +177,10 @@ As a Challonge organizer, I can load a tournament using its numeric ID, normal C
 - **FR-040**: Scheduler/Command Service, Sync Coordinator, Adapter, Reconciliation Engine, Completion Service, and SQLite projection MUST retain their separate responsibilities; the Sync Coordinator MUST NOT own Hub lifecycle, Discord effects, reconciliation decisions, or provider payload semantics.
 - **FR-041**: Provider Command Ledger MUST contain only provider-backed mutations. Local Hub workflow transitions MUST commit with a durable workflow-outbox event in the same transaction so Discord/OBS effects survive interruption and are deduplicated on retry.
 - **FR-042**: Before a provider-backed score, forfeit/DQ, reset, or reopen mutation, MatchCommandService MUST require a fresh snapshot or at most one coalesced targeted preflight snapshot; changed participants/state MUST reject or enter needs-review, and provider outage MUST not send an unsafe mutation.
+- **FR-043**: The tournament provider MUST be the sole source of truth for provider-owned bracket state, including remote match state, result, DQ/forfeit state, winner, advancement, and downstream matches; aiTOB MUST own only its operational workflow and durable command/synchronization state.
+- **FR-044**: Start.gg called matches MUST model each entrant's attendance independently as `pending`, `present`, or `withdrawn`. Verified Discord self-service and authorized manual aiTOB controls MUST use the same durable attendance command. Neither an individual withdrawal nor an acknowledgement of that command may declare a winner, complete the match, or advance the bracket before the provider-owned deadline. At the deadline, Start.gg MUST remain responsible for advancing the sole present entrant or recording double-DQ when neither entrant appeared, and aiTOB MUST reconcile that provider result. Challonge MUST expose organizer-approved single-player DQ only, encode the selected loser as `-1` and the advancing entrant as `0`, and hide double-DQ on every UI surface. aiTOB-initiated automatic DQ and AI-initiated DQ MUST remain prohibited; provider-owned Start.gg native-check-in expiry is allowed and reconciled as external truth.
+- **FR-045**: Start.gg MUST own its native check-in/DQ timeout. aiTOB MUST send a duration only when a documented or provider-authorized Start.gg contract accepts one; otherwise it MUST read and display the provider deadline/duration when exposed. If the value is unavailable, the UI MUST identify it as a Start.gg-managed timer without inventing a countdown. Local `dq_timer_seconds` MUST NOT trigger, predict, or verify a Start.gg DQ.
+- **FR-046**: After a Start.gg attendance deadline plus a bounded consistency delay, aiTOB MUST request a targeted authoritative snapshot. If the match remains unchanged, it MUST schedule bounded backoff reads without resending `markSetCalled`, attendance, or DQ mutations. A still-unresolved match after the retry horizon MUST enter `needs_review` with a manual refresh action.
 
 ### Key Entities *(include if feature involves data)*
 

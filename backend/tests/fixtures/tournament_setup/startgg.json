@@ -1,0 +1,64 @@
+{
+  "tournament": {
+    "id": "fixture-sgg-tournament-001",
+    "name": "aiTOB Fixture Open",
+    "streams": [
+      {
+        "id": "fixture-stream-001",
+        "streamName": "Fixture Main Stage",
+        "streamSource": "TWITCH",
+        "streamGame": "Street Fighter 6"
+      }
+    ],
+    "events": [
+      {
+        "id": "fixture-sgg-event-001",
+        "name": "Street Fighter 6 — Singles",
+        "videogame": {"name": "Street Fighter 6"},
+        "state": "ACTIVE",
+        "phases": [{"id": "fixture-sgg-phase-001", "state": "ACTIVE"}],
+        "entrants": {
+          "nodes": [
+            {
+              "id": "fixture-sgg-entrant-001",
+              "name": "Nova",
+              "participants": [{"user": {"id": "fixture-sgg-user-001", "images": [{"type": "profile", "url": "https://example.invalid/fixture/nova.png"}]}}]
+            },
+            {
+              "id": "fixture-sgg-entrant-002",
+              "name": "Rook",
+              "participants": [{"user": {"id": "fixture-sgg-user-002", "images": []}}]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "state": {
+    "id": "fixture-sgg-tournament-001",
+    "state": 2,
+    "events": [{"id": "fixture-sgg-event-001", "state": "ACTIVE", "phases": [{"id": "fixture-sgg-phase-001", "state": "ACTIVE"}]}]
+  },
+  "sets": {
+    "events": [
+      {
+        "id": "fixture-sgg-event-001",
+        "name": "Street Fighter 6 — Singles",
+        "nodes": [
+          {
+            "id": "fixture-sgg-set-001",
+            "state": 2,
+            "fullRoundText": "Winners Round 1",
+            "identifier": "W1",
+            "phaseGroup": {"displayIdentifier": "A"},
+            "slots": [
+              {"entrant": {"id": "fixture-sgg-entrant-001", "name": "Nova", "participants": [{"user": {"id": "fixture-sgg-user-001", "images": []}}]}},
+              {"entrant": {"id": "fixture-sgg-entrant-002", "name": "Rook", "participants": [{"user": {"id": "fixture-sgg-user-002", "images": []}}]}}
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "set_states": {"fixture-sgg-set-001": 2}
+}

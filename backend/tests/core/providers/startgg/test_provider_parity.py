@@ -61,6 +61,32 @@ async def test_fetch_parity_preserves_operation_variables_request_count_and_orde
 
 
 @pytest.mark.asyncio
+async def test_fetch_event_game_metadata_uses_provider_catalog():
+    client = AsyncMock()
+    client.query.return_value = {
+        "event": {
+            "id": "event-1",
+            "name": "SF6 Singles",
+            "videogame": {
+                "id": "43868",
+                "name": "Street Fighter 6",
+                "displayName": "SF6",
+                "characters": [{"id": "1", "name": "Ryu"}, {"id": "2", "name": "Akuma"}],
+                "stages": [{"id": "10", "name": "Training Room"}],
+            },
+        }
+    }
+    provider = StartGGProvider(client=client)
+
+    result = await provider.fetch_event_game_metadata("event-1")
+
+    assert result["videogame_id"] == "43868"
+    assert result["characters"] == [{"id": "1", "name": "Ryu"}, {"id": "2", "name": "Akuma"}]
+    assert result["stages"] == [{"id": "10", "name": "Training Room"}]
+    client.query.assert_awaited_once_with(queries.EVENT_GAME_METADATA, {"eventId": "event-1"})
+
+
+@pytest.mark.asyncio
 async def test_mutation_parity_preserves_call_active_dq_reset_and_stream_queue_documents():
     client = StartGGClient(token="fixture")
     calls: list[tuple[str, dict]] = []
@@ -186,6 +212,8 @@ async def test_v2_read_wrapper_reuses_startgg_reads_and_refuses_remote_mutations
 
     assert snapshot.payload == {
         "set_id": "set-1", "state": int(ProviderSetState.CALLED),
+        "aitob_state_code": int(ProviderSetState.CALLED),
+        "state_source": "aitob", "provider_state_raw": "6",
         "entrant_ids": ["entrant-1", "entrant-2"],
     }
     assert provider.capabilities_v2.for_action("report_score").kind is ProviderActionKind.REMOTE

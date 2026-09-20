@@ -98,6 +98,29 @@ class ConnectionManager:
             return_exceptions=True
         )
 
+    async def broadcast_to_workspace_overlays(self, workspace_id: str, message: dict):
+        """Notify every OBS overlay owned by one workspace.
+
+        Player/character overrides are entrant-scoped rather than station-
+        scoped, so the writer does not know which station currently displays
+        that entrant. Each connected overlay performs its normal authenticated
+        data refresh and receives only its own active match projection.
+        """
+        prefix = f"{workspace_id}:"
+        connections = {
+            connection
+            for key, values in self.overlay_connections.items()
+            if key.startswith(prefix)
+            for connection in values
+        }
+        if not connections:
+            return
+        payload = json.dumps(message)
+        await asyncio.gather(
+            *[connection.send_text(payload) for connection in connections],
+            return_exceptions=True,
+        )
+
     async def send_personal_message(self, message: dict, websocket: WebSocket):
         await websocket.send_text(json.dumps(message))
 

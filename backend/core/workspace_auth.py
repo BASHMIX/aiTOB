@@ -29,11 +29,12 @@ ROLE_PERMISSIONS: Final[dict[str, frozenset[str]]] = {
     "owner": frozenset({
         "workspace.read", "workspace.manage", "settings.manage",
         "integrations.manage", "tournament.manage", "match.operate",
+        "assistant.use",
         "match.call", "match.ready", "match.start", "match.stream", "stream.manage",
         "result.report", "dq.manual", "proposal.review",
         "station.manage", "overlay.manage", "conflict.manage",
     }),
-    "tournament_organizer": frozenset({"workspace.read", "settings.manage", "tournament.manage", "match.operate", "match.call", "match.ready", "match.start", "match.stream", "result.report", "dq.manual", "proposal.review", "conflict.manage"}),
+    "tournament_organizer": frozenset({"workspace.read", "settings.manage", "tournament.manage", "assistant.use", "match.operate", "match.call", "match.ready", "match.start", "match.stream", "result.report", "dq.manual", "proposal.review", "conflict.manage"}),
     "stream_operator": frozenset({"workspace.read", "station.manage", "overlay.manage", "match.stream", "stream.manage"}),
     # Moderators can coordinate attendance and review conflicts, but cannot
     # mutate match configuration, submit results, or perform DQ.
@@ -41,7 +42,7 @@ ROLE_PERMISSIONS: Final[dict[str, frozenset[str]]] = {
     "viewer": frozenset({"workspace.read"}),
     # Legacy rows are mapped explicitly during the staged ownership migration;
     # they remain aliases only until the final role normalization is applied.
-    "organizer": frozenset({"workspace.read", "settings.manage", "tournament.manage", "match.operate", "match.call", "match.ready", "match.start", "match.stream", "result.report", "dq.manual", "proposal.review", "conflict.manage"}),
+    "organizer": frozenset({"workspace.read", "settings.manage", "tournament.manage", "assistant.use", "match.operate", "match.call", "match.ready", "match.start", "match.stream", "result.report", "dq.manual", "proposal.review", "conflict.manage"}),
     "operator": frozenset({"workspace.read", "station.manage", "overlay.manage", "match.stream", "stream.manage"}),
 }
 

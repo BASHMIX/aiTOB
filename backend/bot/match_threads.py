@@ -553,22 +553,27 @@ async def run_ready_check_timeout(bot, thread, set_id, timeout_seconds: int = 60
     match = await get_active_match(set_id, workspace_id)
     workspace_id = match.get("workspace_id") if match else None
     is_challonge = bool(match and str(match.get("tournament_slug") or "").startswith("challonge:"))
-    if match and match.get('status') == 'called' and (is_challonge or not match.get('auto_dq_disarmed')):
-        if is_challonge:
-            await thread.send("⚠️ **Warning**: 3 minutes remaining. Check in now; Challonge Auto-DQ is disabled and an organizer will review any no-show.")
-        else:
-            await thread.send("⚠️ **Warning**: 3 minutes remaining. If both players are not ready, the match may be DQ'd.")
+    if match and match.get('status') == 'called':
+        await thread.send(
+            "⚠️ **Reminder**: 3 minutes remain in the attendance window. "
+            "An organizer will review any no-show; the bot never disqualifies players automatically."
+        )
 
     await asyncio.sleep(180)
     match = await get_active_match(set_id, workspace_id)
     if not match or match.get('status') != 'called':
         return
-    if str(match.get("tournament_slug") or "").startswith("challonge:"):
-        await thread.send("⏰ **Ready check expired.** No Auto-DQ was sent to Challonge; an organizer must choose the bracket outcome manually.")
-        return
-    if match.get('auto_dq_disarmed'):
-        # Spec section 3: silent surrender to start.gg. No DQ, no thread spam.
-        return
-    await thread.send("🛑 **Timeout**: 10 minutes elapsed. Auto-DQ triggered.")
-    from backend.core.match_state import auto_dq_match
-    await auto_dq_match(set_id, workspace_id=workspace_id)
+    await thread.send(
+        "⏰ **Attendance window expired.** No automatic disqualification was sent. "
+        "An organizer must review the match and choose any bracket outcome manually."
+    )
+    try:
+        await add_bot_feed(
+            f"Attendance expired for {set_id}; organizer review required (automatic DQ disabled).",
+            "warn",
+            workspace_id=workspace_id,
+        )
+    except Exception:
+        # A Discord timeout must not fail just because the optional feed store
+        # is unavailable during startup or an isolated unit test.
+        pass

@@ -1,6 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Rnd } from 'react-rnd';
 import { useEditorStore } from '@/store/useEditorStore';
+import { countryFlagUrl } from '@/utils/country';
+import { overlayImageLayout, overlayImagePlaceholder, resolveOverlayImageSource } from '@/utils/overlayAssets';
 import type { OverlayElement } from '@/store/useEditorStore';
 import { useDraggable } from '../hooks/useDraggable';
 
@@ -50,13 +52,39 @@ interface Props {
 
 export function DraggableElement({ id, element, scale, onContextMenu }: Props) {
   const store = useEditorStore();
-  const { updateElement, selectedId, setSelectedId, activeMatch } = store;
+  const { updateElement, selectedId, selectedIds, setSelectedId, toggleSelectedId, activeMatch } = store;
 
-  const { onDrag, onDragStop, onResize, onResizeStop } = useDraggable(id, updateElement);
+  const { onResize, onResizeStop } = useDraggable(id, updateElement);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLooping, setIsLooping] = useState(false);
   const [useCascade, setUseCascade] = useState(false);
+  const groupDragOrigin = useRef<Record<string, { x: number; y: number }> | null>(null);
+
+  const beginGroupDrag = () => {
+    if (!selectedIds.includes(id)) setSelectedId(id);
+    const ids = selectedIds.includes(id) ? selectedIds : [id];
+    groupDragOrigin.current = Object.fromEntries(ids.map((selected) => {
+      const item = store.elements[selected];
+      return [selected, { x: item?.x || 0, y: item?.y || 0 }];
+    }));
+    store.takeSnapshot();
+  };
+
+  const dragGroup = (_event: any, data: any) => {
+    const origin = groupDragOrigin.current;
+    if (!origin || !origin[id]) return;
+    const dx = Math.round(data.x) - origin[id].x;
+    const dy = Math.round(data.y) - origin[id].y;
+    Object.entries(origin).forEach(([selected, position]) => {
+      updateElement(selected, { x: position.x + dx, y: position.y + dy });
+    });
+  };
+
+  const finishGroupDrag = (_event: any, data: any) => {
+    dragGroup(_event, data);
+    groupDragOrigin.current = null;
+  };
 
   // Play preview event listener
   useEffect(() => {
@@ -88,6 +116,9 @@ export function DraggableElement({ id, element, scale, onContextMenu }: Props) {
           setUseCascade(false);
         }, totalDelay + duration + 50);
 
+
+
+
         return () => {
           clearTimeout(timer1);
           clearTimeout(timer2);
@@ -108,11 +139,13 @@ export function DraggableElement({ id, element, scale, onContextMenu }: Props) {
 
   const isImg = element.type === 'image';
   const isShape = element.type === 'rect' || element.type === 'circle';
-  const isSelected = selectedId === id;
+  const isSelected = selectedIds.includes(id) || selectedId === id;
 
   // Substitute active match data into telemetry data hooks dynamically for preview
   let textToRender = element.text;
   let srcToRender = element.src;
+
+  const hookKey = element.sourceId || id;
 
   if (activeMatch) {
     const isSwapped = activeMatch.swapped === true || activeMatch.swapped === 1 || activeMatch.swapped === '1';
@@ -122,31 +155,67 @@ export function DraggableElement({ id, element, scale, onContextMenu }: Props) {
     const p2Name = isSwapped ? activeMatch.p1_name : activeMatch.p2_name;
     const p1Score = isSwapped ? activeMatch.p2_score : activeMatch.p1_score;
     const p2Score = isSwapped ? activeMatch.p1_score : activeMatch.p2_score;
-    const p1Team = isSwapped ? activeMatch.p2_team : activeMatch.p1_team;
-    const p2Team = isSwapped ? activeMatch.p1_team : activeMatch.p2_team;
+    const p1Prefix = isSwapped
+      ? (activeMatch.p2_prefix ?? activeMatch.p2_team)
+      : (activeMatch.p1_prefix ?? activeMatch.p1_team);
+    const p2Prefix = isSwapped
+      ? (activeMatch.p1_prefix ?? activeMatch.p1_team)
+      : (activeMatch.p2_prefix ?? activeMatch.p2_team);
+    const p1Character = isSwapped ? activeMatch.p2_character : activeMatch.p1_character;
+    const p2Character = isSwapped ? activeMatch.p1_character : activeMatch.p2_character;
+    const p1CharacterImage = isSwapped ? activeMatch.p2_character_image : activeMatch.p1_character_image;
+    const p2CharacterImage = isSwapped ? activeMatch.p1_character_image : activeMatch.p2_character_image;
     const p1Avatar = isSwapped ? activeMatch.p2_avatar : activeMatch.p1_avatar;
     const p2Avatar = isSwapped ? activeMatch.p1_avatar : activeMatch.p2_avatar;
     const p1Country = isSwapped ? activeMatch.p2_country : activeMatch.p1_country;
     const p2Country = isSwapped ? activeMatch.p1_country : activeMatch.p2_country;
+    const p1Cfn = isSwapped ? activeMatch.p2_cfn : activeMatch.p1_cfn;
+    const p2Cfn = isSwapped ? activeMatch.p1_cfn : activeMatch.p2_cfn;
 
-    if (id === 'p1_name') textToRender = p1Name || 'Player 1';
-    else if (id === 'p2_name') textToRender = p2Name || 'Player 2';
-    else if (id === 'p1_score') textToRender = String(p1Score ?? '0');
-    else if (id === 'p2_score') textToRender = String(p2Score ?? '0');
-    else if (id === 'p1_team') textToRender = p1Team || '';
-    else if (id === 'p2_team') textToRender = p2Team || '';
-    else if (id === 'tournament_round') textToRender = activeMatch.round_name || '';
-    else if (id === 'p1_avatar') srcToRender = p1Avatar || '/static/player_placeholder.jpg';
-    else if (id === 'p2_avatar') srcToRender = p2Avatar || '/static/player_placeholder.jpg';
-    else if (id === 'p1_flag') {
-      srcToRender = p1Country 
-        ? `https://flagcdn.com/160x120/${p1Country.toLowerCase()}.png` 
-        : '/static/flag_placeholder.png';
+    if (hookKey === 'p1_name') textToRender = p1Name || 'Player 1';
+    else if (hookKey === 'p2_name') textToRender = p2Name || 'Player 2';
+    else if (hookKey === 'p1_score') textToRender = String(p1Score ?? '0');
+    else if (hookKey === 'p2_score') textToRender = String(p2Score ?? '0');
+    else if (hookKey === 'p1_prefix' || hookKey === 'p1_team') textToRender = p1Prefix || '';
+    else if (hookKey === 'p2_prefix' || hookKey === 'p2_team') textToRender = p2Prefix || '';
+    else if (hookKey === 'p1_country') textToRender = p1Country || '';
+    else if (hookKey === 'p2_country') textToRender = p2Country || '';
+    else if (hookKey === 'p1_cfn') textToRender = p1Cfn || '';
+    else if (hookKey === 'p2_cfn') textToRender = p2Cfn || '';
+    else if (hookKey === 'p1_character') textToRender = p1Character || '';
+    else if (hookKey === 'p2_character') textToRender = p2Character || '';
+    else if (hookKey === 'game_name') textToRender = activeMatch.game_name || '';
+    else if (hookKey === 'tournament_round') textToRender = activeMatch.round_name || '';
+    else if (hookKey === 'p1_avatar') srcToRender = p1Avatar || '/static/player_placeholder.jpg';
+    else if (hookKey === 'p2_avatar') srcToRender = p2Avatar || '/static/player_placeholder.jpg';
+    else if (hookKey === 'p1_character_image') srcToRender = p1CharacterImage || '/static/player_placeholder.jpg';
+    else if (hookKey === 'p2_character_image') srcToRender = p2CharacterImage || '/static/player_placeholder.jpg';
+    else if (hookKey === 'p1_flag') {
+      srcToRender = countryFlagUrl(p1Country) || '/static/flag_placeholder.png';
     }
-    else if (id === 'p2_flag') {
-      srcToRender = p2Country 
-        ? `https://flagcdn.com/160x120/${p2Country.toLowerCase()}.png` 
-        : '/static/flag_placeholder.png';
+    else if (hookKey === 'p2_flag') {
+      srcToRender = countryFlagUrl(p2Country) || '/static/flag_placeholder.png';
+    }
+
+    const nextMatch = activeMatch.next_match;
+    if (nextMatch) {
+      if (hookKey === 'next_p1_name') textToRender = nextMatch.p1_name || element.text || 'Next Player 1';
+      else if (hookKey === 'next_p2_name') textToRender = nextMatch.p2_name || element.text || 'Next Player 2';
+      else if (hookKey === 'next_p1_score') textToRender = String(nextMatch.p1_score ?? element.text ?? '0');
+      else if (hookKey === 'next_p2_score') textToRender = String(nextMatch.p2_score ?? element.text ?? '0');
+      else if (hookKey === 'next_p1_prefix') textToRender = nextMatch.p1_prefix || nextMatch.p1_team || element.text || '';
+      else if (hookKey === 'next_p2_prefix') textToRender = nextMatch.p2_prefix || nextMatch.p2_team || element.text || '';
+      else if (hookKey === 'next_p1_country') textToRender = nextMatch.p1_country || element.text || '';
+      else if (hookKey === 'next_p2_country') textToRender = nextMatch.p2_country || element.text || '';
+      else if (hookKey === 'next_p1_character') textToRender = nextMatch.p1_character || element.text || '';
+      else if (hookKey === 'next_p2_character') textToRender = nextMatch.p2_character || element.text || '';
+      else if (hookKey === 'next_round_name') textToRender = nextMatch.round_name || element.text || 'Next Round';
+      else if (hookKey === 'next_match_number') textToRender = nextMatch.match_number ? `Match #${nextMatch.match_number}` : (element.text || '');
+      else if (hookKey === 'next_match_status') textToRender = nextMatch.match_status || nextMatch.status || element.text || 'Up Next';
+      else if (hookKey === 'next_p1_avatar') srcToRender = nextMatch.p1_avatar || element.src || '/static/player_placeholder.jpg';
+      else if (hookKey === 'next_p2_avatar') srcToRender = nextMatch.p2_avatar || element.src || '/static/player_placeholder.jpg';
+      else if (hookKey === 'next_p1_flag') srcToRender = countryFlagUrl(nextMatch.p1_country) || element.src || '/static/flag_placeholder.png';
+      else if (hookKey === 'next_p2_flag') srcToRender = countryFlagUrl(nextMatch.p2_country) || element.src || '/static/flag_placeholder.png';
     }
   }
 
@@ -156,12 +225,19 @@ export function DraggableElement({ id, element, scale, onContextMenu }: Props) {
     const imgShadow = element.shadowColor 
       ? `drop-shadow(${element.shadowOffsetX || 0}px ${element.shadowOffsetY || 0}px ${element.shadowBlur || 0}px ${element.shadowColor})`
       : 'none';
+    const imageLayout = overlayImageLayout(hookKey, element.width, element.height);
     content = (
       <img 
-        src={srcToRender} 
+        src={resolveOverlayImageSource(hookKey, srcToRender)}
         alt="" 
-        className="w-full h-full object-contain block pointer-events-none" 
-        style={{ filter: imgShadow }}
+        onError={(event) => {
+          const fallback = overlayImagePlaceholder(hookKey);
+          if (event.currentTarget.getAttribute('src') !== fallback) {
+            event.currentTarget.src = fallback;
+          }
+        }}
+        className="block pointer-events-none"
+        style={{ ...imageLayout, filter: imgShadow }}
       />
     );
   } else if (isShape) {
@@ -260,6 +336,7 @@ export function DraggableElement({ id, element, scale, onContextMenu }: Props) {
       <div 
         style={{ 
           fontSize: `${element.fontSize || 24}px`, 
+          fontFamily: element.fontFamily || undefined,
           color: element.color || '#ffffff',
           fontWeight: element.fontWeight || 'normal',
           fontStyle: element.fontStyle || 'normal',
@@ -374,17 +451,20 @@ export function DraggableElement({ id, element, scale, onContextMenu }: Props) {
       scale={scale}
       position={{ x: Math.round(element.x), y: Math.round(element.y) }}
       size={hasFixedSize ? { width: Math.round(element.width || 250), height: Math.round(element.height || 60) } : undefined}
-      onDrag={onDrag}
-      onDragStop={onDragStop}
-      onDragStart={() => { store.takeSnapshot(); setSelectedId(id); }}
+      onDrag={dragGroup}
+      onDragStop={finishGroupDrag}
+      onDragStart={beginGroupDrag}
       onResize={hasFixedSize ? onResize : undefined}
       onResizeStop={hasFixedSize ? onResizeStop : undefined}
       onResizeStart={() => { store.takeSnapshot(); setSelectedId(id); }}
       disableDragging={false}
       enableResizing={hasFixedSize}
       style={{ zIndex: isSelected ? 100 : (element.zIndex || 1) }}
-      onMouseDown={() => {
-        setSelectedId(id);
+      data-overlay-element="true"
+      data-overlay-element-id={id}
+      onMouseDown={(event) => {
+        if (event.ctrlKey || event.metaKey || event.shiftKey) toggleSelectedId(id);
+        else setSelectedId(id);
       }}
       className={`select-none text-center box-border ${isSelected ? 'outline-dashed outline-2 outline-[#00ffcc]' : ''}`}
       bounds="parent"

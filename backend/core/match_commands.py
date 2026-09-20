@@ -417,3 +417,70 @@ class ProviderCommandLifecycle:
 
     async def mark(self, command_id: str, state: str, *, reason: str | None = None) -> dict:
         return await database.update_provider_command_state_v2(command_id, state, reason=reason)
+
+
+async def record_called_occurrence(
+    workspace_id: str,
+    tournament_id: str,
+    match_id: str,
+    occurrence_version: str,
+    *,
+    source: str,
+    called_at: str | None = None,
+    payload: Mapping[str, object] | None = None,
+) -> dict:
+    """Persist one canonical ``CALLED`` occurrence and Discord outbox event."""
+    if source not in {"provider_sync", "dashboard"}:
+        raise MatchCommandError("invalid_called_source")
+    if any(not str(item or "").strip() for item in (workspace_id, tournament_id, match_id, occurrence_version)):
+        raise MatchCommandError("called_occurrence_scope_required")
+    from backend.core.workflow_outbox import build_call_occurrence_event
+    occurred = called_at or _now()
+    event = build_call_occurrence_event(
+        workspace_id=workspace_id, tournament_id=tournament_id, match_id=match_id,
+        occurrence_version=occurrence_version, source_first_observed=source,
+        payload=payload,
+    )
+    async with database.aiosqlite.connect(database.DB_PATH) as db:
+        db.row_factory = database.aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            row = await (await db.execute(
+                "SELECT * FROM match_call_occurrences WHERE workspace_id=? AND tournament_id=? AND match_id=? AND occurrence_version=?" + (" FOR UPDATE" if __import__('backend.core.storage', fromlist=['is_postgres']).is_postgres() else ""),
+                (workspace_id, tournament_id, match_id, occurrence_version),
+            )).fetchone()
+            if row:
+                await db.commit()
+                return dict(row)
+            occurrence_id = str(uuid4())
+            await db.execute(
+                """INSERT INTO match_call_occurrences
+                   (id, workspace_id, tournament_id, match_id, occurrence_version,
+                    source_first_observed, called_at, delivery_state, outbox_command_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?)""",
+                (occurrence_id, workspace_id, tournament_id, match_id, occurrence_version,
+                 source, occurred, event["event_id"]),
+            )
+            await db.execute(
+                """INSERT INTO workflow_outbox
+                   (event_id, match_id, event_type, payload_json, deduplication_key,
+                    status, attempts, next_attempt_at, workspace_id)
+                   VALUES (?, ?, ?, ?, ?, 'pending', 0, NULL, ?)
+                   ON CONFLICT(deduplication_key) DO NOTHING""",
+                (event["event_id"], event["match_id"], event["event_type"],
+                 json.dumps(event.get("payload", {}), ensure_ascii=False),
+                 event["deduplication_key"], workspace_id),
+            )
+            await db.commit()
+            row = await (await db.execute(
+                "SELECT * FROM match_call_occurrences WHERE id=? AND workspace_id=?",
+                (occurrence_id, workspace_id),
+            )).fetchone()
+            return dict(row) if row else {"id": occurrence_id, "delivery_state": "queued"}
+        except Exception:
+            await db.rollback()
+            raise
+
+
+create_call_occurrence = record_called_occurrence
+record_match_called = record_called_occurrence

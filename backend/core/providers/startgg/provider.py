@@ -1,6 +1,6 @@
 from __future__ import annotations
 from datetime import UTC, datetime
-from typing import Optional, List
+from typing import Any, Optional, List
 from backend.core.contracts import (
     ITournamentProvider, ITournamentProviderV2,
     ProviderTournament, ProviderSet, ProviderSetState, ProviderSetResult,
@@ -73,11 +73,22 @@ class StartGGProvider(ITournamentProvider, ITournamentProviderV2):
             if len(request.entity_ids) != 1:
                 raise ValueError("A Start.gg single-match snapshot requires exactly one set ID.")
             set_id = next(iter(request.entity_ids))
-            state = await self.fetch_set_state(set_id)
+            # Keep the upstream ActivityState value separate from the
+            # canonical aiTOB state. The legacy fetch_set_state method exposes
+            # only the canonical enum, so read the raw client value here.
+            provider_state_raw = await self._client.fetch_set_state(set_id)
+            state = SGG_STATE_MAP.get(provider_state_raw, ProviderSetState.NOT_STARTED) if provider_state_raw is not None else None
             entrant_ids = await self.fetch_set_entrant_order(set_id)
             return ProviderSnapshotV2(
                 request=request,
-                payload={"set_id": set_id, "state": int(state) if state is not None else None, "entrant_ids": entrant_ids},
+                payload={
+                    "set_id": set_id,
+                    "state": int(state) if state is not None else None,
+                    "aitob_state_code": int(state) if state is not None else None,
+                    "state_source": "aitob",
+                    "provider_state_raw": str(provider_state_raw) if provider_state_raw is not None else None,
+                    "entrant_ids": entrant_ids,
+                },
                 observed_at=observed_at,
                 covered_scopes=frozenset({SnapshotScope.SINGLE_MATCH}),
                 covered_entity_ids=frozenset({set_id}),
@@ -143,6 +154,54 @@ class StartGGProvider(ITournamentProvider, ITournamentProviderV2):
         if not raw:
             return None
         return map_tournament(raw)
+
+    async def fetch_event_game_metadata(self, event_id: str) -> dict[str, Any]:
+        """Fetch Start.gg's current character/stage catalog for one Event game."""
+        event_key = str(event_id or "").strip()
+        if not event_key:
+            raise ValueError("event_id_required")
+        data = await self._client.query(queries.EVENT_GAME_METADATA, {"eventId": event_key})
+        event = (data or {}).get("event") or {}
+        videogame = event.get("videogame") or {}
+
+        def catalog_items(value: Any, *, include_images: bool = False) -> list[dict[str, Any]]:
+            if not isinstance(value, list):
+                return []
+            items: list[dict[str, Any]] = []
+            for item in value:
+                if not isinstance(item, dict) or item.get("id") is None or not item.get("name"):
+                    continue
+                entry: dict[str, Any] = {"id": str(item["id"]), "name": str(item["name"])}
+                if include_images:
+                    images = [
+                        {
+                            key: image.get(key)
+                            for key in ("id", "url", "type", "width", "height", "ratio")
+                            if image.get(key) is not None
+                        }
+                        for image in (item.get("images") or [])
+                        if isinstance(image, dict) and image.get("url")
+                    ]
+                    # Keep the legacy catalog shape when the provider has no
+                    # artwork for a character; real Start.gg catalogs include
+                    # at least one image and receive the additive fields.
+                    if images:
+                        entry["images"] = images
+                        entry["image_url"] = next(
+                            (image["url"] for image in images if image.get("type") in ("icon", "profile", "thumbnail")),
+                            images[0]["url"],
+                        )
+                items.append(entry)
+            return items
+
+        return {
+            "event_id": str(event.get("id") or event_key),
+            "event_name": str(event.get("name") or ""),
+            "videogame_id": str(videogame.get("id")) if videogame.get("id") is not None else None,
+            "game_name": videogame.get("name") or videogame.get("displayName"),
+            "characters": catalog_items(videogame.get("characters"), include_images=True),
+            "stages": catalog_items(videogame.get("stages")),
+        }
 
     async def fetch_sets(
         self,
@@ -291,6 +350,205 @@ class StartGGProvider(ITournamentProvider, ITournamentProviderV2):
             success=success, set_id=set_id,
             new_state=ProviderSetState.CALLED if success else None,
             error_message=None if success else "markSetCalled failed (check token scope / set state)"
+        )
+
+    async def start_tournament(self, slug_or_id: str) -> ProviderSetResult:
+        return ProviderSetResult(
+            success=False,
+            set_id=str(slug_or_id),
+            error_message="Start.gg does not expose a documented remote tournament-start mutation. Start matches from the Hub when the bracket is ready.",
+        )
+
+    async def reset_bracket(
+        self,
+        slug_or_id: str,
+        *,
+        event_id: str | None = None,
+    ) -> ProviderSetResult:
+        """Reset match results for the selected Start.gg event with the API token.
+
+        Start.gg exposes ``resetSet`` rather than a documented tournament-level
+        ``resetBracket`` mutation. We find root sets for every phase group and
+        reset each root with ``resetDependentSets=true``. This clears match
+        results and dependent sets, but does not claim to transition the event
+        or phase back to the provider UI's ``CREATED`` state.
+        """
+        if not event_id:
+            return ProviderSetResult(
+                success=False,
+                set_id=str(slug_or_id),
+                error_message="Start.gg bracket reset requires the selected event scope.",
+                diagnostics={"operation": "ResetBracket", "category": "missing_scope"},
+            )
+
+        try:
+            raw_sets = await self._fetch_event_reset_sets(str(event_id))
+            if not raw_sets:
+                return ProviderSetResult(
+                    success=False,
+                    set_id=str(slug_or_id),
+                    error_message="Start.gg returned no phase-group sets for this event.",
+                    diagnostics={"operation": "ResetBracket", "category": "empty_bracket"},
+                )
+
+            planned_reset_count = sum(
+                1 for item in raw_sets
+                if item.get("id") is not None and int(item.get("state") or 1) != 1
+            )
+            if planned_reset_count == 0:
+                return ProviderSetResult(
+                    success=True,
+                    set_id=str(slug_or_id),
+                    new_state=ProviderSetState.NOT_STARTED,
+                    diagnostics={
+                        "operation": "ResetBracket",
+                        "event_id": str(event_id),
+                        "root_set_ids": [],
+                        "affected_set_count": 0,
+                        "affected_phase_group_count": 0,
+                        "no_changes": True,
+                    },
+                )
+            # A root set has no entrant source from another set (its slots are
+            # seeded directly).  This is intentionally different from the
+            # reverse dependency set: the latter identifies leaves, while the
+            # provider's ``resetDependentSets`` flag must be sent on roots.
+            root_ids = [
+                str(item["id"])
+                for item in raw_sets
+                if item.get("id") is not None
+                and not any(
+                    isinstance(source, dict)
+                    and str(source.get("type") or "").lower() == "set"
+                    for source in (item.get("entrant1Source"), item.get("entrant2Source"))
+                )
+            ]
+            if not root_ids:
+                # A malformed/incomplete provider graph should not silently
+                # reset an arbitrary match.  Keep a deterministic fallback so
+                # the provider can still report a useful error if no roots are
+                # exposed for this bracket.
+                root_ids = [
+                    str(item["id"])
+                    for item in raw_sets
+                    if item.get("id") is not None
+                    and int(item.get("state") or 1) != 1
+                ]
+            if not root_ids:
+                return ProviderSetResult(
+                    success=True,
+                    set_id=str(slug_or_id),
+                    new_state=ProviderSetState.NOT_STARTED,
+                    diagnostics={
+                        "operation": "ResetBracket",
+                        "root_set_ids": [],
+                        "affected_set_count": 0,
+                        "affected_phase_group_count": 0,
+                    },
+                )
+
+            affected_set_ids: set[str] = set()
+            affected_phase_groups = 0
+            root_results: list[dict[str, Any]] = []
+            for root_id in root_ids:
+                data = await self._client.reset_set_with_dependencies(
+                    root_id,
+                    reset_dependent_sets=True,
+                )
+                reset_set = (data or {}).get("resetSet") or {}
+                reset_data = reset_set.get("resetAffectedData") or {}
+                affected_set_ids.add(str(reset_set.get("id") or root_id))
+                for affected in reset_data.get("affectedSets") or []:
+                    if isinstance(affected, dict) and affected.get("id") is not None:
+                        affected_set_ids.add(str(affected["id"]))
+                try:
+                    affected_phase_groups += int(reset_data.get("affectedPhaseGroupCount") or 0)
+                except (TypeError, ValueError):
+                    pass
+                root_results.append({
+                    "root_set_id": root_id,
+                    "affected_set_count": (
+                        reset_data.get("affectedSetCount")
+                        if isinstance(reset_data.get("affectedSetCount"), int)
+                        and int(reset_data.get("affectedSetCount")) >= 0
+                        else None
+                    ),
+                })
+
+            return ProviderSetResult(
+                success=True,
+                set_id=str(slug_or_id),
+                new_state=ProviderSetState.NOT_STARTED,
+                diagnostics={
+                    "operation": "ResetBracket",
+                    "event_id": str(event_id),
+                    "root_set_ids": root_ids,
+                    # Some Start.gg responses use -1 for this field even when
+                    # the dependent sets were reset.  Prefer the provider's
+                    # explicit affected IDs, then fall back to the planned
+                    # non-initial sets so the Hub message remains truthful.
+                    "affected_set_count": (
+                        0
+                        if planned_reset_count == 0
+                        else max(len(affected_set_ids), planned_reset_count)
+                    ),
+                    "affected_phase_group_count": affected_phase_groups,
+                    "root_results": root_results,
+                },
+            )
+        except Exception as exc:
+            diagnostics = getattr(self._client, "last_error", None)
+            return ProviderSetResult(
+                success=False,
+                set_id=str(slug_or_id),
+                error_message=str(exc),
+                diagnostics=diagnostics if isinstance(diagnostics, dict) else {
+                    "operation": "ResetBracket",
+                    "category": "provider_error",
+                },
+            )
+
+    async def _fetch_event_reset_sets(self, event_id: str) -> list[dict[str, Any]]:
+        """Load all sets in the event's phase groups for reset planning."""
+        groups_data = await self._client.query(
+            queries.EVENT_PHASE_GROUPS,
+            {"eventId": str(event_id)},
+        )
+        event = (groups_data or {}).get("event") or {}
+        phase_groups = [
+            node
+            for phase in event.get("phases") or []
+            for node in ((phase.get("phaseGroups") or {}).get("nodes") or [])
+            if isinstance(node, dict) and node.get("id") is not None
+        ]
+        all_sets: list[dict[str, Any]] = []
+        for group in phase_groups:
+            page = 1
+            group_set_count = 0
+            while True:
+                data = await self._client.query(
+                    queries.PHASE_GROUP_RESET_SETS,
+                    {
+                        "phaseGroupId": str(group["id"]),
+                        "page": page,
+                        "perPage": 500,
+                    },
+                )
+                connection = ((data or {}).get("phaseGroup") or {}).get("sets") or {}
+                nodes = [node for node in (connection.get("nodes") or []) if isinstance(node, dict)]
+                all_sets.extend(nodes)
+                group_set_count += len(nodes)
+                total = int((connection.get("pageInfo") or {}).get("total") or 0)
+                if not nodes or group_set_count >= total or len(nodes) < 500:
+                    break
+                page += 1
+        return all_sets
+
+    async def reset_tournament(self, slug_or_id: str) -> ProviderSetResult:
+        return ProviderSetResult(
+            success=False,
+            set_id=str(slug_or_id),
+            error_message="Use the selected event's Reset Bracket action for Start.gg.",
         )
 
     async def mark_dq(self, set_id: str, winner_id: str) -> ProviderSetResult:

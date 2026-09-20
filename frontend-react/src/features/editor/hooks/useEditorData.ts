@@ -25,12 +25,28 @@ export function useEditorData(stationId: string, wsRef: React.MutableRefObject<W
 
   const fetchActiveMatch = useCallback(async () => {
     try {
-      const res = await axios.get('/api/active-matches');
-      const matches = res.data.matches || [];
-      const connectedMatch = matches.find((m: any) => m.station_id === stationId);
-      useEditorStore.getState().setActiveMatch(connectedMatch || null);
+      // The Editor must preview the same projection as OBS, including a
+      // not-started Broadcast Preview match and provider metadata fallbacks.
+      const res = await axios.get(`/api/stations/${encodeURIComponent(stationId)}/broadcast-state`);
+      const broadcastData = res.data;
+      const matchWithNext = broadcastData.active_match
+        ? {
+            ...broadcastData.active_match,
+            next_match: broadcastData.next_match,
+            next_match_tbd: broadcastData.next_match_tbd,
+            busy_players: broadcastData.busy_players,
+          }
+        : (broadcastData.next_match
+            ? {
+                next_match: broadcastData.next_match,
+                next_match_tbd: broadcastData.next_match_tbd,
+                busy_players: broadcastData.busy_players,
+              }
+            : null);
+      useEditorStore.getState().setActiveMatch(matchWithNext);
     } catch (e) {
       console.error("Failed to fetch active match", e);
+      useEditorStore.getState().setActiveMatch(null);
     }
   }, [stationId]);
 
@@ -69,6 +85,9 @@ export function useEditorData(stationId: string, wsRef: React.MutableRefObject<W
             currentPreset.config.global_font_url || '',
             currentPreset.config.global_font_family || ''
           );
+          if (Array.isArray(currentPreset.config.font_library)) {
+            useEditorStore.getState().setFontLibrary(currentPreset.config.font_library);
+          }
           useEditorStore.getState().setSelectedId(null);
         } else {
           useEditorStore.getState().setElements({});
@@ -107,6 +126,7 @@ export function useEditorData(stationId: string, wsRef: React.MutableRefObject<W
         background_url: currentStore.background_url,
         global_font_url: currentStore.global_font_url,
         global_font_family: currentStore.global_font_family
+        ,font_library: currentStore.font_library
       };
 
       await axios.post('/api/overlays', { name: activeOverlayName, config });

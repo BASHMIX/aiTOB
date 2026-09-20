@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { useHubSocket } from '@/hooks/useHubSocket';
 
@@ -14,9 +14,10 @@ interface Conflict {
   p2_entrant_id?: string;
 }
 
-export function Conflicts() {
+export function Conflicts({ focusConflictId = null }: { focusConflictId?: number | null } = {}) {
   const [conflicts, setConflicts] = useState<Conflict[]>([]);
   const [busyId, setBusyId] = useState<number | null>(null);
+  const conflictRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
   const loadConflicts = useCallback(async () => {
     const res = await axios.get('/api/conflicts');
@@ -26,6 +27,16 @@ export function Conflicts() {
   useEffect(() => {
     loadConflicts();
   }, [loadConflicts]);
+
+  useEffect(() => {
+    if (!focusConflictId || !conflicts.some((conflict) => conflict.id === focusConflictId)) return;
+    const frame = window.requestAnimationFrame(() => {
+      const element = conflictRefs.current[focusConflictId];
+      element?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      element?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [conflicts, focusConflictId]);
 
   // Refresh when the AI investigation posts a summary (or any match update).
   useHubSocket(useCallback((evt: { type: string }) => {
@@ -76,7 +87,13 @@ export function Conflicts() {
             const p1Name = cf.p1_name || 'Player 1';
             const p2Name = cf.p2_name || 'Player 2';
             return (
-              <div key={cf.id} className="bg-appDark border border-red-500/30 rounded p-3 text-white">
+              <div
+                key={cf.id}
+                ref={(element) => { conflictRefs.current[cf.id] = element; }}
+                tabIndex={focusConflictId === cf.id ? -1 : undefined}
+                data-conflict-id={cf.id}
+                className={`bg-appDark border border-red-500/30 rounded p-3 text-white ${focusConflictId === cf.id ? 'ring-2 ring-accentYellow/70' : ''}`}
+              >
                 <div className="font-bold text-red-400 mb-2">Match #{cf.set_id} — Conflict!</div>
 
                 {/* AI investigation summary (or a waiting state) */}

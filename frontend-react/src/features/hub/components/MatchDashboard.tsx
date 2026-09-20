@@ -339,9 +339,37 @@ export function MatchDashboard() {
         reload();
       }
       else if (action === 'assignStation') {
-        // Assigning a station to a called match elevates it to in_progress
-        // server-side (stamps started_at + notifies the provider).
+        if (!setId) { showToast('Cannot assign: missing set ID', false); return; }
+        if (!row.isLocal) {
+          await axios.post('/api/active-matches', {
+            set_id: setId, p1_name: row.players[0].name, p2_name: row.players[1].name,
+            p1_entrant_id: row.raw?.p1_eid || '', p2_entrant_id: row.raw?.p2_eid || '',
+            p1_avatar: row.players[0].avatar || '', p2_avatar: row.players[1].avatar || '',
+            round_name: row.round || '', tournament_slug: currentSlug || '',
+            match_number: row.id,
+            status: 'not_started', p1_score: 0, p2_score: 0,
+            phase_group: row.pool || '',
+          });
+        }
         await axios.patch(`/api/active-matches/${setId}`, { station_id: data });
+        reload();
+      }
+      else if (action === 'enqueueStation') {
+        if (!setId) { showToast('Cannot queue: missing set ID', false); return; }
+        if (!row.isLocal) {
+          await axios.post('/api/active-matches', {
+            set_id: setId, p1_name: row.players[0].name, p2_name: row.players[1].name,
+            p1_entrant_id: row.raw?.p1_eid || '', p2_entrant_id: row.raw?.p2_eid || '',
+            p1_avatar: row.players[0].avatar || '', p2_avatar: row.players[1].avatar || '',
+            round_name: row.round || '', tournament_slug: currentSlug || '',
+            match_number: row.id,
+            status: 'not_started', p1_score: 0, p2_score: 0,
+            phase_group: row.pool || '',
+          });
+        }
+        await axios.post(`/api/stations/${data}/queue`, { set_id: setId });
+        const stName = stations.find((s: any) => s.id === data)?.name || 'station';
+        showToast(`Match added to ${stName} queue ✓`);
         reload();
       }
     } catch (err: any) {

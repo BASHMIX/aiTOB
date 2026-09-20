@@ -8,6 +8,20 @@ query TournamentInfo($slug: String!) {
   tournament(slug: $slug) {
     id
     name
+    slug
+    startAt
+    state
+    timezone
+    images { url type }
+    participants(query: {page: 1, perPage: 500}) {
+      nodes {
+        id
+        prefix
+        gamerTag
+        user { id location { country countryId } }
+        player { prefix gamerTag }
+      }
+    }
     streams {
       id
       streamName
@@ -17,18 +31,65 @@ query TournamentInfo($slug: String!) {
     events {
       id
       name
+      slug
+      state
       videogame { name }
       entrants(query: {page: 1, perPage: 250}) {
         nodes {
           id
           name
           participants {
+            gamerTag
+            prefix
+            connectedAccounts
+            player { prefix gamerTag }
             user {
+              id
+              location { country countryId }
               images { url type }
             }
           }
         }
       }
+    }
+  }
+}
+"""
+
+# Event resolution is intentionally separate from tournament resolution.  A
+# direct Event slug must retain its complete ``tournament/.../event/...`` scope
+# and must never be approximated by selecting the first tournament event.
+EVENT_INFO = """
+query EventInfo($slug: String!) {
+  event(slug: $slug) {
+    id
+    name
+    slug
+    state
+    videogame { name }
+    tournament { id name slug state timezone startAt images { url type } }
+  }
+}
+"""
+
+# Start.gg maintains the canonical character/stage catalog per videogame.
+# Unlike entrant names, these IDs/names are provider-owned and should never be
+# copied into a static aiTOB list.
+EVENT_GAME_METADATA = """
+query EventGameMetadata($eventId: ID!) {
+  event(id: $eventId) {
+    id
+    name
+    videogame {
+      id
+      name
+      displayName
+      characters {
+        id
+        name
+        images { id url type width height ratio }
+      }
+      stages { id name }
     }
   }
 }
@@ -65,6 +126,8 @@ query TournamentSets($slug: String!) {
         nodes {
           id
           state
+          winnerId
+          completedAt
           fullRoundText
           identifier
           phaseGroup { displayIdentifier }
@@ -187,8 +250,13 @@ query TournamentSets($slug: String!, $page: Int!, $perPage: Int!, $phaseIds: [ID
               id
               name
               participants {
+                gamerTag
+                prefix
+                connectedAccounts
+                player { prefix gamerTag }
                 user {
                   id
+                  location { country countryId }
                   images { url type }
                 }
               }
@@ -266,6 +334,64 @@ mutation ResetSet($setId: ID!) {
 }
 """
 
+# Start.gg does not expose a documented tournament-level resetBracket mutation.
+# This token-authenticated operation resets root sets and their dependent sets;
+# it clears match results but does not claim to transition the event/phase back
+# to the provider UI's CREATED state.
+RESET_SET_WITH_DEPENDENCIES = """
+mutation ResetSetWithDependencies($setId: ID!, $resetDependentSets: Boolean!) {
+  resetSet(setId: $setId, resetDependentSets: $resetDependentSets) {
+    id
+    state
+    resetAffectedData {
+      affectedSetCount
+      affectedPhaseGroupCount
+      affectedSets { id state }
+    }
+  }
+}
+"""
+
+# Resolve the phase groups belonging to the selected event.  Tournament setup
+# stores the event scope, while Start.gg's bracket reset is scoped to its phase
+# groups, so the adapter resolves this relationship at mutation time.
+EVENT_PHASE_GROUPS = """
+query EventPhaseGroups($eventId: ID!) {
+  event(id: $eventId) {
+    id
+    phases {
+      id
+      name
+      phaseGroups(query: { page: 1, perPage: 100 }) {
+        pageInfo { total }
+        nodes { id displayIdentifier }
+      }
+    }
+  }
+}
+"""
+
+PHASE_GROUP_RESET_SETS = """
+query PhaseGroupResetSets($phaseGroupId: ID!, $page: Int!, $perPage: Int!) {
+  phaseGroup(id: $phaseGroupId) {
+    id
+    displayIdentifier
+    sets(page: $page, perPage: $perPage, sortType: STANDARD) {
+      pageInfo { total }
+      nodes {
+        id
+        state
+        round
+        fullRoundText
+        identifier
+        entrant1Source { type typeId }
+        entrant2Source { type typeId }
+      }
+    }
+  }
+}
+"""
+
 # Fetch every entrant's connectedAccounts for a tournament so we can look up a
 # user's linked Capcom Fighter Network ID without requiring a separate entrant query.
 # connectedAccounts is a JSON blob; the Capcom CFN lives at connectedAccounts.capcom.value.
@@ -276,7 +402,7 @@ query EntrantConnectedAccounts($slug: String!) {
       entrants(query: {page: 1, perPage: 500}) {
         nodes {
           participants {
-            user { id }
+            user { id location { country countryId } }
             connectedAccounts
           }
         }

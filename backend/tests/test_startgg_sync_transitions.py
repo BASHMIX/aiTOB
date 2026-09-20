@@ -40,9 +40,16 @@ async def setup_test_db(tmp_path):
 
 
 def _set(state, sid="s1"):
+    raw_state = {
+        ProviderSetState.NOT_STARTED: "1",
+        ProviderSetState.CALLED: "6",
+        ProviderSetState.IN_PROGRESS: "2",
+        ProviderSetState.COMPLETE: "3",
+    }.get(state)
     return ProviderSet(
         id=sid, state=state, round_name="Winners Semi-Final", identifier="A",
         phase_group="1", event_id="ev1", event_name="SF6",
+        provider_set_id=sid, provider_state_raw=raw_state,
         entrant1=ProviderEntrant(id="11", name="Alice"),
         entrant2=ProviderEntrant(id="22", name="Bob"),
     )
@@ -71,6 +78,7 @@ async def test_startgg_called_to_in_progress_enqueues_go_live(setup_test_db):
 
     m = await get_active_match("s1")
     assert m["status"] == "in_progress"
+    assert (m["provider_state_raw"], m["provider_state_normalized"], m["hub_status"]) == ("2", "in_progress", "in_progress")
     assert m["started_at"]  # stamped
     assert "startgg_go_live s1" in await _cmds()
 
@@ -105,6 +113,7 @@ async def test_startgg_complete_frees_station_and_enqueues_finish(setup_test_db)
 
     m = await get_active_match("s1")
     assert m["status"] == "complete"
+    assert (m["provider_state_raw"], m["provider_state_normalized"], m["hub_status"]) == ("3", "complete", "complete")
     assert not m["station_id"]  # freed
     assert "startgg_finish s1 999" in await _cmds()
 

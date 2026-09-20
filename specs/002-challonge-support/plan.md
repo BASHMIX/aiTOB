@@ -11,6 +11,13 @@ operations manager**: it owns calls, attendance, Discord, stations, overlays, re
 and organizer workflow. The provider remains the authoritative reference for bracket
 structure, reported results, advancement, and provider-native state.
 
+Provider-backed actions are transition intents, not a second bracket engine. During a
+Start.gg called window, each entrant can be marked `present` or `withdrawn` through a
+verified Discord interaction or an authorized organizer control; Start.gg owns the
+deadline and the resulting single-/double-DQ. Challonge supports only immediate
+organizer DQ of `p1` or `p2`. aiTOB waits for a newer provider snapshot before
+projecting the resulting winner, advancement, player state, or downstream matches.
+
 An operation the provider does not natively model is not discarded. It becomes an
 explicit Hub-owned operation. For example, a Challonge match can be `called` locally:
 aiTOB notifies the correct players in Discord, creates/recovers the Match Thread, runs
@@ -441,8 +448,10 @@ pauses only that provider/account and does not halt the other provider or Hub-lo
   `Sync now` control. Never imply direct provider changes are live until that refresh;
   Live mode is the explicit choice for automatic discovery during an active event.
 - Render actions from API projection. Challonge Call/Ready/Start/Station are clearly
-  local; Score is remote; DQ is remote only after release flag; Reset and double-DQ
-  explain why unavailable.
+  local; Score is remote; DQ is remote only after release flag. The projection exposes
+  Start.gg per-entrant attendance actions separately from result actions and exposes
+  Challonge immediate-DQ targets `p1` and `p2`; all clients hide absent actions rather
+  than hard-coding provider names.
 - Station occupancy shows owning tournament/provider and never attributes a Start.gg
   station to a Challonge import.
 
@@ -451,8 +460,9 @@ pauses only that provider/account and does not halt the other provider or Hub-lo
 - Keep Discord call/readiness provider-neutral.
 - Replace generic-flow literal `startgg_*` commands with provider-neutral events that
   dispatch to an adapter hook only when capability permits it.
-- Auto-DQ checks capabilities first. Unsupported Challonge double-DQ pauses and asks
-  the organizer rather than choosing a technical winner.
+- Automatic and AI-initiated DQ remain prohibited. Manual DQ uses provider-projected
+  targets; a provider rejection or unknown outcome enters review without choosing a
+  technical winner or changing provider-owned bracket truth.
 - Persist timers/messages/thread IDs and make Discord effects idempotent across restart
   and repeated snapshots. Mention resolution uses verified identity links only.
 

@@ -188,10 +188,8 @@ if __name__ == "__main__":
     # Lightweight flag parsing — keep the script dependency-free.
     no_frontend = "--no-frontend" in sys.argv
     detached = "--detached" in sys.argv
-    # Normal developer runs retain the documented :8000 API. The detached
-    # launcher uses :8001 so an abandoned reload worker on :8000 cannot serve
-    # stale code behind an otherwise healthy Vite page.
-    api_port = 8001 if detached else 8000
+    # Both normal and detached desktop runs use the documented :8000 API.
+    api_port = 8000
     # Local API/Bot traffic must stay on the same process boundary as Vite.
     # Deployments that intentionally use an external Hub URL must opt in
     # explicitly; a stale external value must not produce a 530 on local WS.

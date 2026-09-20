@@ -5,6 +5,7 @@ export function SidebarProperties() {
   const store = useEditorStore();
   const selId = store.selectedId;
   const selEl = selId ? store.elements[selId] : null;
+  const selectedIds = store.selectedIds.length ? store.selectedIds : (selId ? [selId] : []);
 
   if (!selEl || !selId) {
     return null;
@@ -18,10 +19,37 @@ export function SidebarProperties() {
     store.updateElement(selId, { [field]: current + (delta * step) });
   };
 
+  const updatePosition = (field: 'x' | 'y', value: number) => {
+    if (!selectedIds.length || !selEl) return;
+    const delta = value - (selEl[field] || 0);
+    selectedIds.forEach((id) => {
+      const element = store.elements[id];
+      if (element) store.updateElement(id, { [field]: Math.round((element[field] || 0) + delta) });
+    });
+  };
+
   return (
     <div className="flex flex-col">
       <label className="text-[11px] text-[#999] uppercase tracking-wide mb-1 block">ID</label>
       <input className="w-full bg-[#222] border border-[#555] rounded px-2 py-1.5 mb-3 text-[#aaa]" readOnly value={selId} />
+
+      <div className="grid grid-cols-2 gap-2 mb-3">
+        {(['x', 'y'] as const).map((field) => (
+          <label key={field} className="text-[11px] text-[#999] uppercase tracking-wide">
+            {field} position
+            <input
+              type="number"
+              className="w-full mt-1 bg-[#3a3a3a] border border-[#555] rounded px-2 py-1.5 text-xs text-white"
+              value={Math.round(selEl[field] || 0)}
+              onChange={(event) => updatePosition(field, parseFloat(event.target.value) || 0)}
+              onWheel={(event) => {
+                event.preventDefault();
+                updatePosition(field, (selEl[field] || 0) + (event.deltaY < 0 ? (event.shiftKey ? 10 : 1) : -(event.shiftKey ? 10 : 1)));
+              }}
+            />
+          </label>
+        ))}
+      </div>
 
       {selEl.type === 'text' && (
         <>
@@ -62,6 +90,22 @@ export function SidebarProperties() {
 
           <label className="text-[11px] text-[#999] uppercase tracking-wide mb-1 block">Font Size (px)</label>
           <input type="number" className="w-full bg-[#3a3a3a] border border-[#555] rounded px-2 py-1.5 mb-3" value={selEl.fontSize} onChange={e => store.updateElement(selId, { fontSize: parseFloat(e.target.value) })} onWheel={e => handleWheel(e, 'fontSize', selEl.fontSize)} />
+
+          <label className="text-[11px] text-[#999] uppercase tracking-wide mb-1 block">Font Family</label>
+          <select
+            className="w-full bg-[#3a3a3a] border border-[#555] rounded px-2 py-1.5 mb-1 text-xs"
+            value={selEl.fontFamily || ''}
+            onChange={e => store.updateElement(selId, { fontFamily: e.target.value || undefined })}
+          >
+            <option className="bg-white text-black" value="">Global Default</option>
+            {store.font_library.map(font => <option className="bg-white text-black" key={font.family} value={font.family}>{font.family}</option>)}
+          </select>
+          <input
+            className="w-full bg-[#3a3a3a] border border-[#555] rounded px-2 py-1.5 mb-3 text-xs"
+            value={selEl.fontFamily || ''}
+            onChange={e => store.updateElement(selId, { fontFamily: e.target.value || undefined })}
+            placeholder="Custom CSS family, e.g. Arial, sans-serif"
+          />
 
           <label className="text-[11px] text-[#999] uppercase tracking-wide mb-1 block">Color</label>
           <input type="color" className="w-full h-[38px] p-1 bg-[#3a3a3a] border border-[#555] rounded mb-3 cursor-pointer" value={selEl.color || '#ffffff'} onChange={e => store.updateElement(selId, { color: e.target.value })} />

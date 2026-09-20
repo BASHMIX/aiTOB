@@ -3,7 +3,8 @@ from collections import defaultdict
 from backend.core.database import (
     get_stations, create_station, update_station, delete_station,
     add_station_overlay, remove_station_overlay, get_station_overlays,
-    get_all_station_overlays, update_station_active_overlay, get_station
+    get_all_station_overlays, update_station_active_overlay, get_station,
+    get_station_queue, enqueue_station_match, reorder_station_queue, dequeue_station_match
 )
 from backend.api.auth import require_permission
 from backend.core.workspace_auth import SessionPrincipal
@@ -11,9 +12,25 @@ from backend.core.entitlements import EntitlementLimitExceeded, require_workspac
 from backend.api.schemas import (
     CreateStationRequest, UpdateStationRequest, AddStationOverlayRequest, SetActiveOverlayRequest,
     IssueOverlayAccessRequest,
+    BroadcastPreviewRequest,
+    EnqueueMatchRequest, ReorderQueueRequest,
 )
 
 router = APIRouter(tags=["stations"])
+
+
+@router.get("/{id}/broadcast-state", summary="Get the station broadcast preview projection")
+async def api_get_station_broadcast_state(
+    id: str,
+    principal: SessionPrincipal = Depends(require_permission("workspace.read")),
+):
+    """Return the exact player/media projection rendered by OBS for the Editor."""
+    from backend.core.broadcast_projection import get_station_broadcast_state
+
+    state = await get_station_broadcast_state(id, principal.workspace_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Station not found")
+    return state
 
 
 @router.get("", summary="List all stations")
@@ -42,8 +59,8 @@ async def api_get_stations(principal: SessionPrincipal = Depends(require_permiss
                     "p2_name": { "id": "p2_name", "type": "text", "x": 1520, "y": 950, "fontSize": 48, "color": "#ffffff", "text": "Player 2", "visible": True },
                     "p1_score": { "id": "p1_score", "type": "text", "x": 800, "y": 950, "fontSize": 64, "color": "#ff0000", "text": "0", "visible": True },
                     "p2_score": { "id": "p2_score", "type": "text", "x": 1120, "y": 950, "fontSize": 64, "color": "#ff0000", "text": "0", "visible": True },
-                    "p1_team": { "id": "p1_team", "type": "text", "x": 400, "y": 900, "fontSize": 24, "color": "#aaaaaa", "text": "[TEAM]", "visible": True },
-                    "p2_team": { "id": "p2_team", "type": "text", "x": 1520, "y": 900, "fontSize": 24, "color": "#aaaaaa", "text": "[TEAM]", "visible": True },
+                    "p1_prefix": { "id": "p1_prefix", "type": "text", "x": 400, "y": 900, "fontSize": 24, "color": "#aaaaaa", "text": "[PREFIX]", "visible": True },
+                    "p2_prefix": { "id": "p2_prefix", "type": "text", "x": 1520, "y": 900, "fontSize": 24, "color": "#aaaaaa", "text": "[PREFIX]", "visible": True },
                     "tournament_round": { "id": "tournament_round", "type": "text", "x": 960, "y": 50, "fontSize": 32, "color": "#ffffff", "text": "Winners Semis", "visible": True },
                     "tournament_name": { "id": "tournament_name", "type": "text", "x": 960, "y": 100, "fontSize": 24, "color": "#aaaaaa", "text": "Tournament", "visible": True },
                     "p1_avatar": { "id": "p1_avatar", "type": "image", "x": 250, "y": 850, "width": 180, "height": 180, "src": "/static/player_placeholder.jpg", "visible": True },
@@ -91,6 +108,52 @@ async def api_update_station(id: str, body: UpdateStationRequest, principal: Ses
     if fields:
         await update_station(id, workspace_id=principal.workspace_id, **fields)
     return {"message": "Updated"}
+
+
+@router.post("/{id}/broadcast-preview", summary="Show a not-started match on a broadcast station")
+async def api_set_broadcast_preview(
+    id: str,
+    body: BroadcastPreviewRequest,
+    principal: SessionPrincipal = Depends(require_permission("station.manage")),
+):
+    """Attach an existing NOT_STARTED provider/local match for preview only."""
+    from backend.core.database import get_active_match, set_station_preview
+    station = await get_station(id, principal.workspace_id)
+    if not station:
+        raise HTTPException(status_code=404, detail="Station not found")
+    # Preview uses the same local active-match projection as a live station.
+    # The organizer must sync the tournament first so player links, avatars,
+    # flags, and overrides are all present in one canonical row.
+    match = await get_active_match(body.set_id, principal.workspace_id)
+    if not match:
+        raise HTTPException(status_code=404, detail="Match is not in the Hub yet. Sync the tournament, then choose it again.")
+    if str(match.get("status") or "").lower() != "not_started":
+        raise HTTPException(status_code=409, detail="Only Not Started matches can be previewed")
+    if station.get("active_match_id"):
+        live_owner = await get_active_match(str(station["active_match_id"]), principal.workspace_id)
+        if live_owner and str(live_owner.get("status") or "").lower() in {"called", "ready", "in_progress"}:
+            raise HTTPException(status_code=409, detail="Station is already hosting a live match")
+    if station.get("preview_match_id") and station.get("preview_match_id") != body.set_id:
+        await set_station_preview(id, None, principal.workspace_id)
+    updated = await set_station_preview(id, body.set_id, principal.workspace_id, match)
+    from backend.api.ws_manager import manager as ws_manager
+    await ws_manager.broadcast_to_slot(id, {"type": "match_update", "preview": True}, principal.workspace_id)
+    return {"message": "Broadcast preview enabled", "station": updated, "match": match}
+
+
+@router.delete("/{id}/broadcast-preview", summary="Clear a station broadcast preview")
+async def api_clear_broadcast_preview(
+    id: str,
+    principal: SessionPrincipal = Depends(require_permission("station.manage")),
+):
+    from backend.core.database import set_station_preview
+    station = await get_station(id, principal.workspace_id)
+    if not station:
+        raise HTTPException(status_code=404, detail="Station not found")
+    updated = await set_station_preview(id, None, principal.workspace_id)
+    from backend.api.ws_manager import manager as ws_manager
+    await ws_manager.broadcast_to_slot(id, {"type": "match_update", "preview": False}, principal.workspace_id)
+    return {"message": "Broadcast preview cleared", "station": updated}
 
 
 @router.delete("/{id}",
@@ -178,3 +241,68 @@ async def api_set_active_overlay(id: str, body: SetActiveOverlayRequest, princip
     }, principal.workspace_id)
     
     return {"message": "Active overlay updated", "overlay_name": body.overlay_name}
+
+
+@router.get("/{id}/queue", summary="Get matches queued on this station")
+async def api_get_station_queue(id: str, principal: SessionPrincipal = Depends(require_permission("workspace.read"))):
+    """List queued matches for this station with entrant details and player busy status."""
+    station = await get_station(id, principal.workspace_id)
+    if not station:
+        raise HTTPException(status_code=404, detail="Station not found")
+    queue = await get_station_queue(id, principal.workspace_id)
+    return {"queue": queue}
+
+
+@router.post("/{id}/queue", summary="Add a match to station stream queue")
+async def api_enqueue_station_match(
+    id: str,
+    body: EnqueueMatchRequest,
+    principal: SessionPrincipal = Depends(require_permission("station.manage")),
+):
+    """Enqueue a match to the station's stream queue."""
+    station = await get_station(id, principal.workspace_id)
+    if not station:
+        raise HTTPException(status_code=404, detail="Station not found")
+    await enqueue_station_match(id, body.set_id, principal.workspace_id)
+
+    from backend.api.ws_manager import manager as ws_manager
+    await ws_manager.broadcast({"type": "match_update", "_workspace_id": principal.workspace_id})
+    await ws_manager.broadcast_to_slot(id, {"type": "match_update"}, principal.workspace_id)
+    return {"message": "Match enqueued to station stream queue"}
+
+
+@router.put("/{id}/queue/reorder", summary="Reorder matches in station stream queue")
+async def api_reorder_station_queue(
+    id: str,
+    body: ReorderQueueRequest,
+    principal: SessionPrincipal = Depends(require_permission("station.manage")),
+):
+    """Update order of matches in the station queue."""
+    station = await get_station(id, principal.workspace_id)
+    if not station:
+        raise HTTPException(status_code=404, detail="Station not found")
+    await reorder_station_queue(id, body.set_ids, principal.workspace_id)
+
+    from backend.api.ws_manager import manager as ws_manager
+    await ws_manager.broadcast({"type": "match_update", "_workspace_id": principal.workspace_id})
+    await ws_manager.broadcast_to_slot(id, {"type": "match_update"}, principal.workspace_id)
+    return {"message": "Queue reordered"}
+
+
+@router.delete("/{id}/queue/{set_id}", summary="Remove a match from station stream queue")
+async def api_dequeue_station_match(
+    id: str,
+    set_id: str,
+    principal: SessionPrincipal = Depends(require_permission("station.manage")),
+):
+    """Remove a match from the station stream queue."""
+    station = await get_station(id, principal.workspace_id)
+    if not station:
+        raise HTTPException(status_code=404, detail="Station not found")
+    await dequeue_station_match(id, set_id, principal.workspace_id)
+
+    from backend.api.ws_manager import manager as ws_manager
+    await ws_manager.broadcast({"type": "match_update", "_workspace_id": principal.workspace_id})
+    await ws_manager.broadcast_to_slot(id, {"type": "match_update"}, principal.workspace_id)
+    return {"message": "Match removed from queue"}
+

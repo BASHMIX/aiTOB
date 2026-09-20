@@ -207,7 +207,7 @@ migration evidence are reviewed.
 **Purpose**: Remove dual paths only after rollout evidence proves the V2 contract is
 stable; this phase is explicitly deferred and must not begin during initial rollout.
 
-- [ ] T075 Re-run the direct-provider inventory, add an architecture test banning consumer-side provider imports, remove expired feature flags and legacy fallback only after rollout evidence, then rerun the full regression suite in `backend/tests/test_provider_architecture.py`, `backend/core/providers/registry.py`, `backend/core/provider_feature_flags.py`, `backend/core/provider_sync_manager.py`, and `specs/002-challonge-support/quickstart.md`.
+- [ ] T075 Re-run the direct-provider inventory, add an architecture test banning consumer-side provider imports, remove expired feature flags and legacy fallback only after rollout evidence, then rerun the full regression suite in `backend/tests/test_provider_architecture.py`, `backend/core/providers/registry.py`, `backend/core/provider_feature_flags.py`, `backend/core/provider_sync_manager.py`, and `specs/002-challonge-support/quickstart.md`. Execute and close this task against the audited inventory, sequencing, safety gates, and definition of done in `specs/002-challonge-support/phase-11-legacy-removal-plan.md`; do not mark it complete while T073 evidence, the DQ policy/configuration mismatch, a failing provider baseline, or any direct consumer provider path remains.
 
 ## Dependencies and execution order
 

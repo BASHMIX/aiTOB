@@ -403,7 +403,7 @@ function renderMatchCards(){
             <div class="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center overflow-hidden"><img src="/static/player_placeholder.svg" class="w-full h-full object-cover"></div>
             <div class="flex flex-col">
               <span class="text-sm font-bold leading-tight text-white">${m.p1_name}</span>
-              <span class="text-[9px] text-textDim flex items-center gap-1">🚩 [${m.p1_team||'Team'}]</span>
+              <span class="text-[9px] text-textDim flex items-center gap-1">🚩 [${m.p1_prefix||m.p1_team||'Prefix'}]</span>
             </div>
           </div>
           <div class="flex items-center gap-2">
@@ -418,7 +418,7 @@ function renderMatchCards(){
             <div class="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center overflow-hidden"><img src="/static/player_placeholder.svg" class="w-full h-full object-cover"></div>
             <div class="flex flex-col">
               <span class="text-sm font-bold leading-tight text-white">${m.p2_name}</span>
-              <span class="text-[9px] text-textDim flex items-center gap-1">🚩 [${m.p2_team||'Team'}]</span>
+              <span class="text-[9px] text-textDim flex items-center gap-1">🚩 [${m.p2_prefix||m.p2_team||'Prefix'}]</span>
             </div>
           </div>
           <div class="flex items-center gap-2">

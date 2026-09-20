@@ -1,13 +1,102 @@
 from fastapi import APIRouter, HTTPException, Depends, status, Request
 from fastapi.responses import FileResponse
+import json
 import os
 from typing import Dict, Any, List, Optional
-from backend.core.database import get_player, create_or_update_player, get_all_player_overrides, delete_all_player_overrides, get_player_override, save_player_override, delete_player_override, get_tournament_player_links, link_tournament_entrant, unlink_tournament_entrant
+from backend.core.database import (
+    get_player, create_or_update_player, get_all_player_overrides,
+    delete_all_player_overrides, get_player_override, save_player_override,
+    delete_player_override, get_tournament_player_links, link_tournament_entrant,
+    unlink_tournament_entrant, get_player_avatar_urls, set_player_avatar,
+    retire_media_assets_for_urls, get_tournament, get_tournament_game_metadata,
+)
 from backend.api.auth import verify_hub_password, optional_session_principal, require_permission
 from backend.core.workspace_auth import SessionPrincipal
 from backend.api.schemas import CreatePlayerRequest, MessageResponse, ErrorResponse, TournamentPlayerLinkRequest
 
 router = APIRouter(tags=["players"])
+
+
+async def _broadcast_override_update(workspace_id: str) -> None:
+    """Refresh both organizer projections and authenticated OBS viewers."""
+    from backend.api.ws_manager import manager
+    message = {"type": "match_update"}
+    await manager.broadcast({**message, "_workspace_id": workspace_id})
+    await manager.broadcast_to_workspace_overlays(workspace_id, message)
+
+
+async def _canonical_character_override(
+    entrant_id: str,
+    payload: dict,
+    workspace_id: str,
+) -> dict[str, str]:
+    """Validate a character choice against the exact selected Start.gg Event."""
+    character_id = str(payload.get("character_id") or "").strip()
+    character_name = str(payload.get("character") or "").strip()
+    character_image = str(payload.get("character_image_url") or "").strip()
+    if not character_id and not character_name and not character_image:
+        return {"character": "", "character_id": "", "character_image_url": ""}
+    if not character_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Select a character from the Start.gg Event catalog.",
+        )
+
+    tournament_slug = str(payload.get("tournament_slug") or "").strip()
+    event_id = str(payload.get("event_id") or "").strip()
+    if not tournament_slug or not event_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tournament and Event are required when selecting a character.",
+        )
+    tournament = await get_tournament(tournament_slug, workspace_id)
+    if not tournament or tournament.get("provider_type") != "startgg":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Start.gg tournament not found.")
+
+    try:
+        raw = json.loads(tournament.get("raw_data") or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        raw = {}
+    events = raw.get("events") or (raw.get("tournament") or {}).get("events") or []
+    selected_event = next(
+        (event for event in events if str(event.get("id")) == event_id),
+        None,
+    )
+    if not selected_event:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Selected Event does not belong to this tournament.")
+    entrant_nodes = ((selected_event.get("entrants") or {}).get("nodes") or [])
+    if entrant_nodes and not any(str(entrant.get("id")) == str(entrant_id) for entrant in entrant_nodes):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Player does not belong to the selected Event.")
+
+    metadata = await get_tournament_game_metadata(tournament_slug, event_id, workspace_id)
+    if not metadata:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Refresh Metadata before selecting a character.",
+        )
+    character = next(
+        (
+            item for item in metadata.get("characters") or []
+            if isinstance(item, dict) and str(item.get("id")) == character_id
+        ),
+        None,
+    )
+    if not character:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Character is not part of the selected Start.gg Event catalog.",
+        )
+    images = character.get("images") or []
+    image_url = str(
+        character.get("image_url")
+        or next((image.get("url") for image in images if isinstance(image, dict) and image.get("url")), "")
+        or ""
+    )
+    return {
+        "character": str(character.get("name") or character_name),
+        "character_id": str(character["id"]),
+        "character_image_url": image_url,
+    }
 
 
 @router.get("/{discord_id}/avatar", summary="Get player avatar image", operation_id="getPlayerAvatar")
@@ -31,7 +120,10 @@ async def api_list_players(principal: SessionPrincipal = Depends(require_permiss
 async def api_create_player(body: CreatePlayerRequest, principal: SessionPrincipal = Depends(require_permission("tournament.manage"))):
     """Register a new player or update an existing one's information."""
     try:
-        await create_or_update_player(workspace_id=principal.workspace_id, **body.model_dump())
+        payload = body.model_dump()
+        payload["gamertag"] = payload.get("gamertag") or payload.get("name") or None
+        payload["prefix"] = payload.get("prefix") or payload.get("team") or None
+        await create_or_update_player(workspace_id=principal.workspace_id, **payload)
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     return MessageResponse(message="Success", ok=True)
@@ -92,6 +184,7 @@ async def api_get_overrides(principal: SessionPrincipal = Depends(require_permis
 async def api_delete_all_overrides(principal: SessionPrincipal = Depends(require_permission("tournament.manage"))):
     """Delete all configured player overrides from the database. Requires admin password authentication."""
     await delete_all_player_overrides(principal.workspace_id)
+    await _broadcast_override_update(principal.workspace_id)
     return MessageResponse(message="All overrides cleared", ok=True)
 
 
@@ -122,12 +215,17 @@ async def api_patch_override(id: str, request: Request, principal: SessionPrinci
     d = await request.json()
     validated = {
         k: str(v) for k, v in d.items()
-        if k in ["name", "team", "country", "cfn", "avatar_url"]
+        if k in ["name", "prefix", "country", "cfn", "avatar_url"]
     }
+    if "prefix" not in validated and "team" in d:
+        validated["prefix"] = str(d["team"])
+    if any(key in d for key in ("character", "character_id", "character_image_url")):
+        validated.update(await _canonical_character_override(id, d, principal.workspace_id))
     try:
         await save_player_override(id, validated, principal.workspace_id)
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    await _broadcast_override_update(principal.workspace_id)
     return MessageResponse(message="Override saved", ok=True)
 
 
@@ -142,6 +240,7 @@ async def api_patch_override(id: str, request: Request, principal: SessionPrinci
 async def api_delete_override(id: str, principal: SessionPrincipal = Depends(require_permission("tournament.manage"))):
     """Remove a configured player override. Requires admin password authentication."""
     await delete_player_override(id, principal.workspace_id)
+    await _broadcast_override_update(principal.workspace_id)
     return MessageResponse(message="Override deleted", ok=True)
 
 
@@ -164,17 +263,31 @@ async def api_upload_avatar(id: str, request: Request, principal: SessionPrincip
     if not isinstance(file, UploadFile):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No file uploaded")
 
-    from backend.core.image_store import store_avatar
+    from backend.core.image_store import store_avatar, delete_stored_avatar
+    linked_discord_id = str(form.get("discord_id") or "").strip() or None
+    old_override = await get_player_override(id, principal.workspace_id)
+    old_urls: list[str] = []
+    if old_override and old_override.get("avatar_url"):
+        old_urls.append(str(old_override["avatar_url"]))
+    if linked_discord_id:
+        old_urls.extend(await get_player_avatar_urls(linked_discord_id, principal.workspace_id))
     try:
         # Bound the read before decoding; one extra byte distinguishes an exact
         # limit from an oversized upload without buffering an arbitrary body.
         from backend.core.image_utils import MAX_AVATAR_BYTES
         content = await file.read(MAX_AVATAR_BYTES + 1)
-        avatar_url = await store_avatar(content, f"participant-{id}")
+        # A linked Discord player and a Hub upload must share one deterministic
+        # owner key so uploading from either channel replaces the same object.
+        owner_key = f"player-{linked_discord_id}" if linked_discord_id else f"entrant-{id}"
+        avatar_url = await store_avatar(content, owner_key, fallback_to_database=True)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     try:
         await save_player_override(id, {"avatar_url": avatar_url}, principal.workspace_id)
+        if linked_discord_id:
+            await set_player_avatar(linked_discord_id, avatar_url, principal.workspace_id)
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     from backend.core.database import record_media_asset
@@ -188,6 +301,10 @@ async def api_upload_avatar(id: str, request: Request, principal: SessionPrincip
         mime_type=getattr(file, "content_type", None),
         byte_size=len(content),
     )
+    await retire_media_assets_for_urls([url for url in old_urls if url != avatar_url], principal.workspace_id)
+    for old_url in old_urls:
+        if old_url != avatar_url:
+            await delete_stored_avatar(old_url, preserve_url=avatar_url)
     return {"avatar_url": avatar_url}
 
 

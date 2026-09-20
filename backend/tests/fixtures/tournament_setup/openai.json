@@ -1,0 +1,8 @@
+{
+  "health": {"status": "ok", "model": "openai-fixture-model"},
+  "completion": {
+    "text": "Fixture assistant response: the bracket state is available for review.",
+    "input_tokens": 19,
+    "output_tokens": 13
+  }
+}

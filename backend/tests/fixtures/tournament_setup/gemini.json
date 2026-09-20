@@ -1,0 +1,8 @@
+{
+  "health": {"status": "ok", "model": "gemini-fixture-model"},
+  "completion": {
+    "text": "Fixture assistant response: the next match is ready for organizer review.",
+    "input_tokens": 18,
+    "output_tokens": 14
+  }
+}

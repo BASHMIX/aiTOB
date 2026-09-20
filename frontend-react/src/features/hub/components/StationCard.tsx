@@ -1,15 +1,89 @@
 import axios from 'axios';
 import { useState } from 'react';
 import { StationSettingsModal } from './StationSettingsModal';
+import { StationMiniQueue } from './StationMiniQueue';
 import { useHubStore } from '@/store/useHubStore';
 import { tournamentAccent, withAccentAlpha } from './tournamentAccent';
 
 export function StationCard({ station, onReload }: { station: any, onReload: () => void }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const { matches, tournaments } = useHubStore();
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
+  const { matches, tournaments, currentSlug, currentEventId } = useHubStore();
   const owningMatch = matches.find((match) => match.station_id === station.id && (match.status === 'called' || match.status === 'in_progress'));
   const ownerTournament = owningMatch ? tournaments.find((tournament) => tournament.slug === owningMatch.tournament_slug) : undefined;
   const accent = ownerTournament ? tournamentAccent(ownerTournament) : undefined;
+
+  const showToast = (text: string, ok = true) => {
+    setNotice({ text, ok });
+    setTimeout(() => setNotice(null), 3500);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDraggingOver(false);
+
+    let setId = '';
+    let matchPayload: any = null;
+    try {
+      const jsonStr = e.dataTransfer.getData('application/json');
+      if (jsonStr) matchPayload = JSON.parse(jsonStr);
+    } catch {}
+
+    if (matchPayload?.setId) {
+      setId = String(matchPayload.setId);
+    } else {
+      setId = e.dataTransfer.getData('text/plain');
+    }
+    if (!setId || setId === '0' || setId === 'undefined' || setId === 'null') {
+      return;
+    }
+
+    // If dragged from another station queue, remove from origin station queue
+    if (matchPayload?.type === 'station_queue_item' && matchPayload.fromStationId && matchPayload.fromStationId !== station.id) {
+      try {
+        await axios.delete(`/api/stations/${matchPayload.fromStationId}/queue/${setId}`);
+      } catch (err) {
+        console.error('Failed to remove from origin station queue', err);
+      }
+    }
+
+    // Check if match exists locally in active_matches; if not, create placeholder row
+    const localMatch = matches.find((m) => String(m.set_id) === String(setId));
+    if (!localMatch && matchPayload) {
+      try {
+        const raw = matchPayload.raw || {};
+        await axios.post('/api/active-matches', {
+          set_id: String(setId),
+          p1_name: matchPayload.p1 || raw.p1_name || 'TBD',
+          p2_name: matchPayload.p2 || raw.p2_name || 'TBD',
+          p1_entrant_id: raw.p1_entrant_id || '',
+          p2_entrant_id: raw.p2_entrant_id || '',
+          round_name: matchPayload.round || raw.round_name || '',
+          tournament_slug: currentSlug || raw.tournament_slug || '',
+          event_id: currentEventId || raw.event_id || '',
+          status: 'not_started',
+        });
+      } catch (err) {
+        console.error('Failed to import match before assignment', err);
+      }
+    }
+
+    try {
+      if (!owningMatch) {
+        // Station is idle: assign directly as active match
+        await axios.patch(`/api/active-matches/${setId}`, { station_id: station.id });
+        showToast(`Assigned live to ${station.name}`);
+      } else {
+        // Station is busy: enqueue to stream queue
+        await axios.post(`/api/stations/${station.id}/queue`, { set_id: setId });
+        showToast(`Added to ${station.name} queue`);
+      }
+      onReload();
+    } catch (err: any) {
+      showToast(err?.response?.data?.detail || 'Could not assign match to station', false);
+    }
+  };
   
   const removeStation = async () => {
     if (!confirm('Remove station?')) return;
@@ -50,14 +124,14 @@ export function StationCard({ station, onReload }: { station: any, onReload: () 
       const res = await axios.get('/api/overlays');
       const names = (res.data.overlays || []).map((o: any) => o.name);
       if (names.length === 0) {
-        alert("No overlays found. Open the editor to create and save a new overlay template!");
+        showToast("No overlays found. Open the editor to create and save a new overlay template!", false);
         return;
       }
       const name = prompt(`Select overlay preset to load on ${station.name}:\n` + names.join(', '));
       if (!name) return;
       
       if (!names.includes(name)) {
-        alert("Selected overlay does not exist.");
+        showToast("Selected overlay does not exist.", false);
         return;
       }
 
@@ -96,16 +170,40 @@ export function StationCard({ station, onReload }: { station: any, onReload: () 
         overlayName ? { overlay_name: overlayName } : undefined,
       );
       await navigator.clipboard.writeText(`${location.origin}${response.data.url}`);
-      alert(overlayName
+      showToast(overlayName
         ? 'A new revocable link for this overlay slide was copied.'
         : 'A new revocable station link was copied. It follows the active slide.');
     } catch {
-      alert('The OBS link could not be created.');
+      showToast('The OBS link could not be created.', false);
     }
   };
 
   return (
-    <div id={`station-${station.id}`} style={accent ? { borderColor: withAccentAlpha(accent, 0.55) } : undefined} className="border border-white/20 rounded-lg p-3 bg-appDark">
+    <div
+      id={`station-${station.id}`}
+      style={accent ? { borderColor: withAccentAlpha(accent, 0.55) } : undefined}
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+        if (!isDraggingOver) setIsDraggingOver(true);
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+          setIsDraggingOver(false);
+        }
+      }}
+      onDrop={handleDrop}
+      className={`border rounded-lg p-3 bg-appDark transition-all duration-200 ${
+        isDraggingOver
+          ? 'border-[#00ffcc] shadow-[0_0_15px_rgba(0,255,204,0.3)] bg-[#00ffcc]/5 scale-[1.01]'
+          : 'border-white/20'
+      }`}
+    >
+      {notice && (
+        <div className={`mb-2 px-2.5 py-1 rounded text-xs font-semibold ${notice.ok ? 'bg-statusGreen/15 text-statusGreen border border-statusGreen/30' : 'bg-statusRed/15 text-statusRed border border-statusRed/30'}`}>
+          {notice.text}
+        </div>
+      )}
       <div className="flex justify-between items-center mb-3 pb-2 border-b border-white/10">
         <div className="flex items-center gap-2">
           <span className="text-white">📺</span>
@@ -178,6 +276,13 @@ export function StationCard({ station, onReload }: { station: any, onReload: () 
           <span>📂 Load</span>
         </button>
       </div>
+
+      {/* Station Mini-Queue */}
+      <StationMiniQueue
+        stationId={station.id}
+        onReload={onReload}
+        accent={accent}
+      />
 
       {settingsOpen && (
         <StationSettingsModal
