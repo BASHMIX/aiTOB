@@ -205,6 +205,7 @@ export function MatchDashboard() {
           score: m.p1_score != null ? Number(m.p1_score) : undefined,
           isTBD: isTBD(safe(m.p1_name)),
           hasDiscord: !!m.p1_discord,
+          attendanceState: m.p1_attendance_state ?? 'pending',
         },
         {
           name: safe(m.p2_name) || 'Unknown',
@@ -212,6 +213,7 @@ export function MatchDashboard() {
           score: m.p2_score != null ? Number(m.p2_score) : undefined,
           isTBD: isTBD(safe(m.p2_name)),
           hasDiscord: !!m.p2_discord,
+          attendanceState: m.p2_attendance_state ?? 'pending',
         }
       ],
       raw: m,
@@ -334,8 +336,11 @@ export function MatchDashboard() {
       }
       else if (action === 'dq') {
         if (!setId) { showToast('Cannot DQ: missing set ID', false); return; }
-        // data contains 'p1', 'p2', or 'both'
-        await axios.post(`/api/active-matches/${setId}/dq`, { player: data });
+        if (row.providerType === 'challonge') {
+          await axios.post(`/api/active-matches/${setId}/dq`, { player: data });
+        } else {
+          await axios.post(`/api/active-matches/${setId}/attendance`, { player: data, state: 'withdrawn' });
+        }
         reload();
       }
       else if (action === 'assignStation') {

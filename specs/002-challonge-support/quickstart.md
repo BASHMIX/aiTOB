@@ -593,3 +593,36 @@ On 2026-09-07, the current operational SQLite snapshot was copied to the
 isolated PostgreSQL development database: **44 tables migrated and all source
 and target row counts matched**. This proves the migration path only; it does
 not by itself switch the running API/Bot to PostgreSQL.
+
+## Phase-11 attendance safety checkpoint — 2026-09-20
+
+The pre-refactor working tree was committed on `main` as `9991bb4`. The first
+implementation slice changed Start.gg organizer DQ controls into per-entrant
+`withdrawn` attendance intents, removed manual Double-DQ, disabled the legacy
+automatic-DQ mutation shim, and replaced the fabricated ten-minute Start.gg
+countdown with provider-owned timer messaging.
+
+Focused verification:
+
+```text
+24 passed — Start.gg attendance, activation, provider and workflow baselines
+18 passed — attendance expiry, recovery, and no-automatic-DQ safety
+13 passed — ActiveMatchCard provider-aware DQ/attendance behavior
+frontend production build — passed
+git diff --check — passed (line-ending notices only)
+```
+
+The complete backend run produced **539 passed, 35 skipped, 17 failed**. The
+failures reproduce independently and concern pre-existing missing setup tables
+or migration columns in test fixtures, old Start.gg V2-axis expectations, and a
+tournament-removal expectation that conflicts with current blocking behavior.
+The complete frontend run produced **44 passed, 6 failed**: five old
+`HubDashboard` tests render a component using `useNavigate` without a Router,
+and one `TopNavigation` test expects a superseded confirmation string. The
+focused changed-area suites and production build are green, but these full-suite
+failures prevent T075 closure.
+
+The public Start.gg schema did not expose a documented per-entrant attendance
+write. Until disposable T073 acceptance proves an authorized contract, aiTOB
+stores the attendance intent with `sync_status=needs_review`, never sends a
+technical winner, and treats the provider snapshot as the only bracket truth.

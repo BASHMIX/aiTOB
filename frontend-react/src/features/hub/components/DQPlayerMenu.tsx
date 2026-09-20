@@ -5,8 +5,6 @@ export type DQPlayer = 'p1' | 'p2';
 interface DQPlayerMenuProps {
   players: readonly [{ name?: string | null }, { name?: string | null }];
   onSelect: (player: DQPlayer) => void;
-  /** Start.gg retains its existing double-DQ option; Challonge intentionally omits it. */
-  onBothPlayers?: () => void;
   renderTrigger: (control: { open: boolean; toggle: () => void }) => ReactNode;
   onOpenChange?: (open: boolean) => void;
   menuPositionClassName?: string;
@@ -20,7 +18,6 @@ interface DQPlayerMenuProps {
 export function DQPlayerMenu({
   players,
   onSelect,
-  onBothPlayers,
   renderTrigger,
   onOpenChange,
   menuPositionClassName = 'right-0 top-full mt-1.5',
@@ -57,11 +54,6 @@ export function DQPlayerMenu({
           <button onClick={() => choose('p2')} className="w-full truncate rounded px-3 py-2 text-left text-xs text-white transition-colors hover:bg-red-500/10">
             {players[1].name || 'P2'}
           </button>
-          {onBothPlayers && (
-            <button onClick={() => { setOpen(false); onBothPlayers(); }} className="mt-1 w-full rounded border-t border-white/5 px-3 py-2 text-left text-xs font-bold italic text-red-500 transition-colors hover:bg-red-500/10">
-              Both Players
-            </button>
-          )}
         </div>
       )}
     </div>

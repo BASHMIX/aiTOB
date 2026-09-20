@@ -76,6 +76,10 @@ interface Match {
   called_at?: string;
   started_at?: string;
   dq_player?: string;
+  p1_attendance_state?: 'pending' | 'present' | 'withdrawn';
+  p2_attendance_state?: 'pending' | 'present' | 'withdrawn';
+  p1_attendance_updated_at?: string | null;
+  p2_attendance_updated_at?: string | null;
   lobby_password?: string;
   discord_thread_id?: string;
   provider_set_id?: string;

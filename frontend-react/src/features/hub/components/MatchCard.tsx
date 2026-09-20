@@ -60,6 +60,7 @@ export interface MatchPlayer {
   // Reachability — true when this entrant has a linked Discord account in our players table.
   // Drives the "📵 unreachable" badge. Only meaningful once the match is local (synced).
   hasDiscord?: boolean;
+  attendanceState?: 'pending' | 'present' | 'withdrawn';
 }
 
 export interface MatchData {
@@ -181,6 +182,16 @@ function PlayersBlock({ players }: { players: MatchData["players"] }) {
               )}
             </div>
             <span className="truncate">{p.name}</span>
+            {p.attendanceState === 'withdrawn' && (
+              <span className="rounded border border-red-500/40 bg-red-500/10 px-1 py-0.5 text-[8px] font-black uppercase tracking-wide text-red-300">
+                Withdrawn
+              </span>
+            )}
+            {p.attendanceState === 'present' && (
+              <span className="rounded border border-emerald-500/40 bg-emerald-500/10 px-1 py-0.5 text-[8px] font-black uppercase tracking-wide text-emerald-300">
+                Present
+              </span>
+            )}
             {/* Only show the badge once we're sure: hasDiscord is set on local matches; undefined for unsynced bracket rows. */}
             {p.hasDiscord === false && !p.isTBD && <UnreachableBadge />}
           </div>
@@ -368,28 +379,34 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
         setTimeDisplay(`${m}:${s}`);
         setIsTimerWarning(false);
       } 
+      else if (match.status === "called" && match.providerType === 'startgg') {
+        const deadline = parseUTCDate(match.discordWorkflow?.attendance_deadline);
+        if (!deadline) {
+          setTimeDisplay("Start.gg");
+          setIsTimerWarning(false);
+          return;
+        }
+        const remaining = Math.max(0, Math.floor((deadline - now) / 1000));
+        const m = Math.floor(remaining / 60).toString().padStart(2, '0');
+        const s = (remaining % 60).toString().padStart(2, '0');
+        setTimeDisplay(`${m}:${s}`);
+        setIsTimerWarning(remaining <= 60 && remaining > 0);
+      }
       else if (match.status === "called" && match.calledAt) {
-        // Count down
         const called = parseUTCDate(match.calledAt);
         const diff = Math.floor((now - called) / 1000);
         const remaining = Math.max(0, dqTimerSeconds - diff);
         const m = Math.floor(remaining / 60).toString().padStart(2, '0');
         const s = (remaining % 60).toString().padStart(2, '0');
         setTimeDisplay(`${m}:${s}`);
-        
         setIsTimerWarning(remaining <= 60 && remaining > 0);
-        
-        if (remaining === 0 && autoDqEnabled) {
-          setTimeDisplay("00:00");
-          setIsTimerWarning(true);
-        }
       }
     };
 
     updateTimer();
     const iv = setInterval(updateTimer, 1000);
     return () => clearInterval(iv);
-  }, [match.status, match.startedAt, match.calledAt, dqTimerSeconds, autoDqEnabled, showTimer]);
+  }, [match.status, match.startedAt, match.calledAt, match.providerType, match.discordWorkflow?.attendance_deadline, dqTimerSeconds, autoDqEnabled, showTimer]);
 
   return (
     <div
@@ -493,6 +510,7 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
           {/* Timer */}
           {showTimer && (
             <span
+              title={match.status === 'called' && match.providerType === 'startgg' ? 'Start.gg owns the check-in deadline and bracket outcome.' : undefined}
               className={`h-7 px-2 font-mono text-xs font-extrabold tabular-nums tracking-wide flex items-center justify-center gap-1.5 rounded bg-black/40 border border-white/10 shrink-0 shadow-inner
                 ${match.status === "live" ? "text-[var(--tone-send)]" : (isTimerWarning ? "text-[var(--tone-dq)] animate-pulse" : "text-[var(--tone-reset)]")}
               `}
@@ -570,7 +588,6 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
                 <DQPlayerMenu
                   players={match.players}
                   onSelect={(player) => onAction("dq", match, player)}
-                  onBothPlayers={match.providerType === 'challonge' ? undefined : () => onAction("dq", match, "both")}
                   onOpenChange={setDqMenuOpen}
                   renderTrigger={({ toggle }) => <ActionButton tone="dq" label="DQ" icon={<IconDQ />} onClick={toggle} />}
                 />

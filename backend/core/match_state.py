@@ -251,12 +251,21 @@ async def transition_match(
         return {"error": f"Cannot transition from {current} to {to_status}"}
 
     update_kwargs = {"status": to_status, **kwargs}
+    # Only terminal transitions can advance a station queue.  Initialize this
+    # for every branch so called -> in_progress never reads an undefined local.
+    station_to_advance = None
 
     if to_status == "called":
         now = datetime.datetime.utcnow().isoformat()
         update_kwargs["called_at"] = now
         update_kwargs["p1_ready"] = False
         update_kwargs["p2_ready"] = False
+        update_kwargs["p1_attendance_state"] = "pending"
+        update_kwargs["p2_attendance_state"] = "pending"
+        update_kwargs["p1_attendance_updated_at"] = None
+        update_kwargs["p2_attendance_updated_at"] = None
+        update_kwargs["p1_attendance_source"] = None
+        update_kwargs["p2_attendance_source"] = None
 
     elif to_status == "in_progress":
         update_kwargs["started_at"] = datetime.datetime.utcnow().isoformat()
@@ -370,7 +379,6 @@ async def transition_match(
         update_kwargs["station_id"] = None
 
     elif to_status == "not_started":
-        station_to_advance = None
         update_kwargs["p1_score"] = 0
         update_kwargs["p2_score"] = 0
         update_kwargs["p1_ready"] = False
@@ -379,9 +387,12 @@ async def transition_match(
         update_kwargs["started_at"] = None
         update_kwargs["dq_player"] = None
         update_kwargs["lobby_password"] = None
-    else:
-        station_to_advance = None
-
+        update_kwargs["p1_attendance_state"] = "pending"
+        update_kwargs["p2_attendance_state"] = "pending"
+        update_kwargs["p1_attendance_updated_at"] = None
+        update_kwargs["p2_attendance_updated_at"] = None
+        update_kwargs["p1_attendance_source"] = None
+        update_kwargs["p2_attendance_source"] = None
     await upsert_active_match(
         set_id, workspace_id=match.get("workspace_id") or workspace_id, **update_kwargs,
     )
@@ -409,100 +420,28 @@ async def transition_match(
     return {"ok": True, "status": to_status}
 
 async def auto_dq_match(set_id: str, workspace_id: str | None = None) -> dict:
+    """Deprecated safety shim: attendance expiry can only request review.
+
+    Start.gg owns native check-in expiry and Challonge permits only an explicit
+    organizer-selected forfeit.  Keeping this callable harmless protects old
+    workers or queued callbacks during the Phase-11 rollout.
+    """
     match = (await get_active_match(set_id, workspace_id)
              if workspace_id is not None else await get_active_match(set_id))
     if not match:
         return {"error": "Match not found"}
-
-    from backend.core.database import get_tournament
-    tournament = await get_tournament(match.get("tournament_slug") or "", match.get("workspace_id"))
-    if tournament and tournament.get("provider_type") == "challonge":
-        # DQ is deliberately unavailable until the later sandbox policy gate.
-        return {"ok": False, "skipped": "challonge_dq_unavailable"}
-
-    # Hard guard: if a TO/player flipped the disarm flag (partial-reach matches,
-    # off-Discord coordination) we must NOT issue a DQ regardless of who pressed Ready.
-    if match.get("auto_dq_disarmed"):
-        await add_bot_feed(
-            f"auto_dq_match called for {set_id} but match is disarmed — skipping mutation", "warn"
-        )
-        return {"ok": False, "skipped": "disarmed"}
-
-    provider = await get_provider_for_tournament(match.get("tournament_slug") or "", match.get("workspace_id"))
-
-    # Race guard: if start.gg already shows COMPLETED (players self-reported on the
-    # web UI while we were waiting), do NOT call mark_dq — it would overwrite a real
-    # result with a DQ flag. Sync local state instead.
-    try:
-        sgg_state = await provider.fetch_set_state(set_id)
-    except Exception:
-        sgg_state = None
-    # SGG_STATE_MAP: 3 == COMPLETE on start.gg. We import via the enum to stay provider-agnostic.
-    from backend.core.contracts.tournament_types import ProviderSetState
-    if sgg_state == ProviderSetState.COMPLETE:
-        await add_bot_feed(
-            f"auto_dq_match skipped for {set_id}: start.gg already shows COMPLETED. Syncing local state instead.",
-            "info"
-        )
-        await update_active_match(
-            set_id, workspace_id=match.get("workspace_id") or workspace_id,
-            status="complete", dq_player=None, station_id=None,
-        )
-        await hub_mgr.broadcast({"type": "match_update", "_workspace_id": match.get("workspace_id")})
-        return {"ok": True, "synced_from_provider": True}
-
-    p1_ready = match.get("p1_ready")
-    p2_ready = match.get("p2_ready")
-    p1_eid = match.get("p1_entrant_id")
-    p2_eid = match.get("p2_entrant_id")
-
-    if not p1_ready and p2_ready:
-        dq_eid = p1_eid
-        winner_eid = p2_eid
-    elif p1_ready and not p2_ready:
-        dq_eid = p2_eid
-        winner_eid = p1_eid
-    else:
-        # Double no-show — neither (or, defensively, both) checked in. DQ BOTH.
-        dq_eid = "both"
-        winner_eid = None
-
-    # Validate the local move BEFORE touching the provider so we never fire a
-    # mutation we'd then refuse to record locally (e.g. an already-complete set).
-    current = match.get("status", "not_started")
-    if not validate_transition(current, "complete"):
-        await add_bot_feed(f"auto-DQ blocked: cannot transition {current} → complete for {set_id}", "warn")
-        return {"error": True, "message": f"Invalid transition from {current}"}
-
-    if dq_eid == "both":
-        # Resolve the set on the provider so the bracket doesn't stall. start.gg
-        # can't DQ both slots in one call — it advances one as a technical winner —
-        # so warn the TO to verify the advanced slot upstream.
-        if p1_eid and p2_eid:
-            result = await provider.mark_double_dq(set_id, p1_eid, p2_eid)
-            if not result.success:
-                await add_bot_feed(f"Provider double-DQ failed for match {set_id}: {result.error_message}", "error")
-                return {"error": True, "dq_player": "both", "message": result.error_message}
-            await add_bot_feed(
-                f"⚠️ Double no-show {set_id}: both players DQ'd. start.gg advanced one slot as a "
-                "technical resolution (its API can't DQ both) — verify the next round.", "warn"
-            )
-    elif winner_eid:
-        try:
-            result = await provider.mark_dq(set_id, winner_eid)
-            if not result.success:
-                raise Exception(result.error_message or "Unknown provider error")
-        except Exception as e:
-            await add_bot_feed(f"Provider auto-DQ failed for match {set_id}: {e}", "error")
-            # Do not flip local status if provider rejected — keeps states aligned.
-            return {"error": True, "dq_player": dq_eid, "message": str(e)}
-
     await update_active_match(
         set_id, workspace_id=match.get("workspace_id") or workspace_id,
-        status="complete", dq_player=dq_eid, station_id=None,
+        sync_status="needs_review",
+        sync_reason="Attendance expiry requires provider reconciliation or organizer review; automatic DQ is disabled",
+    )
+    await add_bot_feed(
+        f"⏰ Attendance review requested for {set_id}; automatic DQ is disabled and no provider result was sent.",
+        "warn",
+        workspace_id=match.get("workspace_id") or workspace_id,
     )
     await hub_mgr.broadcast({"type": "match_update", "_workspace_id": match.get("workspace_id")})
-    return {"ok": True, "dq_player": dq_eid}
+    return {"ok": False, "skipped": "automatic_dq_disabled", "needs_review": True}
 
 async def start_call_timer(
     set_id: str, timeout_seconds: int = 600, workspace_id: str | None = None,

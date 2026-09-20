@@ -2630,6 +2630,93 @@ async def update_active_match(match_id: str, *, workspace_id: str | None = None,
         await db.commit()
         return cursor.rowcount == 1
 
+
+async def record_startgg_attendance_intent_v2(
+    match_id: str,
+    player: str,
+    state: str,
+    *,
+    source: str,
+    workspace_id: str | None = None,
+) -> dict:
+    """Atomically record one Start.gg entrant's attendance intent.
+
+    This function intentionally does not write ``status``, ``hub_status``,
+    ``dq_player``, scores, or a winner.  The public Start.gg GraphQL contract
+    does not expose a documented per-entrant attendance mutation, so the local
+    intent is made reviewable instead of being misrepresented as a remote DQ.
+    """
+    if player not in {"p1", "p2"}:
+        raise ValueError("Player must be p1 or p2")
+    if state not in {"pending", "present", "withdrawn"}:
+        raise ValueError("Attendance state must be pending, present, or withdrawn")
+    if source not in {"manual", "discord"}:
+        raise ValueError("Attendance source must be manual or discord")
+
+    state_column = f"{player}_attendance_state"
+    updated_column = f"{player}_attendance_updated_at"
+    source_column = f"{player}_attendance_source"
+    now = datetime.datetime.now(datetime.UTC).isoformat()
+    reason = (
+        f"{source} attendance intent: {player}={state}; Start.gg remains "
+        "authoritative and no result mutation was sent"
+    )
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            scope = " AND m.workspace_id = ?" if workspace_id is not None else ""
+            params = (match_id,) + ((workspace_id,) if workspace_id is not None else ())
+            lock = " FOR UPDATE OF m" if is_postgres() else ""
+            async with db.execute(
+                """SELECT m.*, COALESCE(t.provider_type, 'startgg') AS owner_provider
+                     FROM active_matches m
+                     LEFT JOIN tournaments t ON t.slug = m.tournament_slug
+                      AND (m.workspace_id IS NULL OR t.workspace_id = m.workspace_id)
+                    WHERE m.set_id = ?""" + scope + lock,
+                params,
+            ) as cursor:
+                row = await cursor.fetchone()
+            if not row:
+                raise ValueError("Match not found")
+            match = dict(row)
+            if match["owner_provider"] != "startgg":
+                raise ValueError("Attendance commands are only valid for Start.gg matches")
+            effective_status = str(match.get("hub_status") or match.get("status") or "")
+            if effective_status not in {"called", "ready"}:
+                raise ValueError("Start.gg attendance can only change during the called window")
+            if not str(match.get(f"{player}_entrant_id") or "").strip():
+                raise ValueError("Selected player has no provider entrant ID")
+
+            if match.get(state_column) != state or match.get(source_column) != source:
+                update_scope = " AND workspace_id = ?" if workspace_id is not None else ""
+                await db.execute(
+                    f"""UPDATE active_matches
+                           SET {state_column} = ?, {updated_column} = ?, {source_column} = ?,
+                               sync_status = 'needs_review', sync_reason = ?
+                         WHERE set_id = ?{update_scope}""",
+                    (state, now, source, reason, match_id)
+                    + ((workspace_id,) if workspace_id is not None else ()),
+                )
+                await db.execute(
+                    """INSERT INTO provider_reconciliation_audit (
+                           tournament_slug, set_id, provider_type, action,
+                           before_hub_status, after_hub_status,
+                           provider_state_raw, reason
+                       ) VALUES (?, ?, 'startgg', ?, ?, ?, ?, ?)""",
+                    (
+                        match.get("tournament_slug") or "", match_id,
+                        f"attendance_{state}_{player}", effective_status,
+                        effective_status, match.get("provider_state_raw"), reason,
+                    ),
+                )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+    return await get_active_match(match_id, workspace_id) or {}
+
 async def get_player_override(entrant_id: str, workspace_id: str | None = None):
     async with aiosqlite.connect(DB_PATH) as db:
         query = "SELECT * FROM player_overrides WHERE id = ?"

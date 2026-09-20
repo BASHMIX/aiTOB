@@ -139,6 +139,11 @@ class DQRequest(BaseModel):
     player: Literal["p1", "p2", "both"] = Field(description="The entrant slot(s) to disqualify")
 
 
+class AttendanceRequest(BaseModel):
+    player: Literal["p1", "p2"] = Field(description="The entrant slot whose attendance changes")
+    state: Literal["present", "withdrawn"] = Field(description="The entrant's called-window attendance intent")
+
+
 class ResolveConflictRequest(BaseModel):
     resolution: str = Field(default="Admin resolved", description="Administrative notes regarding conflict resolution", examples=["Admin manually input MENARD won"])
     p1_score: Optional[int] = Field(

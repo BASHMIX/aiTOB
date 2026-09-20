@@ -12,13 +12,14 @@ from backend.core.providers.registry import get_provider_for_tournament
 from backend.core.score_reporting import report_score_to_provider
 from backend.core.match_state import transition_match
 from backend.core.match_commands import MatchCommandError, MatchCommandService
+from backend.core.match_attendance import AttendanceCommandError, AttendanceCommandService
 from backend.core.provider_feature_flags import get_provider_feature_flags
 from backend.api.ws_manager import manager as hub_mgr
 from backend.api.auth import require_permission, optional_session_principal
 from backend.core.workspace_auth import SessionPrincipal
 from backend.api.schemas import (
     CreateActiveMatchRequest, PatchActiveMatchRequest, PlayerReadyRequest, ToggleStreamRequest,
-    DQRequest, ResolveConflictRequest, MessageResponse, ErrorResponse, ActiveMatchesResponse, ConflictsResponse
+    DQRequest, AttendanceRequest, ResolveConflictRequest, MessageResponse, ErrorResponse, ActiveMatchesResponse, ConflictsResponse
 )
 
 router = APIRouter(tags=["matches"])
@@ -51,6 +52,19 @@ async def _challonge_match(match: dict | None, workspace_id: str | None = None) 
 
 def _action_projection(match: dict) -> dict | None:
     """Authoritative, non-secret controls for the Phase-7A Challonge card."""
+    if match.get("provider_type") == "startgg":
+        state_axes = match.get("state_axes") or {}
+        hub = state_axes.get("hub_status") or match.get("hub_status") or match.get("status")
+        if hub in {"not_started", "available"} and match.get("status") in {"called", "ready"}:
+            hub = match.get("status")
+        return {
+            "dq": {
+                "kind": "local",
+                "enabled": hub in {"called", "ready"},
+                "label": "Mark entrant withdrawn",
+                "reason": "Start.gg owns the check-in deadline and bracket outcome.",
+            }
+        }
     if match.get("provider_type") != "challonge":
         return None
     flags = get_provider_feature_flags()
@@ -460,6 +474,40 @@ async def api_reset_match(set_id: str, principal: SessionPrincipal = Depends(req
 
 
 @router.post(
+    "/active-matches/{set_id}/attendance",
+    dependencies=[Depends(require_permission("dq.manual"))],
+    summary="Record one Start.gg entrant's attendance intent",
+    response_model=MessageResponse,
+    responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+    operation_id="setEntrantAttendance",
+)
+async def api_set_attendance(
+    set_id: str,
+    body: AttendanceRequest,
+    principal: SessionPrincipal = Depends(require_permission("dq.manual")),
+):
+    """Record present/withdrawn without selecting a winner or completing the set."""
+    if not await get_active_match(set_id, _ws(principal)):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found")
+    try:
+        await AttendanceCommandService(workspace_id=_ws(principal)).set_attendance(
+            set_id, player=body.player, state=body.state, source="manual"
+        )
+    except AttendanceCommandError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    await hub_mgr.broadcast({"type": "match_update", "_workspace_id": _ws(principal)})
+    if body.state == "withdrawn":
+        return MessageResponse(
+            message="Player marked withdrawn. No winner was selected; Start.gg remains responsible for the deadline and bracket outcome.",
+            ok=True,
+        )
+    return MessageResponse(
+        message="Player attendance recorded. Start.gg remains responsible for the bracket outcome.",
+        ok=True,
+    )
+
+
+@router.post(
     "/active-matches/{set_id}/dq",
     dependencies=[Depends(require_permission("dq.manual"))],
     summary="Disqualify a player",
@@ -468,7 +516,7 @@ async def api_reset_match(set_id: str, principal: SessionPrincipal = Depends(req
     operation_id="disqualifyPlayer"
 )
 async def api_dq_match(set_id: str, body: DQRequest, principal: SessionPrincipal = Depends(require_permission("dq.manual"))):
-    """Disqualify an inactive or missing entrant, updating standings correctly on Start.gg. Requires admin password auth."""
+    """DQ on Challonge; compatibility alias for Start.gg withdrawal."""
     dq_player = body.player
     m = await get_active_match(set_id, _ws(principal))
     if not m:
@@ -492,28 +540,22 @@ async def api_dq_match(set_id: str, body: DQRequest, principal: SessionPrincipal
         if outcome["outcome"] == "verified":
             return MessageResponse(message="DQ result verified by Challonge as 0/-1.", ok=True)
         return MessageResponse(message="DQ result submitted as 0/-1 — awaiting provider verification.", ok=True)
-    dq_eid = None
+    if dq_player == "both":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Start.gg Double-DQ is provider-owned at the check-in deadline. Mark each entrant individually; no technical winner was sent.",
+        )
     try:
-        if dq_player != "both":
-            winner_eid = m.get('p2_entrant_id') if dq_player == "p1" else m.get('p1_entrant_id')
-            dq_eid = m.get('p1_entrant_id') if dq_player == "p1" else m.get('p2_entrant_id')
-            if winner_eid:
-                provider = await get_provider_for_tournament(m.get('tournament_slug') or '', _ws(principal))
-                await provider.mark_dq(set_id, winner_eid)
-        else:
-            dq_eid = "both"
-            # Double DQ — resolve the set on the provider too so the bracket doesn't
-            # stall. start.gg can only advance one slot (see provider.mark_double_dq).
-            p1_eid = m.get('p1_entrant_id')
-            p2_eid = m.get('p2_entrant_id')
-            if p1_eid and p2_eid:
-                provider = await get_provider_for_tournament(m.get('tournament_slug') or '', _ws(principal))
-                await provider.mark_double_dq(set_id, p1_eid, p2_eid)
-    except Exception as e:
-        print(f"Provider mark DQ failed: {e}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Provider update failed.")
-    await transition_match(set_id, "complete", workspace_id=_ws(principal), dq_player=dq_eid)
-    return MessageResponse(message="DQ marked", ok=True)
+        await AttendanceCommandService(workspace_id=_ws(principal)).set_attendance(
+            set_id, player=dq_player, state="withdrawn", source="manual"
+        )
+    except AttendanceCommandError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    await hub_mgr.broadcast({"type": "match_update", "_workspace_id": _ws(principal)})
+    return MessageResponse(
+        message="Player marked withdrawn. No winner was selected; Start.gg owns the deadline and bracket outcome.",
+        ok=True,
+    )
 
 
 @router.delete(

@@ -913,6 +913,15 @@ MIGRATIONS = [
     "ALTER TABLE active_matches ADD COLUMN player1_ready_at TIMESTAMP",
     "ALTER TABLE active_matches ADD COLUMN player2_ready_at TIMESTAMP",
     "ALTER TABLE active_matches ADD COLUMN attendance_deadline TIMESTAMP",
+    # Per-entrant Start.gg attendance is deliberately independent from bracket
+    # result/DQ fields.  These values record Hub/Discord intent while Start.gg
+    # remains authoritative for the eventual winner and advancement.
+    "ALTER TABLE active_matches ADD COLUMN p1_attendance_state TEXT NOT NULL DEFAULT 'pending'",
+    "ALTER TABLE active_matches ADD COLUMN p2_attendance_state TEXT NOT NULL DEFAULT 'pending'",
+    "ALTER TABLE active_matches ADD COLUMN p1_attendance_updated_at TIMESTAMP",
+    "ALTER TABLE active_matches ADD COLUMN p2_attendance_updated_at TIMESTAMP",
+    "ALTER TABLE active_matches ADD COLUMN p1_attendance_source TEXT",
+    "ALTER TABLE active_matches ADD COLUMN p2_attendance_source TEXT",
     "ALTER TABLE active_matches ADD COLUMN last_notification_at TIMESTAMP",
     # Local workflow ownership is explicit so completion can never free another
     # match's station after a restart or a repeated reconciliation decision.

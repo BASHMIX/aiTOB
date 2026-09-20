@@ -112,6 +112,8 @@ async def create_match_thread(bot, tournament, set_data):
         workspace_id=set_data.get("workspace_id"),
         discord_thread_id=str(thread.id),
         status="called",
+        hub_status="called",
+        hub_status_origin="local_workflow",
         p1_discord=p1_discord,
         p2_discord=p2_discord,
         auto_dq_disarmed=(1 if (fully_unreachable or partial or challonge_dq_disarmed) else 0),
@@ -229,8 +231,8 @@ async def _create_startgg_checkin_thread(
     desc = (
         f"**{p1_name}** vs **{p2_name}**\n\n"
         "✅ **Your match is ready!** Please proceed **immediately to Start.gg** to check in.\n"
-        "⏱️ The **10-minute disqualification timer has started there** — check in on Start.gg "
-        "to avoid being DQ'd.\n\n"
+        "⏱️ The **Start.gg-managed check-in timer has started there** — use the deadline "
+        "shown by Start.gg and check in there to avoid being DQ'd.\n\n"
     )
     if is_stream:
         desc += "🎥 You're on the **Stream Match** — once you both check in on Start.gg, the broadcaster's lobby details will be DM'd to you here."

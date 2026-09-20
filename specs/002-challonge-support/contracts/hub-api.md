@@ -117,9 +117,11 @@ For Start.gg, the canonical interaction during the provider-owned called window 
 
 `player` is `p1` or `p2`; `state` is `present` or `withdrawn`. The authenticated
 Discord entrant and an organizer using manual aiTOB controls call the same command
-service. The command records actor, source, call occurrence, and provider deadline,
-then submits the corresponding provider-authorized per-entrant attendance transition.
-An acknowledgement never completes the match or selects a winner.
+service. Until T073 proves a provider-authorized Start.gg per-entrant write contract,
+the API records the intent as `needs_review` and does not claim that Start.gg changed.
+It never sends a winner, completes the set, or advances the bracket. The legacy
+`/dq` route maps Start.gg `p1|p2` requests to `state=withdrawn` for compatibility
+and rejects `both`.
 
 `markSetCalled` starts or confirms the Start.gg native called/check-in flow. The
 response may expose `provider_timer.deadline` or `provider_timer.duration_seconds`

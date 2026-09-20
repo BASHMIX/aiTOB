@@ -3,7 +3,36 @@
 **Feature**: `002-challonge-support`  
 **Task**: T075  
 **Prepared**: 2026-09-20  
-**Status**: Planned; not yet eligible to close
+**Status**: In progress; not yet eligible to close
+
+## Implementation checkpoint — 2026-09-20
+
+- Saved the full pre-implementation working tree on `main` as commit
+  `9991bb4` before changing Phase-11 behavior.
+- Fixed the pre-existing `station_to_advance` initialization failure. The
+  Start.gg activation-preflight baseline now passes 7/7 tests.
+- Added durable per-entrant Start.gg attendance fields and one shared
+  `AttendanceCommandService`. Organizer DQ controls now map `p1|p2` to
+  `withdrawn` without sending `winnerId`, completing the match, or advancing a
+  bracket. Manual `both` is rejected for Start.gg and remains absent for
+  Challonge.
+- Converted the deprecated `auto_dq_match()` entry point into a harmless
+  review-only shim so an old callback cannot issue `mark_dq()` or fabricate a
+  Double-DQ technical winner.
+- Updated both React match-card surfaces to show `Present`/`Withdrawn`, removed
+  `Both Players`, and stopped presenting the local ten-minute value as a
+  Start.gg timer. When no provider deadline is available the cards explicitly
+  show `Start.gg` as the timer owner.
+- The official public Start.gg schema currently documents `markSetCalled(setId)`
+  and result reporting with required `winnerId`, but no provider-authorized
+  per-entrant attendance mutation was found. Therefore remote attendance
+  propagation and disposable verification remain a T073 release gate; the Hub
+  records the intent as `needs_review` rather than claiming a remote change.
+- Focused verification passed: provider/lifecycle, attendance/recovery safety,
+  ActiveMatchCard, and production frontend-build checks. The full suites remain
+  non-green for pre-existing unrelated fixture/schema and stale frontend-test
+  assumptions; see the quickstart run record. T075 remains unchecked until
+  those baselines, T073, PostgreSQL, and direct-provider inventory gates pass.
 
 ## Outcome
 
@@ -29,12 +58,13 @@ task unless required to remove an actual fallback.
 
 T075 must remain open until every gate below passes.
 
-1. **Working-tree baseline**: the provider-focused baseline is green before the
-   refactor. The 2026-09-20 audit ran 65 tests: 62 passed and 3 failed in
-   `test_startgg_activation_preflight.py` because the current working-tree
-   version of `transition_match()` can read `station_to_advance` before it is
-   assigned. This pre-existing failure must be resolved or isolated before
-   Phase 11 changes are evaluated.
+1. **Working-tree baseline**: the pre-existing `station_to_advance` failure was
+   fixed on 2026-09-20 and the focused activation-preflight suite passes 7/7.
+   The full repository baseline is still not green: 17 backend tests fail in
+   pre-existing setup-schema/fixture and stale lifecycle expectations, while 6
+   frontend tests fail because old tests omit a Router or expect an obsolete
+   confirmation message. These failures must be resolved or formally isolated
+   before Phase 11 closure.
 2. **T073 rollout evidence**: the remaining disposable Start.gg live-adapter
    acceptance is recorded, or an explicit constitution-approved exception with
    equivalent evidence is documented. Automated parity alone does not satisfy

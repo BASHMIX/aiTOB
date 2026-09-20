@@ -158,10 +158,12 @@ export function ActiveMatchCard({ match }: { match: any }) {
   const dqPlayer = async (player: 'p1' | 'p2') => {
     setDqOpen(false);
     try {
-      const response = await axios.post(`/api/active-matches/${match.set_id}/dq`, { player });
+      const response = providerType === 'challonge'
+        ? await axios.post(`/api/active-matches/${match.set_id}/dq`, { player })
+        : await axios.post(`/api/active-matches/${match.set_id}/attendance`, { player, state: 'withdrawn' });
       const fresh = await axios.get('/api/active-matches');
       setMatches(fresh.data.matches || []);
-      setNotice({ text: response.data.message || 'DQ submitted for provider verification.', ok: true });
+      setNotice({ text: response.data.message || (providerType === 'challonge' ? 'DQ submitted for provider verification.' : 'Player marked withdrawn.'), ok: true });
     } catch (error: any) {
       setNotice({ text: error.response?.data?.detail || 'Could not submit DQ.', ok: false });
     }
@@ -192,11 +194,11 @@ export function ActiveMatchCard({ match }: { match: any }) {
 
   // Display order respects swap
   const p1 = isSwapped
-    ? { name: match.p2_name, score: match.p2_score, team: match.p2_team, cfn: match.p2_cfn, avatar: match.p2_avatar, key: 'p2' as const }
-    : { name: match.p1_name, score: match.p1_score, team: match.p1_team, cfn: match.p1_cfn, avatar: match.p1_avatar, key: 'p1' as const };
+    ? { name: match.p2_name, score: match.p2_score, team: match.p2_team, cfn: match.p2_cfn, avatar: match.p2_avatar, attendance: match.p2_attendance_state, key: 'p2' as const }
+    : { name: match.p1_name, score: match.p1_score, team: match.p1_team, cfn: match.p1_cfn, avatar: match.p1_avatar, attendance: match.p1_attendance_state, key: 'p1' as const };
   const p2 = isSwapped
-    ? { name: match.p1_name, score: match.p1_score, team: match.p1_team, cfn: match.p1_cfn, avatar: match.p1_avatar, key: 'p1' as const }
-    : { name: match.p2_name, score: match.p2_score, team: match.p2_team, cfn: match.p2_cfn, avatar: match.p2_avatar, key: 'p2' as const };
+    ? { name: match.p1_name, score: match.p1_score, team: match.p1_team, cfn: match.p1_cfn, avatar: match.p1_avatar, attendance: match.p1_attendance_state, key: 'p1' as const }
+    : { name: match.p2_name, score: match.p2_score, team: match.p2_team, cfn: match.p2_cfn, avatar: match.p2_avatar, attendance: match.p2_attendance_state, key: 'p2' as const };
 
   // ── Timer Logic ──
   const curTourney = tournaments.find(t => t.name === currentSlug || t.slug === currentSlug);
@@ -239,6 +241,19 @@ export function ActiveMatchCard({ match }: { match: any }) {
         setTimeDisplay(`${m}:${s}`);
         setIsTimerWarning(false);
       } 
+      else if (match.status === "called" && providerType === 'startgg') {
+        const deadline = parseUTCDate(match.attendance_deadline);
+        if (!deadline) {
+          setTimeDisplay("Start.gg");
+          setIsTimerWarning(false);
+          return;
+        }
+        const remaining = Math.max(0, Math.floor((deadline - now) / 1000));
+        const m = Math.floor(remaining / 60).toString().padStart(2, '0');
+        const s = (remaining % 60).toString().padStart(2, '0');
+        setTimeDisplay(`${m}:${s}`);
+        setIsTimerWarning(remaining <= 60 && remaining > 0);
+      }
       else if (match.status === "called" && match.called_at) {
         const called = parseUTCDate(match.called_at);
         const diff = Math.floor((now - called) / 1000);
@@ -253,7 +268,7 @@ export function ActiveMatchCard({ match }: { match: any }) {
     updateTimer();
     const iv = setInterval(updateTimer, 1000);
     return () => clearInterval(iv);
-  }, [match.status, match.started_at, match.called_at, dqTimerSeconds, showTimer]);
+  }, [match.status, match.started_at, match.called_at, match.attendance_deadline, providerType, dqTimerSeconds, showTimer]);
 
   return (
     <div id={`active-match-${match.set_id}`} style={{ borderColor: withAccentAlpha(accent, 0.5) }} className={`bg-cardDark border rounded-lg flex flex-col shadow-md transition-all relative ${dqOpen || stationOpen ? 'z-30' : 'z-10'}`}>
@@ -357,7 +372,7 @@ export function ActiveMatchCard({ match }: { match: any }) {
           )}
         </div>
         {showTimer && (
-          <span className={`font-mono text-[10px] font-bold tabular-nums flex items-center gap-1 ${
+          <span title={match.status === 'called' && providerType === 'startgg' ? 'Start.gg owns the check-in deadline and bracket outcome.' : undefined} className={`font-mono text-[10px] font-bold tabular-nums flex items-center gap-1 ${
             match.status === "in_progress" 
               ? "text-statusGreen bg-green-500/10 border border-green-500/20 px-1.5 py-0.5 rounded-sm" 
               : (isTimerWarning ? "text-red-400 bg-red-500/10 border border-red-500/20 px-1.5 py-0.5 rounded-sm animate-pulse" : "text-yellow-400 bg-yellow-500/10 border border-yellow-500/20 px-1.5 py-0.5 rounded-sm")
@@ -385,6 +400,8 @@ export function ActiveMatchCard({ match }: { match: any }) {
             </div>
             <div className="flex flex-col flex-1 min-w-0">
               <span className="text-sm font-bold text-white leading-tight truncate">{player.name || '—'}</span>
+              {player.attendance === 'withdrawn' && <span className="text-[9px] font-black uppercase tracking-wide text-red-400">Withdrawn</span>}
+              {player.attendance === 'present' && <span className="text-[9px] font-black uppercase tracking-wide text-statusGreen">Present</span>}
               <span className="text-[9px] text-textDim truncate">
                 {player.cfn ? `CFN: ${player.cfn}` : player.team ? `[${player.team}]` : ''}
               </span>

@@ -42,10 +42,9 @@ describe('ActiveMatchCard', () => {
     (axios.delete as any).mockResolvedValue({ data: {} });
     (axios.patch as any).mockResolvedValue({ data: {} });
     (axios.post as any).mockResolvedValue({ data: {} });
-    // Provider-backed DQ refreshes the authoritative active-match projection
-    // rather than inventing a local terminal state from the HTTP acknowledgement.
+    // Attendance refreshes the durable non-terminal entrant projection.
     (axios.get as any).mockResolvedValue({
-      data: { matches: [{ ...defaultMockMatch, status: 'dq' }] },
+      data: { matches: [{ ...defaultMockMatch, p1_attendance_state: 'withdrawn' }] },
     });
 
     vi.useFakeTimers();
@@ -74,6 +73,13 @@ describe('ActiveMatchCard', () => {
 
       expect(screen.getByText('LIVE ON')).toBeInTheDocument();
       expect(screen.getByText('Station 1')).toBeInTheDocument();
+    });
+
+    it('does not invent a ten-minute countdown for a Start.gg called match', () => {
+      render(<ActiveMatchCard match={defaultMockMatch} />);
+
+      expect(screen.getByText('Start.gg')).toBeInTheDocument();
+      expect(screen.getByTitle('Start.gg owns the check-in deadline and bracket outcome.')).toBeInTheDocument();
     });
   });
 
@@ -164,7 +170,7 @@ describe('ActiveMatchCard', () => {
       expect(axios.patch).toHaveBeenCalledWith(`/api/active-matches/${defaultMockMatch.set_id}`, { swapped: true });
     });
 
-    it('forces DQ for a player', async () => {
+    it('marks a Start.gg player withdrawn without submitting a result', async () => {
       vi.useRealTimers();
       render(<ActiveMatchCard match={defaultMockMatch} />);
 
@@ -179,11 +185,11 @@ describe('ActiveMatchCard', () => {
 
       // Wait for async state update
       await waitFor(() => {
-        expect(axios.post).toHaveBeenCalledWith(`/api/active-matches/${defaultMockMatch.set_id}/dq`, { player: 'p1' });
+        expect(axios.post).toHaveBeenCalledWith(`/api/active-matches/${defaultMockMatch.set_id}/attendance`, { player: 'p1', state: 'withdrawn' });
       });
       await waitFor(() => {
         expect(mockSetMatches).toHaveBeenCalledWith([
-          { ...defaultMockMatch, status: 'dq' }
+          { ...defaultMockMatch, p1_attendance_state: 'withdrawn' }
         ]);
       });
       vi.useFakeTimers();
