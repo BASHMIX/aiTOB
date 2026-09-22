@@ -1772,15 +1772,20 @@ async def get_station_queue(station_id: str, workspace_id: str | None = None) ->
         if storage_id is None:
             return []
 
+        workspace_filter = "sq.workspace_id = ?" if workspace_id is not None else "sq.workspace_id IS NULL"
         query = """
             SELECT sq.id as queue_id, sq.station_id, sq.set_id AS queued_set_id, sq.sort_order, sq.created_at as queued_at,
                    am.*
             FROM station_queue sq
-            LEFT JOIN active_matches am ON am.set_id = sq.set_id
-            WHERE sq.station_id = ?
+            JOIN active_matches am
+              ON am.set_id = sq.set_id
+             AND (am.workspace_id = sq.workspace_id
+                  OR (am.workspace_id IS NULL AND sq.workspace_id IS NULL))
+            WHERE sq.station_id = ? AND """ + workspace_filter + """
             ORDER BY sq.sort_order ASC, sq.id ASC
         """
-        async with db.execute(query, (storage_id,)) as cursor:
+        params = (storage_id, workspace_id) if workspace_id is not None else (storage_id,)
+        async with db.execute(query, params) as cursor:
             rows = await cursor.fetchall()
             items = [dict(r) for r in rows]
             for item in items:
@@ -1836,6 +1841,17 @@ async def enqueue_station_match(station_id: str, set_id: str, workspace_id: str 
         if storage_id is None:
             raise ValueError("Station not found in workspace")
 
+        match_scope = " AND workspace_id = ?" if workspace_id is not None else " AND workspace_id IS NULL"
+        async with db.execute(
+            "SELECT 1 FROM active_matches WHERE set_id = ?" + match_scope,
+            (set_id, workspace_id) if workspace_id is not None else (set_id,),
+        ) as cursor:
+            if not await cursor.fetchone():
+                # A queue item is a scheduling reference, not a second match
+                # store.  Refusing phantom IDs prevents a station queue that
+                # can no longer render or advance after a bracket reset.
+                return False
+
         existing = await (await db.execute(
             "SELECT id FROM station_queue WHERE station_id = ? AND set_id = ?",
             (storage_id, set_id)
@@ -1845,8 +1861,8 @@ async def enqueue_station_match(station_id: str, set_id: str, workspace_id: str 
 
         async with db.execute(
             "SELECT MAX(sort_order) FROM station_queue WHERE station_id = ?", (storage_id,)
-        ) as c:
-            row = await c.fetchone()
+        ) as cursor:
+            row = await cursor.fetchone()
             next_order = (row[0] + 1) if (row and row[0] is not None) else 0
 
         await db.execute(
@@ -2328,6 +2344,22 @@ async def _update_existing_match(
                 (sid,) + match_scope_params
             )
 
+    # The provider owns bracket state, while the Hub owns the separate
+    # broadcast axis.  A recovered Start.gg set may already be in progress
+    # when its durable stream-queue command is still awaiting verification;
+    # do not leave a station-bound local broadcast invisible in that case.
+    await db.execute(
+        """UPDATE active_matches
+              SET broadcast_state='live',
+                  broadcast_started_at=COALESCE(broadcast_started_at, CURRENT_TIMESTAMP)
+            WHERE set_id=?""" + match_scope + """
+              AND status='in_progress'
+              AND COALESCE(is_stream_match, FALSE)=TRUE
+              AND station_id IS NOT NULL
+              AND broadcast_state IN ('queued', 'ready')""",
+        (sid,) + match_scope_params,
+    )
+
     # ── start.gg-mode edge-triggered side-effects ─────────────────────────
     # Fire ONLY on the tick where the status actually changes (edge), never on every
     # tick the provider sits in a state (level) — else we'd re-DM/re-archive repeatedly.
@@ -2484,6 +2516,62 @@ async def sync_active_matches(tournament_slug: str, provider_sets: list[Provider
                 "DELETE FROM active_matches WHERE set_id = ?" + (" AND workspace_id=?" if workspace_id is not None else ""),
                 [(sid,) + ((workspace_id,) if workspace_id is not None else ()) for sid in orphan_sids]
             )
+
+        # A queue entry only has meaning while its local match projection
+        # exists.  Bracket reset/sync can remove old sets, so remove those
+        # orphaned entries before the station UI or OBS projection sees TBD.
+        queue_workspace_scope = "q.workspace_id = ?" if workspace_id is not None else "q.workspace_id IS NULL"
+        await db.execute(
+            """DELETE FROM station_queue AS q
+                 WHERE """ + queue_workspace_scope + """
+                   AND NOT EXISTS (
+                       SELECT 1 FROM active_matches AS am
+                        WHERE am.set_id = q.set_id
+                          AND (am.workspace_id = q.workspace_id
+                               OR (am.workspace_id IS NULL AND q.workspace_id IS NULL))
+                   )""",
+            (workspace_id,) if workspace_id is not None else (),
+        )
+
+        # Keep the station's convenience pointer in sync with the authoritative
+        # match-to-station relation.  The broadcast/OBS projection already
+        # reads active_matches directly; this repairs previews and management
+        # views after a provider reset or a recovered stream assignment.
+        station_workspace_scope = "s.workspace_id = ?" if workspace_id is not None else "s.workspace_id IS NULL"
+        await db.execute(
+            """UPDATE stations AS s
+                   SET active_match_id = am.set_id
+                  FROM active_matches AS am
+                 WHERE """ + station_workspace_scope + """
+                   AND am.station_id = s.id
+                   AND am.status IN ('called', 'in_progress')
+                   AND (am.workspace_id = s.workspace_id
+                        OR (am.workspace_id IS NULL AND s.workspace_id IS NULL))
+                   AND NOT EXISTS (
+                       SELECT 1 FROM active_matches AS competing
+                        WHERE competing.station_id = s.id
+                          AND competing.status IN ('called', 'in_progress')
+                          AND competing.set_id <> am.set_id
+                          AND (competing.workspace_id = s.workspace_id
+                               OR (competing.workspace_id IS NULL AND s.workspace_id IS NULL))
+                   )""",
+            (workspace_id,) if workspace_id is not None else (),
+        )
+        await db.execute(
+            """UPDATE stations AS s
+                   SET active_match_id = NULL
+                 WHERE """ + station_workspace_scope + """
+                   AND active_match_id IS NOT NULL
+                   AND NOT EXISTS (
+                       SELECT 1 FROM active_matches AS am
+                        WHERE am.set_id = s.active_match_id
+                          AND am.station_id = s.id
+                          AND am.status IN ('called', 'in_progress')
+                          AND (am.workspace_id = s.workspace_id
+                               OR (am.workspace_id IS NULL AND s.workspace_id IS NULL))
+                   )""",
+            (workspace_id,) if workspace_id is not None else (),
+        )
 
         await db.commit()
 

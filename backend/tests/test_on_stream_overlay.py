@@ -83,6 +83,22 @@ async def test_in_progress_binds_event_matching_stream_station(setup_db):
 
 
 @pytest.mark.asyncio
+async def test_local_broadcast_is_live_when_provider_stream_queue_is_unverified(setup_db):
+    """Start.gg stream-queue recovery must never suppress a bound OBS broadcast."""
+    await _seed_stream_station("s_pending")
+    await db.update_station("s_pending", startgg_stream_id="stream-1")
+    await _seed_match("m_pending", status="called", is_stream_match=1)
+
+    res = await transition_match("m_pending", "in_progress")
+
+    assert res.get("ok")
+    match = await db.get_active_match("m_pending")
+    assert match["station_id"] == "s_pending"
+    assert match["broadcast_state"] == "live"
+    assert match["broadcast_started_at"]
+
+
+@pytest.mark.asyncio
 async def test_in_progress_non_stream_match_binds_nothing(setup_db):
     await _seed_stream_station("s_str")
     await _seed_match("m2", status="called", is_stream_match=0)

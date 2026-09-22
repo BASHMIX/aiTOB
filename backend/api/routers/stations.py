@@ -263,7 +263,9 @@ async def api_enqueue_station_match(
     station = await get_station(id, principal.workspace_id)
     if not station:
         raise HTTPException(status_code=404, detail="Station not found")
-    await enqueue_station_match(id, body.set_id, principal.workspace_id)
+    queued = await enqueue_station_match(id, body.set_id, principal.workspace_id)
+    if not queued:
+        raise HTTPException(status_code=404, detail="Active match not found; refresh the bracket before queuing it")
 
     from backend.api.ws_manager import manager as ws_manager
     await ws_manager.broadcast({"type": "match_update", "_workspace_id": principal.workspace_id})

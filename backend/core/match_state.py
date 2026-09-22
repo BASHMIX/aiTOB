@@ -140,9 +140,19 @@ async def _realize_in_progress_overlays(match: dict, update_kwargs: dict) -> Non
                             f"📺 Stream assignment failed for {set_id}: {str(exc)[:240]}", "warn",
                             workspace_id=match.get("workspace_id"),
                         )
-                update_kwargs["broadcast_state"] = "live" if route_verified else "ready"
-                if route_verified:
-                    update_kwargs["broadcast_started_at"] = datetime.datetime.now(datetime.UTC).isoformat()
+                # Broadcast is a Hub-owned axis.  Once a stream station is
+                # bound to an in-progress match, its OBS projection is live
+                # even if Start.gg's optional public stream-queue mutation is
+                # awaiting reconciliation.  The provider mutation remains
+                # durable and visible through its command state, but must not
+                # hide a real local broadcast from the On-Stream panel.
+                update_kwargs["broadcast_state"] = "live"
+                update_kwargs["broadcast_started_at"] = datetime.datetime.now(datetime.UTC).isoformat()
+                if not route_verified:
+                    await add_bot_feed(
+                        f"📺 Local broadcast is live for {set_id}; Start.gg stream queue is awaiting reconciliation.",
+                        "warn", workspace_id=match.get("workspace_id"),
+                    )
                 await add_bot_feed(
                     f"📺 On-stream: bound {station.get('name') or station['id']} to "
                     f"{match.get('p1_name')} vs {match.get('p2_name')}.", "info"

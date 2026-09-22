@@ -12,6 +12,18 @@ def run(coro):
     return asyncio.run(coro)
 
 
+async def seed_matches(workspace_id: str, *set_ids: str):
+    """A stream queue references real local match projections only."""
+    for set_id in set_ids:
+        await database.upsert_active_match({
+            "set_id": set_id,
+            "status": "not_started",
+            "p1_name": "Player 1",
+            "p2_name": "Player 2",
+            "workspace_id": workspace_id,
+        })
+
+
 @pytest.fixture(autouse=True)
 def isolated_database(tmp_path, monkeypatch):
     original_path = database.DATABASE_DSN
@@ -26,6 +38,7 @@ def isolated_database(tmp_path, monkeypatch):
 def test_station_queue_enqueue_and_order():
     """Verify matches are queued in correct ascending sort_order and unique per station."""
     run(database.create_station("st-1", "Station 1", "ws-1"))
+    run(seed_matches("ws-1", "match-101", "match-102", "match-103"))
 
     # Enqueue matches
     assert run(database.enqueue_station_match("st-1", "match-101", "ws-1")) is True
@@ -44,6 +57,7 @@ def test_station_queue_enqueue_and_order():
 def test_station_queue_reorder_and_dequeue():
     """Verify reordering and removing from station queue."""
     run(database.create_station("st-1", "Station 1", "ws-1"))
+    run(seed_matches("ws-1", "match-1", "match-2", "match-3"))
     run(database.enqueue_station_match("st-1", "match-1", "ws-1"))
     run(database.enqueue_station_match("st-1", "match-2", "ws-1"))
     run(database.enqueue_station_match("st-1", "match-3", "ws-1"))
@@ -63,6 +77,7 @@ def test_station_queue_reorder_and_dequeue():
 def test_station_queue_advance():
     """Verify advance_station_queue pops the top match and compacts remaining."""
     run(database.create_station("st-1", "Station 1", "ws-1"))
+    run(seed_matches("ws-1", "match-a", "match-b"))
     run(database.enqueue_station_match("st-1", "match-a", "ws-1"))
     run(database.enqueue_station_match("st-1", "match-b", "ws-1"))
 
@@ -72,6 +87,12 @@ def test_station_queue_advance():
     assert len(queue) == 1
     assert queue[0]["set_id"] == "match-b"
     assert queue[0]["sort_order"] == 0
+
+
+def test_station_queue_rejects_an_unknown_match():
+    run(database.create_station("st-1", "Station 1", "ws-1"))
+    assert run(database.enqueue_station_match("st-1", "no-local-projection", "ws-1")) is False
+    assert run(database.get_station_queue("st-1", "ws-1")) == []
 
 
 def test_busy_player_conflict_detection():
