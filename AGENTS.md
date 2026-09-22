@@ -30,6 +30,7 @@ setup, testing, and operating-policy reference.
 - Frontend: `frontend-react/`
 - Executable workflow definition: `docs/workflows.json`
 - Provider consolidation record: `specs/002-challonge-support/phase-11-legacy-removal-plan.md`
+- Player-profile design: `specs/005-player-profiles/plan.md`
 
 ## Commands
 
