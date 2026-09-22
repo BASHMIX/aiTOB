@@ -7,7 +7,7 @@ from backend.core.contracts import ProviderSnapshotRequestV2, ProviderSnapshotV2
 from backend.core.database import get_fresh_provider_locator_alias
 from backend.core.providers.challonge.client import ChallongeRateLimitError
 from backend.core.providers.challonge.locator import ChallongeLocator, parse_locator
-from backend.core.providers.challonge import ChallongeProvider
+from backend.core.providers.registry import get_provider_for_account
 from backend.core.sync_coordinator import SyncCoordinator
 
 
@@ -19,10 +19,12 @@ class ChallongeResolutionService:
         # provider request; durable aliases are written only by the import flow.
         self._preview_cache: dict[tuple[str, str], tuple[float, dict]] = {}
 
-    async def resolve(self, account_id: str, identifier: str, subdomain: str | None = None) -> dict:
+    async def resolve(
+        self, account_id: str, identifier: str, subdomain: str | None = None, *, workspace_id: str
+    ) -> dict:
         locator = parse_locator(identifier, subdomain)
         from backend.core.integrations import get_integration_account
-        account_record = await get_integration_account(account_id)
+        account_record = await get_integration_account(account_id, workspace_id=workspace_id)
         if not account_record or account_record["provider_type"] != "challonge":
             raise ValueError("An active Challonge integration account is required.")
         account = account_record["id"]
@@ -48,7 +50,10 @@ class ChallongeResolutionService:
             scope=SnapshotScope.TOURNAMENT_METADATA,
             options={"locator": locator},
         )
-        provider = ChallongeProvider(provider_account_id=account)
+        trusted_workspace_id = str(account_record.get("workspace_id") or "")
+        if not trusted_workspace_id or trusted_workspace_id != str(workspace_id):
+            raise ValueError("Challonge integration account has no workspace owner.")
+        provider = await get_provider_for_account("challonge", account, trusted_workspace_id)
 
         async def operation() -> ProviderSnapshotV2:
             resolved = await provider.resolve(locator.identifier, locator.subdomain)

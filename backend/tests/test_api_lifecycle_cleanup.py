@@ -10,7 +10,7 @@ import pytest
 async def test_api_shutdown_drains_started_tasks_and_does_not_import_secrets(monkeypatch):
     from backend.api import main
     from backend.core import provider_feature_flags
-    from backend.core.providers.startgg import client
+    from backend.core.providers import registry
     from backend.core.provider_sync_manager import sync_manager
     started, cleaned = asyncio.Event(), asyncio.Event()
     async def reconciliation():
@@ -29,8 +29,8 @@ async def test_api_shutdown_drains_started_tasks_and_does_not_import_secrets(mon
     monkeypatch.setattr(provider_feature_flags, "get_provider_feature_flags", lambda: SimpleNamespace(
         challonge_local_workflow_enabled=False, challonge_read_enabled=False,
     ))
-    probe = AsyncMock(return_value={"status": "test"})
-    monkeypatch.setattr(client, "get_client", lambda: SimpleNamespace(token=None, probe_token_permissions=probe))
+    close_providers = AsyncMock()
+    monkeypatch.setattr(registry, "shutdown_providers", close_providers)
     monkeypatch.setattr(sync_manager, "close_live_schedules", AsyncMock())
     monkeypatch.setenv("STARTGG_API_TOKEN", "fake-test-only")
     monkeypatch.setenv("GOOGLE_API_KEY", "fake-test-only")
@@ -44,8 +44,7 @@ async def test_api_shutdown_drains_started_tasks_and_does_not_import_secrets(mon
     await main.shutdown_event()
     try:
         assert cleaned.is_set()
-        # Provider probes are opt-in; startup itself must not contact Start.gg.
-        assert probe.await_count == 0
+        close_providers.assert_awaited_once()
         assert not {call.args[0] for call in store.call_args_list} & {"STARTGG_API_TOKEN", "GOOGLE_API_KEY", "HUB_PASSWORD"}
     finally:
         # On the pre-fix implementation, clean up only this test's leaked task.

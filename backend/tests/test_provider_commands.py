@@ -14,6 +14,56 @@ async def _resolved(value):
     return value
 
 
+@pytest.mark.asyncio
+async def test_tournament_mutation_is_persisted_before_remote_dispatch(monkeypatch):
+    from backend.core.contracts import ProviderSetResult, ProviderSetState
+    from backend.core.provider_commands import DurableProviderMutationService
+
+    events: list[tuple[str, str]] = []
+    command = {"id": "command-1", "state": "pending", "payload_digest": "unused"}
+
+    async def no_open_command(*_args, **_kwargs):
+        return None
+
+    async def create_command(payload):
+        events.append(("persist", payload["action"]))
+        return command
+
+    async def update_state(command_id, state, **_kwargs):
+        events.append((command_id, state))
+
+    async def remote_operation():
+        events.append(("remote", "called"))
+        return ProviderSetResult(True, "event-1", ProviderSetState.NOT_STARTED)
+
+    monkeypatch.setattr(database, "get_open_provider_command_for_match_v2", no_open_command)
+    monkeypatch.setattr(database, "create_provider_command_v2", create_command)
+    monkeypatch.setattr(database, "update_provider_command_state_v2", update_state)
+
+    result, command_id = await DurableProviderMutationService(
+        workspace_id="workspace-1"
+    ).dispatch_tournament(
+        tournament={
+            "slug": "testfnc",
+            "workspace_id": "workspace-1",
+            "provider_type": "startgg",
+            "provider_account_id": "account-1",
+        },
+        action="tournament_start",
+        payload={"reference": "testfnc"},
+        operation=remote_operation,
+    )
+
+    assert result.success is True
+    assert command_id == "command-1"
+    assert events == [
+        ("persist", "tournament_start"),
+        ("command-1", "sending"),
+        ("remote", "called"),
+        ("command-1", "acknowledged"),
+    ]
+
+
 @pytest.fixture
 async def command_db(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "commands.pg"))
@@ -143,7 +193,7 @@ async def test_score_command_is_preflighted_once_mutated_once_then_verified(comm
             self.requests = []
             self.mutations = 0
             self.verifications = 0
-        async def fetch_snapshot_v2(self, request):
+        async def fetch_snapshot(self, request):
             self.requests.append(request.scope)
             if request.scope.value == "single_match":
                 state = ProviderSetState.NOT_STARTED
@@ -219,7 +269,7 @@ async def test_verified_snapshot_with_a_different_remote_result_becomes_conflict
     class Provider:
         async def report_score(self, *_args):
             return ProviderSetResult(True, "challonge:m1", ProviderSetState.COMPLETE)
-        async def fetch_snapshot_v2(self, request):
+        async def fetch_snapshot(self, request):
             return ProviderSnapshotV2(
                 request=request,
                 payload={"sets": [ProviderSet(
@@ -247,7 +297,7 @@ async def test_score_preflight_rejects_changed_entrants_without_a_mutation(comma
 
     await database.upsert_active_match("challonge:m1", p1_entrant_id="p1", p2_entrant_id="p2", provider_set_id="m1")
     class Provider:
-        async def fetch_snapshot_v2(self, request):
+        async def fetch_snapshot(self, request):
             return ProviderSnapshotV2(
                 request=request,
                 payload={"sets": [ProviderSet(
@@ -284,7 +334,7 @@ async def test_single_challonge_dq_uses_verified_minus_one_zero_and_never_repres
         async def report_score(self, *args):
             self.mutation = args
             return ProviderSetResult(True, "challonge:m1", ProviderSetState.COMPLETE)
-        async def fetch_snapshot_v2(self, request):
+        async def fetch_snapshot(self, request):
             return ProviderSnapshotV2(
                 request=request,
                 payload={"sets": [ProviderSet(

@@ -47,6 +47,16 @@ async def _install_provider(monkeypatch):
 async def startgg_attendance_db(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "startgg-attendance.pg"))
     await database.init_db()
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute(
+            "INSERT INTO workspaces (id, slug, name) VALUES ('workspace-a', 'workspace-a', 'A')"
+        )
+        await db.execute(
+            """INSERT INTO integration_accounts
+               (id, owner_id, workspace_id, provider_type, external_account_id, display_name)
+               VALUES ('startgg-account', 'workspace-a', 'workspace-a', 'startgg', 'remote-a', 'Start.gg')"""
+        )
+        await db.commit()
     await database.upsert_tournament(
         "startgg:attendance",
         "Attendance",
@@ -55,6 +65,8 @@ async def startgg_attendance_db(tmp_path, monkeypatch):
         None,
         json.dumps({}),
         provider_type="startgg",
+        provider_account_id="startgg-account",
+        workspace_id="workspace-a",
     )
     await database.upsert_active_match(
         "set-1",
@@ -68,6 +80,7 @@ async def startgg_attendance_db(tmp_path, monkeypatch):
         provider_state_raw="called",
         provider_state_normalized="called",
         sync_status="synced",
+        workspace_id="workspace-a",
     )
 
 

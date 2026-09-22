@@ -12,6 +12,11 @@ async def registration_db(tmp_path, monkeypatch):
     await database.init_db()
     async with dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute("INSERT INTO workspaces (id, slug, name) VALUES ('w1', 'w1', 'Workspace')")
+        await db.execute(
+            """INSERT INTO integration_accounts
+               (id, owner_id, workspace_id, provider_type, external_account_id, display_name)
+               VALUES ('a1', 'w1', 'w1', 'startgg', 'remote-account', 'Provider')"""
+        )
         await db.execute("INSERT INTO tournaments (slug, name, workspace_id, provider_type, provider_account_id, provider_tournament_id) VALUES ('t1', 'Tournament', 'w1', 'startgg', 'a1', 'remote-t1')")
         await db.commit()
     return database.DATABASE_DSN

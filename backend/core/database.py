@@ -3328,9 +3328,9 @@ async def get_player_in_progress_match(discord_id: str, workspace_id: str | None
             return dict(row) if row else None
 
 
-# ── Provider V2 dark foundation repositories ───────────────────────────────
-# These functions are intentionally not invoked by the legacy runtime in Phase 2.
-# They provide durable storage for later feature-flagged services only.
+# ── Canonical provider command repositories ────────────────────────────────
+# Function suffixes remain for storage/API compatibility; this ledger is the
+# active runtime path for remote mutations.
 
 
 async def create_provider_command_v2(command: dict) -> dict:

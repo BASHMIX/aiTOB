@@ -14,6 +14,18 @@ async def integration_db(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "integrations.pg"))
     monkeypatch.setenv("AITOB_INTEGRATION_MASTER_KEY", "7lXNrOpw2HnqGYiRkqzGN70KGyxoDpcQ0H3jDXiVlvc=")
     await database.init_db()
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        await db.executemany(
+            "INSERT INTO workspaces (id, slug, name) VALUES (?, ?, ?)",
+            [
+                ("admin", "admin", "Admin"),
+                ("acceptance", "acceptance", "Acceptance"),
+                ("workspace-a", "workspace-a", "Workspace A"),
+                ("workspace-b", "workspace-b", "Workspace B"),
+                ("other", "other", "Other"),
+            ],
+        )
+        await db.commit()
     yield database.DATABASE_DSN
 
 
@@ -79,7 +91,7 @@ async def test_active_tournament_prevents_account_disable_or_delete(integration_
     account = await create_integration_account("admin", "challonge", "test", "Test")
     await database.upsert_tournament(
         "challonge:test", "Test", "", "", "", "{}", provider_type="challonge",
-        provider_tournament_id="1", provider_account_id=account["id"],
+        provider_tournament_id="1", provider_account_id=account["id"], workspace_id="admin",
     )
     with pytest.raises(IntegrationAccountInUse):
         await disable_integration_account(account["id"])

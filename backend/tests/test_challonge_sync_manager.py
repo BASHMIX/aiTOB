@@ -28,9 +28,15 @@ class _Client:
 async def sync_db(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "sync.pg"))
     await database.init_db()
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute(
+            "INSERT INTO workspaces (id, slug, name) VALUES ('workspace-a', 'workspace-a', 'A')"
+        )
+        await db.commit()
     await database.upsert_tournament(
         "challonge:account:fnc-jo:1", "FNC", None, None, None, json.dumps({}),
         provider_type="challonge", provider_tournament_id="1", provider_subdomain="fnc-jo", provider_account_id="account",
+        workspace_id="workspace-a",
     )
     return "challonge:account:fnc-jo:1"
 
@@ -41,14 +47,14 @@ async def test_sync_now_uses_one_read_only_full_snapshot_and_publishes_postgres(
     client = _Client()
     provider = ChallongeProvider(client)
     manager = ProviderSyncManager()
-    monkeypatch.setattr(sync_module, "get_provider_for_tournament", lambda _slug: _resolved(provider))
+    monkeypatch.setattr(sync_module, "get_provider_for_tournament", lambda _slug, _workspace: _resolved(provider))
     monkeypatch.setenv("CHALLONGE_READ_ENABLED", "true")
 
-    result = await manager.sync_bracket(sync_db, reason="manual")
+    result = await manager.sync_bracket(sync_db, workspace_id="workspace-a", reason="manual")
 
     assert client.participant_calls == client.match_calls == 1
     assert result["reason"] == "manual" and len(result["sets"]) == 1
-    snapshot = await database.get_bracket_snapshot(sync_db)
+    snapshot = await database.get_bracket_snapshot(sync_db, "workspace-a")
     assert snapshot["sets"][0]["p1"] == "Alpha"
 
 
@@ -59,9 +65,10 @@ async def test_stale_open_schedules_one_background_refresh_not_a_poller(sync_db,
     started = asyncio.Event()
     release = asyncio.Event()
 
-    async def sync_once(_slug, *, reason):
+    async def sync_once(_slug, *, workspace_id, reason):
         nonlocal calls
         calls += 1
+        assert workspace_id == "workspace-a"
         assert reason == "stale-on-open"
         started.set()
         await release.wait()
@@ -100,13 +107,13 @@ async def test_failed_second_collection_page_never_replaces_last_healthy_bracket
 
     manager = ProviderSyncManager()
     provider = ChallongeProvider(BrokenClient())
-    monkeypatch.setattr(sync_module, "get_provider_for_tournament", lambda _slug: _resolved(provider))
+    monkeypatch.setattr(sync_module, "get_provider_for_tournament", lambda _slug, _workspace: _resolved(provider))
     monkeypatch.setenv("CHALLONGE_READ_ENABLED", "true")
 
     with pytest.raises(ChallongeError):
-        await manager.sync_bracket(sync_db)
+        await manager.sync_bracket(sync_db, workspace_id="workspace-a")
 
-    assert await database.get_bracket_snapshot(sync_db) == {"sets": [], "synced_at": None}
+    assert await database.get_bracket_snapshot(sync_db, "workspace-a") == {"sets": [], "synced_at": None}
     async with dbapi.connect(database.DATABASE_DSN) as db:
         async with db.execute("SELECT COUNT(*) FROM active_matches") as cursor:
             assert (await cursor.fetchone())[0] == 0

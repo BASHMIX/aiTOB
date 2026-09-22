@@ -4,21 +4,14 @@ pattern used by API, Bot commands, and DM handlers.
 """
 
 from backend.core.contracts import ITournamentProvider, ProviderSetResult
-from backend.core.providers.registry import get_provider
-from backend.core.provider_feature_flags import get_provider_feature_flags
+from backend.core.provider_commands import DurableProviderMutationService
+from backend.core.providers.registry import get_provider_for_tournament
 
 
 async def _schedule_post_result_verification(
     set_id: str, provider: ITournamentProvider, workspace_id: str | None = None,
 ) -> None:
-    """Ask the Coordinator for later verification only in its explicit rollout mode.
-
-    This is intentionally provider-neutral. The adapter/sync policy determines
-    scope and cost; the legacy flags-off path makes no scheduling change.
-    """
-    flags = get_provider_feature_flags()
-    if not (flags.provider_coordinator_enabled and flags.provider_v2_contracts_enabled):
-        return
+    """Ask the canonical coordinator for a later verification snapshot."""
     try:
         from backend.core.database import get_active_match
         from backend.core.provider_sync_manager import sync_manager
@@ -47,16 +40,37 @@ async def report_score_to_provider(
     Returns:
         ProviderSetResult — check .success and .error_message
     """
-    provider = provider or get_provider()
+    from backend.core.database import get_active_match
+    match = await get_active_match(set_id, workspace_id)
+    if not match or not match.get("workspace_id") or not match.get("tournament_slug"):
+        raise ValueError("Score reporting requires a workspace-owned match")
+    workspace_id = str(match["workspace_id"])
+    if provider is None:
+        provider = await get_provider_for_tournament(
+            str(match["tournament_slug"]), workspace_id
+        )
 
-    # Try full score report
-    result = await provider.report_score(
-        set_id=set_id,
-        winner_id=winner_id,
-        entrant1_id=p1_id,
-        entrant2_id=p2_id,
-        entrant1_score=p1_score,
-        entrant2_score=p2_score,
+    mutation = DurableProviderMutationService(workspace_id=workspace_id)
+    result = await mutation.dispatch(
+        match_id=set_id,
+        action="report_score",
+        payload={
+            "winner_id": winner_id,
+            "entrant1_id": p1_id,
+            "entrant2_id": p2_id,
+            "entrant1_score": p1_score,
+            "entrant2_score": p2_score,
+        },
+        expected_result={"winner_id": winner_id, "state": "complete"},
+        precondition_revision=match.get("provider_revision"),
+        operation=lambda: provider.report_score(
+            set_id=set_id,
+            winner_id=winner_id,
+            entrant1_id=p1_id,
+            entrant2_id=p2_id,
+            entrant1_score=p1_score,
+            entrant2_score=p2_score,
+        ),
     )
     if result.success:
         await _schedule_post_result_verification(set_id, provider, workspace_id)
@@ -70,7 +84,14 @@ async def report_score_to_provider(
         return result
 
     # Fallback: winner-only
-    fallback = await provider.report_winner_only(set_id, winner_id)
+    fallback = await mutation.dispatch(
+        match_id=set_id,
+        action="report_winner_only",
+        payload={"winner_id": winner_id},
+        expected_result={"winner_id": winner_id, "state": "complete"},
+        precondition_revision=match.get("provider_revision"),
+        operation=lambda: provider.report_winner_only(set_id, winner_id),
+    )
     if not fallback.success:
         return ProviderSetResult(
             success=False,

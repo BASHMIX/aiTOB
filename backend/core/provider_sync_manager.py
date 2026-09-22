@@ -10,7 +10,7 @@ import asyncio
 from collections import defaultdict
 from typing import Any
 
-from backend.core.contracts import ITournamentProviderV2, ProviderSnapshotRequestV2, SnapshotScope
+from backend.core.contracts import ProviderSnapshotRequestV2, SnapshotScope
 from backend.core.contracts.tournament_types import ProviderSet
 from backend.core.provider_serialization import serialize_provider_set
 from backend.core.database import (
@@ -66,16 +66,14 @@ class ProviderSyncManager:
         # fixtures so existing tests/tools remain compatible during migration.
         self._deferred: dict[str | tuple[str, str], asyncio.Task] = {}
         self._stopping: set[asyncio.Task] = set()
-        # Constructed lazily only after both explicit V2 read flags are enabled.
-        # Importing this module and normal legacy startup create no coordinator task.
-        self._v2_coordinator: SyncCoordinator | None = None
+        self._coordinator: SyncCoordinator | None = None
         self._stale_open_tasks: dict[str | tuple[str, str], asyncio.Task] = {}
         self._live_scheduler = LiveSyncScheduler(self._run_live_sync, get_live_sync_state_v2)
 
-    def _get_v2_coordinator(self) -> SyncCoordinator:
-        if self._v2_coordinator is None:
-            self._v2_coordinator = SyncCoordinator()
-        return self._v2_coordinator
+    def _get_coordinator(self) -> SyncCoordinator:
+        if self._coordinator is None:
+            self._coordinator = SyncCoordinator()
+        return self._coordinator
 
     async def _run_live_sync(
         self,
@@ -148,36 +146,17 @@ class ProviderSyncManager:
             try:
                 trusted_workspace_id = tournament.get("workspace_id") or workspace_id
                 flags = get_provider_feature_flags()
-                startgg_v2_requested = (
-                    tournament.get("provider_type", "startgg") == "startgg"
-                    and flags.provider_v2_contracts_enabled
-                    and flags.provider_coordinator_enabled
-                )
                 startgg_account_id = str(tournament.get("provider_account_id") or "")
-                # Account-bound V2 reads may never use the historical shared
-                # ``default`` bucket.  The unowned fixture compatibility path
-                # remains intentionally available until ownership backfill;
-                # once a trusted workspace context exists, fail before a
-                # provider/client can be constructed or contacted.
-                if startgg_v2_requested and trusted_workspace_id is not None and not startgg_account_id:
-                    raise ValueError(
-                        "Start.gg V2 synchronization requires a tournament-bound integration account."
-                    )
-                # Preserve the legacy one-argument adapter hook for unscoped
-                # fixtures while every owned tournament carries its trusted
-                # workspace into provider resolution.
-                if trusted_workspace_id is None:
-                    provider = await get_provider_for_tournament(tournament_slug)
-                else:
-                    provider = await get_provider_for_tournament(
-                        tournament_slug,
-                        trusted_workspace_id,
-                    )
+                if not trusted_workspace_id:
+                    raise ValueError("Provider synchronization requires workspace ownership.")
+                if not str(tournament.get("provider_account_id") or ""):
+                    raise ValueError("Tournament is not bound to an integration account.")
+                provider = await get_provider_for_tournament(
+                    tournament_slug, str(trusted_workspace_id)
+                )
                 if tournament.get("provider_type") == "challonge":
                     if not flags.challonge_read_enabled:
                         raise ValueError("Challonge read support is not enabled for this Hub.")
-                    if not isinstance(provider, ITournamentProviderV2):
-                        raise ValueError("Challonge adapter does not support scoped snapshots.")
                     account = str(tournament.get("provider_account_id") or "")
                     if not account:
                         raise ValueError("Challonge tournament is not bound to an integration account.")
@@ -185,8 +164,8 @@ class ProviderSyncManager:
                         provider_type="challonge", provider_account_id=account,
                         tournament_id=provider_reference(tournament), scope=SnapshotScope.FULL_SNAPSHOT,
                     )
-                    snapshot = await self._get_v2_coordinator().run_snapshot(
-                        request, lambda: provider.fetch_snapshot_v2(request)
+                    snapshot = await self._get_coordinator().run_snapshot(
+                        request, lambda: provider.fetch_snapshot(request)
                     )
                     provider_sets = snapshot.payload.get("sets")
                     participants = snapshot.payload.get("participants")
@@ -200,48 +179,26 @@ class ProviderSyncManager:
                         complete_pages=True,
                     )
                     return {**applied, "reason": reason}
-                use_v2_reads = (
-                    tournament.get("provider_type", "startgg") == "startgg"
-                    and startgg_v2_requested
-                    and isinstance(provider, ITournamentProviderV2)
+                allow_completed_bracket = (
+                    bool(tournament.get("ignore_activity_guard"))
+                    if ignore_activity_guard is None
+                    else bool(ignore_activity_guard)
                 )
-                if use_v2_reads:
-                    allow_completed_bracket = (
-                        bool(tournament.get("ignore_activity_guard"))
-                        if ignore_activity_guard is None
-                        else bool(ignore_activity_guard)
-                    )
-                    request = ProviderSnapshotRequestV2(
-                        provider_type="startgg",
-                        # Legacy unowned fixtures preserve the old V2 contract
-                        # value only while their migration is incomplete.  An
-                        # owned tournament is rejected above instead of falling
-                        # through to this value.
-                        provider_account_id=startgg_account_id or "default",
-                        tournament_id=provider_reference(tournament),
-                        scope=SnapshotScope.ACTIVE_MATCHES,
-                        options={
-                            "ignore_activity_guard": allow_completed_bracket,
-                        },
-                    )
-                    snapshot = await self._get_v2_coordinator().run_snapshot(
-                        request, lambda: provider.fetch_snapshot_v2(request)
-                    )
-                    provider_sets = snapshot.payload.get("sets")
-                    if not isinstance(provider_sets, list) or not all(
-                        isinstance(item, ProviderSet) for item in provider_sets
-                    ):
-                        raise ValueError("Start.gg V2 snapshot returned an invalid sets payload.")
-                else:
-                    allow_completed_bracket = (
-                        bool(tournament.get("ignore_activity_guard"))
-                        if ignore_activity_guard is None
-                        else bool(ignore_activity_guard)
-                    )
-                    provider_sets = await provider.fetch_sets(
-                        provider_reference(tournament),
-                        ignore_activity_guard=allow_completed_bracket,
-                    )
+                request = ProviderSnapshotRequestV2(
+                    provider_type="startgg",
+                    provider_account_id=startgg_account_id,
+                    tournament_id=provider_reference(tournament),
+                    scope=SnapshotScope.ACTIVE_MATCHES,
+                    options={"ignore_activity_guard": allow_completed_bracket},
+                )
+                snapshot = await self._get_coordinator().run_snapshot(
+                    request, lambda: provider.fetch_snapshot(request)
+                )
+                provider_sets = snapshot.payload.get("sets")
+                if not isinstance(provider_sets, list) or not all(
+                    isinstance(item, ProviderSet) for item in provider_sets
+                ):
+                    raise ValueError("Start.gg snapshot returned an invalid sets payload.")
                 await sync_active_matches(tournament_slug, provider_sets, trusted_workspace_id)
                 # Edge-triggered provider CALLED observations share the same
                 # durable occurrence ledger as Dashboard calls.  The provider

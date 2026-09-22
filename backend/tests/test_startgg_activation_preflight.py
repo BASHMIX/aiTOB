@@ -27,7 +27,7 @@ class FakeStartGG:
         self.mutation = mutation
         self.mutation_calls = 0
 
-    async def fetch_snapshot_v2(self, request):
+    async def fetch_snapshot(self, request):
         assert request.scope is SnapshotScope.SINGLE_MATCH
         assert request.entity_ids == frozenset({"set-1"})
         payload = self.snapshots.pop(0)
@@ -165,7 +165,7 @@ async def test_state_change_between_preflight_and_mutation_is_reviewed(preflight
 async def test_snapshot_network_failure_is_review_not_local_advance(preflight_db, monkeypatch):
     class Down:
         provider_type = "startgg"
-        async def fetch_snapshot_v2(self, request):
+        async def fetch_snapshot(self, request):
             raise TimeoutError("fixture network failure")
     monkeypatch.setattr(ms, "get_provider_for_tournament", lambda *a, **k: _async_result(Down()))
 

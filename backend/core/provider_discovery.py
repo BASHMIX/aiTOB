@@ -350,7 +350,7 @@ def project_capabilities(provider: str, adapter: Any = None) -> dict[str, Capabi
         "result_reporting": Capability(CapabilityState.UNKNOWN, "result_reporting_unverified"),
     }
     if adapter is not None:
-        declared = getattr(adapter, "capabilities_v2", None)
+        declared = getattr(adapter, "capabilities", None)
         if declared is not None:
             actions = getattr(declared, "actions", {}) or {}
             aliases = {

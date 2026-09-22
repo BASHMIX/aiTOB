@@ -9,6 +9,14 @@ from backend.core.match_commands import record_called_occurrence
 async def test_provider_and_dashboard_called_observations_share_one_occurrence(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "calls.pg"))
     await database.init_db()
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute(
+            "INSERT INTO workspaces (id, slug, name) VALUES ('w1', 'w1', 'Workspace')"
+        )
+        await db.execute(
+            "INSERT INTO tournaments (slug, name, workspace_id) VALUES ('t1', 'Tournament', 'w1')"
+        )
+        await db.commit()
     first, second = await asyncio.gather(
         record_called_occurrence("w1", "t1", "m1", "v1", source="provider_sync"),
         record_called_occurrence("w1", "t1", "m1", "v1", source="dashboard"),

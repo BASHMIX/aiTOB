@@ -1,8 +1,8 @@
-"""Start.gg parity lock before its dark V2 read adapter is introduced.
+"""Start.gg transport parity locks for the canonical provider adapter.
 
-These assertions deliberately inspect the exact existing GraphQL documents and
-variables, not just mapped results.  They are a regression contract for the
-legacy provider and client behavior that V2 must wrap rather than rewrite.
+These assertions deliberately inspect the exact GraphQL documents and
+variables, not just mapped results, so provider consolidation cannot silently
+change request count, ordering, or mutation payloads.
 """
 from __future__ import annotations
 
@@ -201,8 +201,8 @@ async def test_v2_read_wrapper_reuses_startgg_reads_and_refuses_remote_mutations
         scope=SnapshotScope.SINGLE_MATCH, entity_ids=frozenset({"set-1"}),
     )
 
-    snapshot = await provider.fetch_snapshot_v2(request)
-    result = await provider.execute_remote_command_v2(
+    snapshot = await provider.fetch_snapshot(request)
+    result = await provider.execute_remote_command(
         ProviderCommandV2(
             command_id="command-1", provider_type="startgg", provider_account_id="test",
             tournament_id="fixture", provider_match_id="set-1", action="report_score",
@@ -216,7 +216,7 @@ async def test_v2_read_wrapper_reuses_startgg_reads_and_refuses_remote_mutations
         "state_source": "aitob", "provider_state_raw": "6",
         "entrant_ids": ["entrant-1", "entrant-2"],
     }
-    assert provider.capabilities_v2.for_action("report_score").kind is ProviderActionKind.REMOTE
+    assert provider.capabilities.for_action("report_score").kind is ProviderActionKind.REMOTE
     assert result.state is ProviderCommandState.NEEDS_REVIEW
     assert result.acknowledged is False
     client.fetch_set_state.assert_awaited_once_with("set-1")

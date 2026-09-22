@@ -2,7 +2,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, Optional, List
 from backend.core.contracts import (
-    ITournamentProvider, ITournamentProviderV2,
+    ITournamentProvider,
     ProviderTournament, ProviderSet, ProviderSetState, ProviderSetResult,
     ProviderStream,
     ProviderActionKind, ProviderCapabilitiesV2, ProviderCapability,
@@ -15,7 +15,7 @@ from backend.core.providers.startgg.state_map import SGG_STATE_MAP, is_active_st
 from backend.core.providers.startgg.client import StartGGClient
 
 
-class StartGGProvider(ITournamentProvider, ITournamentProviderV2):
+class StartGGProvider(ITournamentProvider):
     """start.gg bracket provider.
     
     Wraps the existing StartGGClient and translates all responses
@@ -34,13 +34,8 @@ class StartGGProvider(ITournamentProvider, ITournamentProviderV2):
         return "startgg"
 
     @property
-    def capabilities_v2(self) -> ProviderCapabilitiesV2:
-        """Declare upstream capabilities without enabling V2 mutation execution.
-
-        The legacy paths remain the only mutation paths in Phase 3.  This avoids
-        post-mutation fallback and gives a later Command Service an explicit
-        capability map to evaluate before it owns remote writes.
-        """
+    def capabilities(self) -> ProviderCapabilitiesV2:
+        """Declare upstream capabilities without performing provider I/O."""
         remote = ProviderCapability(ProviderActionKind.REMOTE)
         return ProviderCapabilitiesV2(
             actions={
@@ -61,7 +56,7 @@ class StartGGProvider(ITournamentProvider, ITournamentProviderV2):
             supports_idempotency=False,
         )
 
-    async def fetch_snapshot_v2(
+    async def fetch_snapshot(
         self, request: ProviderSnapshotRequestV2
     ) -> ProviderSnapshotV2:
         """Read through existing legacy methods, preserving their GraphQL behavior."""
@@ -137,15 +132,15 @@ class StartGGProvider(ITournamentProvider, ITournamentProviderV2):
             covered_scopes=frozenset({request.scope}),
         )
 
-    async def execute_remote_command_v2(
+    async def execute_remote_command(
         self, command: ProviderCommandV2
     ) -> ProviderCommandResultV2:
-        """Refuse V2 writes until the command service is introduced in a later phase."""
+        """Refuse unleased writes; mutations use the durable command service."""
         return ProviderCommandResultV2(
             command_id=command.command_id,
             state=ProviderCommandState.NEEDS_REVIEW,
             acknowledged=False,
-            error_message="Start.gg V2 remote commands are disabled in Phase 3; use the legacy path.",
+            error_message="Remote commands must be dispatched by the durable command service.",
         )
 
     async def fetch_tournament(self, slug_or_id: str) -> Optional[ProviderTournament]:
@@ -154,6 +149,13 @@ class StartGGProvider(ITournamentProvider, ITournamentProviderV2):
         if not raw:
             return None
         return map_tournament(raw)
+
+    async def fetch_user_by_slug(self, slug: str) -> dict | None:
+        """Provider-specific identity proof used by verified registration."""
+        return await self._client.fetch_user_by_slug(slug)
+
+    async def fetch_user_cfn(self, user_id: str, tournament_slugs: list[str]) -> str | None:
+        return await self._client.fetch_user_cfn(user_id, tournament_slugs)
 
     async def fetch_event_game_metadata(self, event_id: str) -> dict[str, Any]:
         """Fetch Start.gg's current character/stage catalog for one Event game."""
@@ -556,24 +558,6 @@ class StartGGProvider(ITournamentProvider, ITournamentProviderV2):
         return ProviderSetResult(
             success=success, set_id=set_id,
             new_state=ProviderSetState.COMPLETE if success else None
-        )
-
-    async def mark_double_dq(
-        self, set_id: str, entrant1_id: str, entrant2_id: str
-    ) -> ProviderSetResult:
-        """Resolve a double no-show on start.gg.
-
-        start.gg's reportBracketSet requires a winnerId — there is no single-call
-        mutation that DQs both slots. To keep the bracket from stalling we resolve
-        the set by DQ-ing entrant2 (entrant1 advances as the technical winner). The
-        caller records BOTH as DQ locally and warns the TO so the advanced slot can
-        be handled upstream if that player also no-shows.
-        """
-        success = await self._client.mark_set_double_dq(set_id, entrant1_id, entrant2_id)
-        return ProviderSetResult(
-            success=success, set_id=set_id,
-            new_state=ProviderSetState.COMPLETE if success else None,
-            error_message=None if success else "double DQ failed on start.gg"
         )
 
     async def reset_set(self, set_id: str) -> ProviderSetResult:

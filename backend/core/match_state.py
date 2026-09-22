@@ -124,7 +124,15 @@ async def _realize_in_progress_overlays(match: dict, update_kwargs: dict) -> Non
                         provider = await get_provider_for_tournament(
                             match.get("tournament_slug") or "", match.get("workspace_id")
                         )
-                        stream_result = await provider.assign_stream(str(set_id), str(stream_id))
+                        from backend.core.provider_commands import DurableProviderMutationService
+                        stream_result = await DurableProviderMutationService(
+                            workspace_id=str(match.get("workspace_id") or "")
+                        ).dispatch(
+                            match_id=str(set_id), action="assign_stream",
+                            payload={"stream_id": str(stream_id)},
+                            operation=lambda: provider.assign_stream(str(set_id), str(stream_id)),
+                            precondition_revision=match.get("provider_revision"),
+                        )
                         route_verified = bool(stream_result.success)
                     except Exception as exc:
                         route_verified = False
@@ -174,7 +182,7 @@ async def _startgg_targeted_snapshot(match: dict, provider):
         force=True,
     )
     snapshot = await SyncCoordinator().run_snapshot(
-        request, lambda: provider.fetch_snapshot_v2(request)
+        request, lambda: provider.fetch_snapshot(request)
     )
     payload = dict(snapshot.payload or {})
     raw_state = payload.get("state")
@@ -319,8 +327,6 @@ async def transition_match(
             try:
                 provider = await get_provider_for_tournament(
                     match.get("tournament_slug") or "", match.get("workspace_id")
-                ) if match.get("workspace_id") is not None else await get_provider_for_tournament(
-                    match.get("tournament_slug") or ""
                 )
                 preflight = await _startgg_targeted_snapshot(match, provider)
                 if preflight is not None:
@@ -350,7 +356,15 @@ async def transition_match(
                         result = None
                         postflight = None
                         try:
-                            result = await provider.mark_in_progress(set_id)
+                            from backend.core.provider_commands import DurableProviderMutationService
+                            result = await DurableProviderMutationService(
+                                workspace_id=str(match.get("workspace_id") or "")
+                            ).dispatch(
+                                match_id=set_id, action="mark_in_progress",
+                                payload={"set_id": set_id},
+                                operation=lambda: provider.mark_in_progress(set_id),
+                                precondition_revision=match.get("provider_revision"),
+                            )
                             if not result.success:
                                 mutation_error = result.error_message or "Start.gg rejected markSetInProgress"
                         except Exception as exc:

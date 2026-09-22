@@ -65,7 +65,14 @@ class AttendanceCommandService:
         if state == ProviderSetState.COMPLETE:
             raise AttendanceCommandError("Start.gg already completed this match")
         if state != ProviderSetState.IN_PROGRESS:
-            result = await provider.mark_in_progress(str(match["set_id"]))
+            from backend.core.provider_commands import DurableProviderMutationService
+            workspace_id = str(self.workspace_id or match.get("workspace_id") or "")
+            result = await DurableProviderMutationService(workspace_id=workspace_id).dispatch(
+                match_id=str(match["set_id"]), action="mark_in_progress",
+                payload={"set_id": str(match["set_id"])},
+                operation=lambda: provider.mark_in_progress(str(match["set_id"])),
+                precondition_revision=match.get("provider_revision"),
+            )
             if not result.success:
                 # A transport timeout may follow a successful mutation. Re-read
                 # once; never blindly resend a lifecycle mutation.
@@ -176,7 +183,15 @@ class AttendanceCommandService:
         winner_player = present[0]
         loser_player = "p2" if winner_player == "p1" else "p1"
         winner_id = str(match.get(f"{winner_player}_entrant_id") or "")
-        result = await provider.mark_dq(match_id, winner_id)
+        from backend.core.provider_commands import DurableProviderMutationService
+        workspace_id = str(self.workspace_id or match.get("workspace_id") or "")
+        result = await DurableProviderMutationService(workspace_id=workspace_id).dispatch(
+            match_id=match_id, action="dq",
+            payload={"winner_id": winner_id, "loser": loser_player},
+            expected_result={"winner_id": winner_id, "result_kind": "dq"},
+            operation=lambda: provider.mark_dq(match_id, winner_id),
+            precondition_revision=match.get("provider_revision"),
+        )
         verified = await provider.fetch_set_state(match_id)
         if not result.success or verified != ProviderSetState.COMPLETE:
             await database.set_match_sync_status_v2(

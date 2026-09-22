@@ -48,7 +48,7 @@ async def test_token_expiry_keeps_score_as_local_draft_without_remote_mutation(t
     from backend.core.providers.challonge.client import ChallongeError
     class ExpiredProvider:
         mutations = 0
-        async def fetch_snapshot_v2(self, _request):
+        async def fetch_snapshot(self, _request):
             raise ChallongeError("Challonge authorization failed or this tournament is inaccessible.")
         async def report_score(self, *_args):
             self.mutations += 1

@@ -1,6 +1,6 @@
 param(
     [string]$EnvFile = ".env.acceptance",
-    [ValidateRange(1, 6)][int]$Stage = 1,
+    [ValidateRange(1, 3)][int]$Stage = 1,
     [switch]$WithBot,
     [switch]$EnableDqSandbox
 )
@@ -38,15 +38,13 @@ if ($env:ACCEPTANCE_ENVIRONMENT -ne 'true') { throw 'ACCEPTANCE_ENVIRONMENT=true
 if ([string]::IsNullOrWhiteSpace($env:DATABASE_URL) -or $env:DATABASE_URL -notmatch '^postgres(ql)?://') {
     throw 'DATABASE_URL must identify an isolated acceptance PostgreSQL database.'
 }
-$env:PROVIDER_V2_CONTRACTS_ENABLED = if ($Stage -ge 1) { 'true' } else { 'false' }
-$env:PROVIDER_COORDINATOR_ENABLED = if ($Stage -ge 2) { 'true' } else { 'false' }
-$env:CHALLONGE_READ_ENABLED = if ($Stage -ge 3) { 'true' } else { 'false' }
-$env:CHALLONGE_LOCAL_WORKFLOW_ENABLED = if ($Stage -ge 4) { 'true' } else { 'false' }
-$env:CHALLONGE_SCORE_COMMANDS_ENABLED = if ($Stage -ge 5) { 'true' } else { 'false' }
+$env:CHALLONGE_READ_ENABLED = if ($Stage -ge 1) { 'true' } else { 'false' }
+$env:CHALLONGE_LOCAL_WORKFLOW_ENABLED = if ($Stage -ge 2) { 'true' } else { 'false' }
+$env:CHALLONGE_SCORE_COMMANDS_ENABLED = if ($Stage -ge 3) { 'true' } else { 'false' }
 # DQ is never enabled by stage alone.  It needs this explicit sandbox-only
 # switch, an acceptance database, and score commands.  Production defaults
 # remain false and a double DQ is still rejected by the API.
-if ($EnableDqSandbox -and $Stage -lt 5) { throw 'DQ sandbox testing requires Stage 5 or later.' }
+if ($EnableDqSandbox -and $Stage -lt 3) { throw 'DQ sandbox testing requires Stage 3.' }
 $env:CHALLONGE_DQ_COMMANDS_ENABLED = if ($EnableDqSandbox) { 'true' } else { 'false' }
 # The bot resolves exactly one active test Discord account from the acceptance database.
 # Multiple accounts require an explicit non-secret AITOB_DISCORD_ACCOUNT_ID process selector.

@@ -518,6 +518,11 @@ def _prompt(question: str, context: str, mode: str) -> str:
 
 
 async def _reserve(config: dict[str, Any], tournament_slug: str, estimated_input_tokens: int, workspace_id: str | None = None) -> str:
+    if workspace_id is None:
+        tournament = await database.get_tournament(tournament_slug)
+        workspace_id = str((tournament or {}).get("workspace_id") or "") or None
+    if workspace_id is None:
+        raise AIConfigurationError("Tournament workspace ownership is required for AI usage.")
     period_key = datetime.now(UTC).strftime("%Y%m%d%H")
     usage_id = str(uuid.uuid4())
     async with dbapi.connect(database.DATABASE_DSN) as db:
@@ -525,10 +530,9 @@ async def _reserve(config: dict[str, Any], tournament_slug: str, estimated_input
         if is_postgres():
             # A process-local lock/BEGIN cannot serialize quota reservations.
             # This lock covers the current service-level budget across workers.
-            if workspace_id:
-                await db.execute("SELECT workspace_id FROM workspace_ai_configs WHERE workspace_id=? FOR UPDATE", (workspace_id,))
-            else:
-                await db.execute("SELECT id FROM ai_service_config WHERE id=1 FOR UPDATE")
+            await db.execute(
+                "SELECT id FROM workspaces WHERE id=? FOR UPDATE", (workspace_id,)
+            )
         usage_scope = " AND workspace_id=?" if workspace_id is not None else ""
         usage_params: tuple[Any, ...] = (period_key, *(() if workspace_id is None else (workspace_id,)))
         row = await (await db.execute(
@@ -549,9 +553,17 @@ async def _reserve(config: dict[str, Any], tournament_slug: str, estimated_input
             await db.rollback()
             raise AIUsageLimitError("AI request or token limit reached for the current hour.")
         await db.execute(
-            """INSERT INTO ai_usage_ledger (id,workspace_id,tournament_slug,provider_type,model,policy_version,period_key,estimated_input_tokens,response_tokens,outcome)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved')""",
-            (usage_id, workspace_id, tournament_slug, config["provider_type"], config["model"], config["policy_version"], period_key, estimated_input_tokens, reserved_response_tokens),
+            """INSERT INTO ai_usage_ledger
+               (id,workspace_id,tournament_slug,tournament_id,integration_account_id,
+                provider_type,model,policy_version,period_key,
+                estimated_input_tokens,response_tokens,outcome)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved')""",
+            (
+                usage_id, workspace_id, tournament_slug, tournament_slug,
+                config.get("selected_account_id"), config["provider_type"],
+                config["model"], config["policy_version"], period_key,
+                estimated_input_tokens, reserved_response_tokens,
+            ),
         )
         await db.commit()
     return usage_id
@@ -620,8 +632,8 @@ class AIService:
             await _finish_usage(usage_id, outcome="failed")
             raise
         except AIServiceError as exc:
-            # Compatibility fakes and legacy provider implementations may use
-            # AIServiceError directly. Treat those messages as untrusted and
+            # Compatibility fakes and provider adapters may use AIServiceError
+            # directly. Treat those messages as untrusted and
             # classify them before returning anything to the caller.
             await _finish_usage(usage_id, outcome="failed")
             info = classify_provider_error(exc)

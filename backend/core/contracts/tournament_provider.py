@@ -9,7 +9,7 @@ from backend.core.contracts.tournament_types import (
 )
 
 class ITournamentProvider(ABC):
-    """Abstract interface for tournament bracket providers.
+    """Canonical interface for tournament bracket providers.
     
     Implementations:
       - StartGGProvider  (start.gg GraphQL API)
@@ -27,6 +27,32 @@ class ITournamentProvider(ABC):
     @abstractmethod
     def provider_name(self) -> str:
         """Human-readable name, e.g. 'start.gg', 'Challonge'."""
+        ...
+
+    @property
+    @abstractmethod
+    def provider_type(self) -> str:
+        """Stable machine identifier, such as ``startgg`` or ``challonge``."""
+        ...
+
+    @property
+    @abstractmethod
+    def capabilities(self) -> ProviderCapabilitiesV2:
+        """Static adapter capabilities; never performs I/O or exposes secrets."""
+        ...
+
+    @abstractmethod
+    async def fetch_snapshot(
+        self, request: ProviderSnapshotRequestV2
+    ) -> ProviderSnapshotV2:
+        """Fetch the smallest provider snapshot that satisfies ``request``."""
+        ...
+
+    @abstractmethod
+    async def execute_remote_command(
+        self, command: ProviderCommandV2
+    ) -> ProviderCommandResultV2:
+        """Execute a command only after the durable command ledger admits it."""
         ...
 
     # ── Queries ────────────────────────────────────────────────────────
@@ -125,16 +151,14 @@ class ITournamentProvider(ABC):
     async def mark_double_dq(
         self, set_id: str, entrant1_id: str, entrant2_id: str
     ) -> ProviderSetResult:
-        """Resolve a set where BOTH entrants are disqualified (double no-show).
+        """Decline synthetic Double-DQ mutations.
 
-        Optional capability. Providers that cannot represent a double DQ should
-        leave this default, which reports failure so callers can fall back to a
-        local-only resolution. Implementations must resolve the set so the
-        bracket does not stall.
+        Provider-native no-show behavior must be observed through snapshots.
+        aiTOB never chooses a technical winner merely to close the bracket.
         """
         return ProviderSetResult(
             success=False, set_id=set_id,
-            error_message="Provider does not support double DQ."
+            error_message="Double DQ is provider-owned and cannot be synthesized."
         )
 
     # ── Streams (optional capability) ──────────────────────────────────
@@ -165,38 +189,3 @@ class ITournamentProvider(ABC):
     async def close(self) -> None:
         """Cleanup resources (HTTP clients, connections). Called on shutdown."""
         pass
-
-
-class ITournamentProviderV2(ABC):
-    """Dark-launch provider contract.
-
-    This intentionally lives alongside ``ITournamentProvider``.  Existing Start.gg
-    consumers remain on the legacy interface until its parity checkpoint passes and a
-    later feature flag explicitly adopts this interface.
-    """
-
-    @property
-    @abstractmethod
-    def provider_type(self) -> str:
-        """Stable machine identifier, such as ``startgg`` or ``challonge``."""
-        ...
-
-    @property
-    @abstractmethod
-    def capabilities_v2(self) -> ProviderCapabilitiesV2:
-        """Static adapter capability declaration; contains no credentials."""
-        ...
-
-    @abstractmethod
-    async def fetch_snapshot_v2(
-        self, request: ProviderSnapshotRequestV2
-    ) -> ProviderSnapshotV2:
-        """Fetch the smallest provider snapshot that satisfies ``request``."""
-        ...
-
-    @abstractmethod
-    async def execute_remote_command_v2(
-        self, command: ProviderCommandV2
-    ) -> ProviderCommandResultV2:
-        """Execute a provider-backed command after the command ledger admits it."""
-        ...

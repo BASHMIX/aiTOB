@@ -1,17 +1,156 @@
-"""Dark provider-command interfaces.
-
-These definitions model remote mutations only.  Local Hub workflow actions such as
-Call, Ready, station assignment, Discord, and OBS remain on their current paths in
-Phase 2 and must not create provider-command records.
-"""
+"""Durable provider-command dispatch and unknown-outcome recovery."""
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Awaitable, Callable, Protocol
+from typing import Awaitable, Callable, Protocol, TypeVar
 from uuid import uuid4
 
 from backend.core import database
+
+
+T = TypeVar("T")
+
+
+class DurableProviderMutationService:
+    """Persist a mutation intent before invoking an adapter exactly once.
+
+    A transport exception or an existing acknowledged command is never resent.
+    Provider-specific reconciliation remains with the caller/coordinator.
+    """
+
+    def __init__(self, *, workspace_id: str):
+        if not str(workspace_id or "").strip():
+            raise ValueError("Provider mutation requires a workspace")
+        self.workspace_id = str(workspace_id)
+
+    async def dispatch(
+        self,
+        *,
+        match_id: str,
+        action: str,
+        payload: dict,
+        operation: Callable[[], Awaitable[T]],
+        expected_result: dict | None = None,
+        precondition_revision: str | None = None,
+    ) -> T:
+        from backend.core.match_commands import MatchCommandError, ProviderCommandLifecycle
+
+        lifecycle = ProviderCommandLifecycle(workspace_id=self.workspace_id)
+        command = await lifecycle.create_remote_command(
+            match_id=match_id,
+            action=action,
+            payload=payload,
+            expected_result=expected_result or {},
+            precondition_revision=precondition_revision,
+        )
+        state = str(command.get("state") or "pending")
+        if state in {"acknowledged", "sending", "retryable"}:
+            raise MatchCommandError(
+                "Provider command outcome is awaiting reconciliation; it was not resent"
+            )
+        if state == "snapshot_verified":
+            raise MatchCommandError("Provider command was already completed")
+        if state in {"permanent_failure", "conflict", "needs_review"}:
+            raise MatchCommandError("Provider command requires organizer review")
+
+        await lifecycle.mark(command["id"], "sending")
+        try:
+            result = await operation()
+        except Exception:
+            await lifecycle.mark(
+                command["id"], "acknowledged",
+                reason="Remote outcome unknown; verification required",
+            )
+            await database.set_match_sync_status_v2(
+                match_id,
+                "acknowledged_unverified",
+                reason="Remote outcome unknown; awaiting verification",
+                workspace_id=self.workspace_id,
+            )
+            raise
+
+        success = bool(getattr(result, "success", True))
+        if success:
+            await lifecycle.mark(command["id"], "acknowledged")
+        else:
+            await lifecycle.mark(
+                command["id"], "permanent_failure",
+                reason=str(getattr(result, "error_message", "Provider rejected command")),
+            )
+        return result
+
+    async def dispatch_tournament(
+        self,
+        *,
+        tournament: dict,
+        action: str,
+        payload: dict,
+        operation: Callable[[], Awaitable[T]],
+        expected_result: dict | None = None,
+    ) -> tuple[T, str]:
+        """Persist a tournament-level mutation before contacting the provider."""
+        from backend.core.match_commands import MatchCommandError
+
+        slug = str(tournament.get("slug") or "")
+        account_id = str(tournament.get("provider_account_id") or "")
+        provider_type = str(tournament.get("provider_type") or "startgg")
+        if not slug or not account_id or str(tournament.get("workspace_id") or "") != self.workspace_id:
+            raise MatchCommandError("Tournament provider binding is incomplete")
+
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        resource_id = f"tournament:{slug}"
+        command = await database.get_open_provider_command_for_match_v2(
+            resource_id, action, self.workspace_id
+        )
+        if command and command.get("payload_digest") != digest:
+            raise MatchCommandError(
+                "A different tournament command is awaiting provider reconciliation"
+            )
+        if command is None:
+            command = await database.create_provider_command_v2({
+                "id": str(uuid4()),
+                "workspace_id": self.workspace_id,
+                "tournament_slug": slug,
+                "set_id": resource_id,
+                "provider_type": provider_type,
+                "provider_account_id": account_id,
+                "action": action,
+                "idempotency_key": f"{action}:{resource_id}:{digest}",
+                "payload_digest": digest,
+                "expected_result": expected_result or {},
+            })
+
+        state = str(command.get("state") or "pending")
+        if state in {"acknowledged", "sending", "retryable"}:
+            raise MatchCommandError(
+                "Tournament command outcome is awaiting reconciliation; it was not resent"
+            )
+        if state == "snapshot_verified":
+            raise MatchCommandError("Tournament command was already completed")
+        if state in {"permanent_failure", "conflict", "needs_review"}:
+            raise MatchCommandError("Tournament command requires organizer review")
+
+        await database.update_provider_command_state_v2(command["id"], "sending")
+        try:
+            result = await operation()
+        except Exception:
+            await database.update_provider_command_state_v2(
+                command["id"], "acknowledged",
+                reason="Remote outcome unknown; snapshot verification required",
+            )
+            raise
+        if bool(getattr(result, "success", True)):
+            await database.update_provider_command_state_v2(command["id"], "acknowledged")
+        else:
+            await database.update_provider_command_state_v2(
+                command["id"], "permanent_failure",
+                reason=str(getattr(result, "error_message", "Provider rejected command")),
+            )
+        return result, str(command["id"])
 
 
 @dataclass(frozen=True)

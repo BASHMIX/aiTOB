@@ -129,7 +129,14 @@ async def create_match_thread(bot, tournament, set_data):
             provider = await get_provider_for_tournament(
                 set_data.get("tournament_slug") or "", set_data.get("workspace_id")
             )
-            called = await provider.mark_called(set_id)
+            from backend.core.provider_commands import DurableProviderMutationService
+            called = await DurableProviderMutationService(
+                workspace_id=str(set_data.get("workspace_id") or "")
+            ).dispatch(
+                match_id=set_id, action="mark_called", payload={"set_id": set_id},
+                operation=lambda: provider.mark_called(set_id),
+                precondition_revision=set_data.get("provider_revision"),
+            )
             if called.success:
                 called_at = datetime.now(UTC)
                 timeout_seconds = int(
@@ -295,7 +302,14 @@ async def _create_startgg_checkin_thread(
     try:
         from backend.core.providers.registry import get_provider_for_tournament
         provider = await get_provider_for_tournament(set_data.get("tournament_slug") or "", set_data.get("workspace_id"))
-        result = await provider.mark_called(set_id)
+        from backend.core.provider_commands import DurableProviderMutationService
+        result = await DurableProviderMutationService(
+            workspace_id=str(set_data.get("workspace_id") or "")
+        ).dispatch(
+            match_id=set_id, action="mark_called", payload={"set_id": set_id},
+            operation=lambda: provider.mark_called(set_id),
+            precondition_revision=set_data.get("provider_revision"),
+        )
         if result.success:
             await add_bot_feed(
                 f"📣 Called on start.gg: {p1_name} vs {p2_name} — start.gg check-in started.", "info"

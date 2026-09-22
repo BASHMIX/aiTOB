@@ -30,7 +30,7 @@ class _DummyProvider:
         return _DummyResult()
 
 
-async def _dummy_get_provider(slug):
+async def _dummy_get_provider(slug, workspace_id):
     return _DummyProvider()
 
 

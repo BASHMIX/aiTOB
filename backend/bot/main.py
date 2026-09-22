@@ -48,6 +48,8 @@ class TournamentBot(commands.Bot):
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
         await _runtime_tasks.close()
+        from backend.core.providers.registry import shutdown_providers
+        await shutdown_providers()
         await super().close()
 
 
@@ -479,8 +481,19 @@ async def verify_confirm_command(interaction: discord.Interaction):
     slug = pending["startgg_slug"]
     code = pending["code"]
 
-    from core.providers.startgg.client import get_client
-    sgg = get_client()
+    from core.integrations import list_integration_accounts
+    from core.providers.registry import get_provider_for_account
+    account = next((
+        item for item in await list_integration_accounts(workspace_id)
+        if item.get("provider_type") == "startgg" and item.get("status") == "active"
+    ), None)
+    if not account or not workspace_id:
+        await interaction.followup.send(
+            "❌ This tournament workspace has no active Start.gg connection.",
+            ephemeral=True,
+        )
+        return
+    sgg = await get_provider_for_account("startgg", str(account["id"]), str(workspace_id))
     user = await sgg.fetch_user_by_slug(slug)
     if not user:
         await interaction.followup.send(

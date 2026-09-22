@@ -512,8 +512,8 @@ TABLE_SCHEMAS = [
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''',
-    # Provider V2 foundation tables. They are intentionally dark: init_db only
-    # creates storage and starts no worker, backfill, or reconciliation action.
+    # Canonical provider durability tables. Remote mutations and recoverable
+    # local effects use these ledgers in the active runtime path.
     '''
     CREATE TABLE IF NOT EXISTS provider_command_ledger (
         id TEXT PRIMARY KEY,
@@ -959,7 +959,7 @@ TABLE_SCHEMAS = [
         discord_member_observed_at TIMESTAMP,
         discord_link_updated_by TEXT,
         discord_link_updated_at TIMESTAMP,
-        provider_identity_link_id TEXT,
+        provider_identity_link_id BIGINT,
         provider_entrant_id TEXT,
         provider_user_id TEXT,
         prefix TEXT,

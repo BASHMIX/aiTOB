@@ -283,7 +283,7 @@ async def upsert_enrollment(
     provider_user_id: str | None = None,
     prefix: str | None = None,
     gamertag: str | None = None,
-    provider_identity_link_id: str | None = None,
+    provider_identity_link_id: int | None = None,
     membership_state: str = "unmatched",
     state: str = "awaiting_provider",
 ) -> dict[str, Any]:

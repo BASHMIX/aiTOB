@@ -102,7 +102,7 @@ def test_removed_embedded_database_cannot_reenter_runtime_or_dependencies():
     root = Path(__file__).resolve().parents[2]
     forbidden = (
         "sql" + "ite",
-        "aio" + "sqlite",
+        "aio" + "sql" + "ite",
         "DB_" + "PATH",
         "PRA" + "GMA",
     )

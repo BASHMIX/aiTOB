@@ -36,11 +36,11 @@ def test_provider_exposes_single_player_forfeit_only_when_both_opt_in_flags_are_
     monkeypatch.setenv("CHALLONGE_SCORE_COMMANDS_ENABLED", "true")
     monkeypatch.setenv("CHALLONGE_DQ_COMMANDS_ENABLED", "true")
     provider = ChallongeProvider()
-    assert provider.capabilities_v2.for_action("report_forfeit").kind is ProviderActionKind.REMOTE
+    assert provider.capabilities.for_action("report_forfeit").kind is ProviderActionKind.REMOTE
 
 
 def test_provider_hides_single_player_forfeit_without_explicit_dq_opt_in(monkeypatch):
     monkeypatch.setenv("CHALLONGE_SCORE_COMMANDS_ENABLED", "true")
     monkeypatch.delenv("CHALLONGE_DQ_COMMANDS_ENABLED", raising=False)
     provider = ChallongeProvider()
-    assert provider.capabilities_v2.for_action("report_forfeit").kind is ProviderActionKind.UNAVAILABLE
+    assert provider.capabilities.for_action("report_forfeit").kind is ProviderActionKind.UNAVAILABLE

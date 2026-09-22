@@ -108,9 +108,9 @@ class ProviderSetResult:
     diagnostics: Optional[Mapping[str, Any]] = None
 
 
-# ── Provider V2 dark-launch contracts ─────────────────────────────────────
-# These types deliberately coexist with the legacy ProviderSet/ITournamentProvider
-# contract. No runtime consumer imports them until a later feature-flagged phase.
+# ── Canonical synchronization and durable-command value objects ────────────
+# The V2 suffix is retained only as a persisted/wire-schema compatibility name;
+# runtime providers implement one ITournamentProvider contract.
 
 
 class SnapshotScope(str, Enum):

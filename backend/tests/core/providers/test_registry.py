@@ -1,142 +1,101 @@
-import pytest
-from unittest.mock import Mock, AsyncMock
+from unittest.mock import AsyncMock
 
-from backend.core.contracts import ITournamentProvider
+import pytest
+
 from backend.core.providers.registry import (
-    register_provider,
-    get_provider,
+    ProviderRegistry,
+    get_provider_for_account,
     get_provider_for_tournament,
+    provider_registry,
     shutdown_providers,
-    _providers
 )
 from backend.core.providers.startgg import StartGGProvider
 
 
-class MockProvider(ITournamentProvider):
-    @property
-    def provider_name(self) -> str:
-        return "mock_provider"
-
-    async def fetch_tournament(self, slug_or_id: str): pass
-    async def fetch_sets(self, slug_or_id: str): pass
-    async def fetch_set_state(self, set_id: str): pass
-    async def fetch_set_entrant_order(self, set_id: str): pass
-    async def report_score(self, set_id, winner_id, e1_id, e2_id, e1_score, e2_score): pass
-    async def report_winner_only(self, set_id, winner_id): pass
-    async def mark_in_progress(self, set_id): pass
-    async def mark_dq(self, set_id, winner_id): pass
-    async def reset_set(self, set_id): pass
-    async def close(self): pass
-
-
 @pytest.fixture(autouse=True)
-def clear_registry():
-    """Ensure the registry is clear before and after each test."""
-    _providers.clear()
+def clear_registry_instances():
+    provider_registry.clear_for_tests()
     yield
-    _providers.clear()
+    provider_registry.clear_for_tests()
 
 
-def test_get_provider_lazy_init_startgg():
-    assert "startgg" not in _providers
-    provider = get_provider("startgg")
-    assert isinstance(provider, StartGGProvider)
-    assert "startgg" in _providers
-    assert _providers["startgg"] is provider
-
-
-def test_get_provider_unknown_raises_error():
-    with pytest.raises(ValueError, match="Unknown provider: custom. Register it first."):
-        get_provider("custom")
-
-
-def test_register_and_get_custom_provider():
-    mock_provider = MockProvider()
-    register_provider("custom", mock_provider)
-
-    assert "custom" in _providers
-    provider = get_provider("custom")
-    assert provider is mock_provider
-
-
-def test_get_provider_returns_same_instance():
-    provider1 = get_provider("startgg")
-    provider2 = get_provider("startgg")
-
-    assert provider1 is provider2
-    assert isinstance(provider1, StartGGProvider)
+def test_local_registry_rejects_unknown_provider():
+    registry = ProviderRegistry()
+    with pytest.raises(ValueError, match="Unknown provider: custom"):
+        registry.resolve("custom", workspace_id="workspace-a", account_id="account-a")
 
 
 @pytest.mark.asyncio
-async def test_get_provider_for_tournament():
-    # An unbound provider must fail closed; there is no global credential path.
-    from backend.core.database import init_db
-    await init_db()
-    with pytest.raises(ValueError, match="integration account"):
-        await get_provider_for_tournament("any_slug")
+async def test_account_resolution_is_scoped_and_cached(monkeypatch):
+    account_lookup = AsyncMock(return_value={
+        "id": "account-a", "workspace_id": "workspace-a",
+        "provider_type": "startgg", "status": "active",
+    })
+    monkeypatch.setattr("backend.core.integrations.get_integration_account", account_lookup)
+
+    first = await get_provider_for_account("startgg", "account-a", "workspace-a")
+    second = await get_provider_for_account("startgg", "account-a", "workspace-a")
+
+    assert isinstance(first, StartGGProvider)
+    assert first is second
+    assert first._client.provider_account_id == "account-a"
+    assert account_lookup.await_count == 2
 
 
 @pytest.mark.asyncio
-async def test_owned_startgg_tournament_requires_integration_account(monkeypatch):
-    """Workspace-owned provider resolution cannot use the global credential."""
+async def test_account_resolution_rejects_foreign_or_disabled_account(monkeypatch):
+    monkeypatch.setattr(
+        "backend.core.integrations.get_integration_account", AsyncMock(return_value=None)
+    )
+    with pytest.raises(ValueError, match="not available in this workspace"):
+        await get_provider_for_account("startgg", "foreign", "workspace-a")
+
+
+@pytest.mark.asyncio
+async def test_tournament_resolution_requires_workspace_binding(monkeypatch):
     from backend.core import database
 
-    monkeypatch.setattr(
-        database,
-        "get_tournament",
-        AsyncMock(return_value={
-            "slug": "owned/event",
-            "provider_type": "startgg",
-            "workspace_id": "workspace-a",
-            "provider_account_id": None,
-        }),
-    )
+    monkeypatch.setattr(database, "get_tournament", AsyncMock(return_value={
+        "slug": "owned/event", "provider_type": "startgg",
+        "workspace_id": "workspace-a", "provider_account_id": None,
+    }))
     with pytest.raises(ValueError, match="not bound to an integration account"):
         await get_provider_for_tournament("owned/event", "workspace-a")
 
 
 @pytest.mark.asyncio
-async def test_owned_startgg_tournament_uses_selected_integration_account(monkeypatch):
+async def test_tournament_resolution_uses_selected_account(monkeypatch):
     from backend.core import database
 
+    monkeypatch.setattr(database, "get_tournament", AsyncMock(return_value={
+        "slug": "owned/event", "provider_type": "startgg",
+        "workspace_id": "workspace-a", "provider_account_id": "account-a",
+    }))
     monkeypatch.setattr(
-        database,
-        "get_tournament",
+        "backend.core.integrations.get_integration_account",
         AsyncMock(return_value={
-            "slug": "owned/event",
-            "provider_type": "startgg",
-            "workspace_id": "workspace-a",
-            "provider_account_id": "sgg-account-a",
+            "id": "account-a", "workspace_id": "workspace-a",
+            "provider_type": "startgg", "status": "active",
         }),
     )
+
     provider = await get_provider_for_tournament("owned/event", "workspace-a")
     assert isinstance(provider, StartGGProvider)
-    assert provider._client.provider_account_id == "sgg-account-a"
+    assert provider._client.provider_account_id == "account-a"
 
 
 @pytest.mark.asyncio
-async def test_unscoped_startgg_resolution_fails_closed_outside_tools(monkeypatch):
-    from backend.core import database
-
-    monkeypatch.delenv("AITOB_TESTING", raising=False)
+async def test_shutdown_closes_account_scoped_instances(monkeypatch):
     monkeypatch.setattr(
-        database,
-        "get_tournament",
-        AsyncMock(return_value={"slug": "legacy/event", "provider_type": "startgg"}),
+        "backend.core.integrations.get_integration_account",
+        AsyncMock(return_value={
+            "id": "account-a", "workspace_id": "workspace-a",
+            "provider_type": "startgg", "status": "active",
+        }),
     )
-    with pytest.raises(ValueError, match="integration account"):
-        await get_provider_for_tournament("legacy/event")
-
-
-@pytest.mark.asyncio
-async def test_shutdown_providers():
-    mock_provider = MockProvider()
-    mock_provider.close = AsyncMock()
-
-    register_provider("mock", mock_provider)
-    assert len(_providers) == 1
+    provider = await get_provider_for_account("startgg", "account-a", "workspace-a")
+    provider.close = AsyncMock()
 
     await shutdown_providers()
 
-    mock_provider.close.assert_awaited_once()
-    assert len(_providers) == 0
+    provider.close.assert_awaited_once()

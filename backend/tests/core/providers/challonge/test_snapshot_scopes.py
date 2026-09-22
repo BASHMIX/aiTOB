@@ -36,7 +36,7 @@ async def test_full_snapshot_uses_paginated_participants_and_matches_then_declar
     client = _Client()
     provider = ChallongeProvider(client)
 
-    snapshot = await provider.fetch_snapshot_v2(_request(SnapshotScope.FULL_SNAPSHOT))
+    snapshot = await provider.fetch_snapshot(_request(SnapshotScope.FULL_SNAPSHOT))
 
     assert client.participant_calls == client.match_calls == 1
     assert len(snapshot.payload["sets"]) == 1
@@ -48,8 +48,8 @@ async def test_full_snapshot_uses_paginated_participants_and_matches_then_declar
 async def test_participant_ttl_avoids_repeat_read_and_targeted_scope_only_returns_requested_match():
     client = _Client()
     provider = ChallongeProvider(client)
-    await provider.fetch_snapshot_v2(_request(SnapshotScope.ACTIVE_MATCHES))
-    snapshot = await provider.fetch_snapshot_v2(
+    await provider.fetch_snapshot(_request(SnapshotScope.ACTIVE_MATCHES))
+    snapshot = await provider.fetch_snapshot(
         _request(SnapshotScope.SINGLE_MATCH, entity_ids=frozenset({"m1"}))
     )
 

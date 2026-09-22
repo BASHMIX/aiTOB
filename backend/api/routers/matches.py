@@ -113,7 +113,13 @@ async def _sync_provider_stream(set_id: str, station_id: Optional[str], tourname
         return  # Station has no start.gg stream mapping — local-only, no-op.
     try:
         provider = await get_provider_for_tournament(tournament_slug or "", workspace_id)
-        result = await provider.assign_stream(set_id, stream_id)
+        from backend.core.provider_commands import DurableProviderMutationService
+        result = await DurableProviderMutationService(
+            workspace_id=str(workspace_id or "")
+        ).dispatch(
+            match_id=set_id, action="assign_stream", payload={"stream_id": stream_id},
+            operation=lambda: provider.assign_stream(set_id, stream_id),
+        )
         if not result.success:
             await add_bot_feed(
                 f"assignStream skipped for {set_id}: {result.error_message}", "warn"
@@ -126,7 +132,13 @@ async def _remove_provider_stream(set_id: str, tournament_slug: str, workspace_i
     """Best-effort removal of a set from the provider stream queue."""
     try:
         provider = await get_provider_for_tournament(tournament_slug or "", workspace_id)
-        await provider.remove_stream(set_id)
+        from backend.core.provider_commands import DurableProviderMutationService
+        await DurableProviderMutationService(
+            workspace_id=str(workspace_id or "")
+        ).dispatch(
+            match_id=set_id, action="remove_stream", payload={"set_id": set_id},
+            operation=lambda: provider.remove_stream(set_id),
+        )
     except Exception as e:
         await add_bot_feed(f"removeStream error for {set_id}: {e}", "warn")
 
@@ -483,7 +495,14 @@ async def api_reset_match(set_id: str, principal: SessionPrincipal = Depends(req
     tournament_slug = (m or {}).get('tournament_slug') or ''
     try:
         provider = await get_provider_for_tournament(tournament_slug, _ws(principal))
-        await provider.reset_set(set_id)
+        from backend.core.provider_commands import DurableProviderMutationService
+        await DurableProviderMutationService(
+            workspace_id=str(_ws(principal) or "")
+        ).dispatch(
+            match_id=set_id, action="reset_match", payload={"set_id": set_id},
+            operation=lambda: provider.reset_set(set_id),
+            precondition_revision=(m or {}).get("provider_revision"),
+        )
     except Exception as e:
         print(f"Provider reset failed: {e}")
     # Also drop from the stream queue — a reset set shouldn't sit in "On Stream".

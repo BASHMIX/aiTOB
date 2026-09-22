@@ -29,7 +29,7 @@ setup, testing, and operating-policy reference.
 - Discord bot: `backend/bot/`
 - Frontend: `frontend-react/`
 - Executable workflow definition: `docs/workflows.json`
-- Open provider consolidation: `specs/002-challonge-support/phase-11-legacy-removal-plan.md`
+- Provider consolidation record: `specs/002-challonge-support/phase-11-legacy-removal-plan.md`
 
 ## Commands
 

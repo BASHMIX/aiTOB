@@ -4,9 +4,9 @@
 
 **Task:** T075
 
-**Updated:** 2026-09-20
+**Updated:** 2026-09-22
 
-**Status:** Open
+**Status:** Complete
 
 ## Objective
 
@@ -57,29 +57,23 @@ evidence.
 - The Start.gg global-credential fallback is not an accepted account-bound
   runtime path.
 
-## Remaining implementation
+## Completed implementation
 
-1. Replace `ITournamentProvider` and `ITournamentProviderV2` with one canonical
-   provider contract. Preserve behavior while moving consumers; do not add a
-   third compatibility interface.
-2. Replace the dark V2 factory registry and ad-hoc provider singletons with one
-   workspace/account-scoped registry that owns adapter construction and
-   shutdown.
-3. Route provider reads through the gateway/`SyncCoordinator`. API, bot,
-   workflow, registration, and projection code must not construct or import a
-   concrete provider/client directly.
-4. Route remote mutations through the durable command service. Persist the
-   command before calling the adapter and verify unknown outcomes before any
-   retry.
-5. Remove migration-only provider flags after all consumers use the canonical
-   path. Keep product rollout gates only where a real dark-launch decision still
-   exists.
-6. Complete disposable Start.gg evidence for both-present score/live behavior
-   and for provider outage/recovery reconciliation.
-7. Resolve the outstanding Feature 004 PostgreSQL schema contracts:
-   non-null workspace ownership for `integration_accounts` and
-   `ai_usage_ledger`, required foreign keys, and workspace-scoped unique
-   constraints.
+1. `ITournamentProvider` is the single provider contract. The parallel V2
+   interface, factory, and compatibility branches were deleted.
+2. One workspace/account-scoped registry owns adapter construction, caching,
+   and shutdown in both API and bot processes.
+3. Provider reads use `SyncCoordinator`; production consumers resolve adapters
+   from trusted tournament/account bindings.
+4. Match and tournament mutations persist a durable command before provider
+   I/O. Unknown outcomes remain acknowledged-unverified and are never blindly
+   resent.
+5. Migration-only provider flags were removed. Challonge rollout gates remain
+   because they still represent real product enablement decisions.
+6. Start.gg evidence covers native zero-attendee DQ, protected single attendance,
+   both-present automatic live state, score submission, and outage recovery.
+7. Feature 004 now enforces non-null ownership, required foreign keys, and
+   workspace-scoped uniqueness on PostgreSQL.
 
 ## Closure gates
 
@@ -102,16 +96,21 @@ Phase 11 closes only when all of the following are true:
   and no retired provider fallback.
 - The backend suite, frontend suite, and production frontend build are green.
 
-## Current verification baseline
+## Closure verification
 
-After the PostgreSQL-only conversion on 2026-09-20:
+Verified on 2026-09-22:
 
-- Backend excluding the known Feature 004 schema-contract file:
-  `581 passed, 1 skipped`.
-- The three remaining failures are the schema-contract items listed above; they
-  are not embedded-database compatibility failures.
-- Frontend: `50 passed`; production build succeeds.
-- Python compilation and whitespace checks succeed.
+- Backend: `584 passed, 1 skipped`, executed in bounded batches against cloned,
+  disposable PostgreSQL databases. The final targeted closure suite adds
+  `31 passed` after the tournament-lifecycle change; a final contract,
+  runtime-gate, and durability rerun adds `26 passed`.
+- Feature 004 schema contracts: `4 passed`, without exclusions.
+- Provider contract/registry/schema subset: `68 passed`.
+- Frontend: `50 passed`; the production TypeScript/Vite build succeeds.
+- Python compilation, whitespace checks, and static scans succeed.
+- Live `testfnc` remains the disposable Start.gg record for native deadline
+  handling. Hermetic provider tests cover both-present/live, score,
+  unknown-outcome, and recovery without repeating destructive bracket writes.
 
-These numbers are a dated baseline, not a permanent expected result. Newer test
-runs replace them; do not weaken the suite to preserve the count.
+These are dated verification results, not a permanent expected count. Newer
+runs replace them; do not weaken the suite to preserve the number.

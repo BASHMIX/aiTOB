@@ -5,26 +5,24 @@ does not expose credentials, tokens, or raw request data.
 """
 from __future__ import annotations
 
-from backend.core.contracts import ITournamentProvider, ITournamentProviderV2
+from backend.core.contracts import ITournamentProvider
 
 
 def provider_capability_projection(provider: ITournamentProvider) -> dict:
-    if not isinstance(provider, ITournamentProviderV2):
-        return {"contract_version": "legacy", "actions": []}
     return {
-        "contract_version": "v2",
+        "contract_version": "canonical",
         "actions": [
             {
                 "action": action,
                 "availability": capability.kind.value,
                 "reason": capability.reason,
             }
-            for action, capability in sorted(provider.capabilities_v2.actions.items())
+            for action, capability in sorted(provider.capabilities.actions.items())
         ],
-        "supports_incremental_sync": provider.capabilities_v2.supports_incremental_sync,
-        "supports_targeted_match_fetch": provider.capabilities_v2.supports_targeted_match_fetch,
-        "supports_remote_revision": provider.capabilities_v2.supports_remote_revision,
-        "supports_idempotency": provider.capabilities_v2.supports_idempotency,
+        "supports_incremental_sync": provider.capabilities.supports_incremental_sync,
+        "supports_targeted_match_fetch": provider.capabilities.supports_targeted_match_fetch,
+        "supports_remote_revision": provider.capabilities.supports_remote_revision,
+        "supports_idempotency": provider.capabilities.supports_idempotency,
     }
 
 

@@ -385,24 +385,6 @@ async def startup_event():
         from backend.core.provider_sync_manager import sync_manager
         await sync_manager.restore_live_schedules()
 
-    # Permission probes are an explicit operator action.  Starting the API
-    # must not create an external provider request merely because a token is
-    # configured; this is especially important during recovery/cutover.  Set
-    # STARTGG_TOKEN_PROBE_ON_STARTUP=true only in an acceptance runbook that
-    # explicitly wants the probe.
-    if os.getenv("STARTGG_TOKEN_PROBE_ON_STARTUP", "").strip().lower() in {"1", "true", "yes", "on"}:
-        async def run_token_probe():
-            try:
-                from backend.core.providers.startgg.client import get_client
-                client = get_client()
-                client.token = None # Force reload from settings/DB
-                probe_result = await client.probe_token_permissions()
-                await set_setting("token_scope_status", json.dumps(probe_result))
-                print("[SYS] Start.gg token probe complete")
-            except Exception:
-                print("[SYS] Startup Start.gg token probe failed")
-        _start_background(run_token_probe())
-
     # A fresh snapshot is required before bot/admin workflows consume saved sets.
     await sync_tracked_tournaments()
     # Start the periodic reconciliation loop in background
@@ -425,6 +407,8 @@ async def shutdown_event():
         _recovery_service = None
     from backend.core.provider_sync_manager import sync_manager
     await sync_manager.close_live_schedules()
+    from backend.core.providers.registry import shutdown_providers
+    await shutdown_providers()
 
 
 # WebSocket Endpoint

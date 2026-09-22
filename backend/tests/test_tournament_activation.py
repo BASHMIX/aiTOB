@@ -11,6 +11,11 @@ async def test_materialize_and_activate_are_idempotent(tmp_path, monkeypatch):
     async with database.dbapi.connect(database.DATABASE_DSN) as db:
         await db.execute("INSERT INTO workspaces(id,slug,name) VALUES ('w','w','W')")
         await db.execute("INSERT INTO users(id,email,display_name,password_hash) VALUES ('u','u@example.com','U','x')")
+        await db.execute(
+            """INSERT INTO integration_accounts
+               (id, owner_id, workspace_id, provider_type, external_account_id, display_name)
+               VALUES ('a', 'w', 'w', 'startgg', 'remote-a', 'Start.gg')"""
+        )
         await db.commit()
     draft = await create_draft("w", "u")
     draft = await patch_draft(draft["id"], "w", "u", section="provider_scope", value={"provider": "startgg", "account_id": "a", "selected_scope": {"external_id": "e", "name": "E"}, "tournament": {"external_id": "t", "canonical_slug": "t", "name": "T"}}, expected_revision=draft["revision"], current_step="provider")

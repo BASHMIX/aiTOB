@@ -2,7 +2,7 @@ from __future__ import annotations
 import time
 from datetime import UTC, datetime
 from backend.core.contracts import (
-    ITournamentProvider, ITournamentProviderV2, ProviderSetState, ProviderSetResult,
+    ITournamentProvider, ProviderSetState, ProviderSetResult,
     ProviderEntrant, ProviderActionKind, ProviderCapabilitiesV2, ProviderCapability,
     ProviderSnapshotRequestV2, ProviderSnapshotV2, SnapshotScope, SyncCostClass,
 )
@@ -13,7 +13,7 @@ from .mapper import map_tournament, map_match
 from .state_map import map_state
 from .forfeit_policy import ForfeitPolicy
 
-class ChallongeProvider(ITournamentProvider, ITournamentProviderV2):
+class ChallongeProvider(ITournamentProvider):
     def __init__(self, client: ChallongeClient | None = None, *, provider_account_id: str = "default"):
         self._client = client or ChallongeClient(account_id=provider_account_id)
         self.provider_account_id = provider_account_id
@@ -23,7 +23,7 @@ class ChallongeProvider(ITournamentProvider, ITournamentProviderV2):
     @property
     def provider_type(self) -> str: return "challonge"
     @property
-    def capabilities_v2(self) -> ProviderCapabilitiesV2:
+    def capabilities(self) -> ProviderCapabilitiesV2:
         flags = get_provider_feature_flags()
         unavailable = ProviderCapability(ProviderActionKind.UNAVAILABLE, "Challonge mutations are disabled until their later release gates.")
         score = (
@@ -76,7 +76,7 @@ class ChallongeProvider(ITournamentProvider, ITournamentProviderV2):
         self._participants_cache[key] = (time.monotonic(), people)
         return people
 
-    async def fetch_snapshot_v2(self, request: ProviderSnapshotRequestV2) -> ProviderSnapshotV2:
+    async def fetch_snapshot(self, request: ProviderSnapshotRequestV2) -> ProviderSnapshotV2:
         """Read only the provider data needed for one declared snapshot scope.
 
         Challonge currently has no proven per-match endpoint in this integration, so
@@ -119,8 +119,8 @@ class ChallongeProvider(ITournamentProvider, ITournamentProviderV2):
                                   covered_scopes=frozenset(covered), covered_entity_ids=covered_entities,
                                   revision=remote_revision, cost_class=SyncCostClass.NORMAL)
 
-    async def execute_remote_command_v2(self, command):
-        """Phase 5 is read-only: command execution remains a later ledger concern."""
+    async def execute_remote_command(self, command):
+        """Refuse unleased writes; mutations use the durable command service."""
         from backend.core.contracts import ProviderCommandResultV2, ProviderCommandState
         return ProviderCommandResultV2(
             command_id=command.command_id,
@@ -217,7 +217,7 @@ class ChallongeProvider(ITournamentProvider, ITournamentProviderV2):
             tournament_id=f"{tournament_id}@{community}" if community else tournament_id,
             scope=SnapshotScope.RESULT_VERIFICATION, entity_ids=frozenset({set_id}),
         )
-        snapshot = await self.fetch_snapshot_v2(request)
+        snapshot = await self.fetch_snapshot(request)
         target = next((item for item in snapshot.payload.get("sets", []) if item.id == set_id), None)
         if not target:
             return False

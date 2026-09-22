@@ -1,17 +1,9 @@
 import httpx
 import asyncio
-import os
 import time
 from typing import Dict, Any, List, Optional
-from dotenv import load_dotenv
 from backend.core.providers.startgg import queries
-
-load_dotenv()
-
-STARTGG_API_TOKEN = os.getenv("STARTGG_API_TOKEN")
 STARTGG_API_URL = "https://api.start.gg/gql/alpha"
-
-_client_instance: Optional["StartGGClient"] = None
 
 
 class StartGGGraphQLError(RuntimeError):
@@ -38,12 +30,6 @@ class StartGGGraphQLError(RuntimeError):
             "path": [str(part)[:80] for part in self.path[:8]],
             "type": self.error_type,
         }
-
-def get_client() -> "StartGGClient":
-    global _client_instance
-    if _client_instance is None:
-        _client_instance = StartGGClient()
-    return _client_instance
 
 class StartGGClient:
     MAX_RETRIES = 3
@@ -393,34 +379,6 @@ class StartGGClient:
             return True
         except Exception as e:
             print(f"Failed to mark DQ: {e}")
-            return False
-
-    async def mark_set_double_dq(self, set_id: str, entrant1_id: str, entrant2_id: str) -> bool:
-        """Resolve a double no-show set on Start.gg.
-
-        Start.gg's reportBracketSet requires a winnerId, so a single set cannot
-        flag BOTH entrants DQ in one mutation. We DQ entrant2 (entrant1 advances
-        as the technical winner) purely so the set CLOSES and the bracket keeps
-        moving — the caller is responsible for recording both as DQ locally and
-        alerting the TO that the advanced slot may need handling upstream.
-        """
-        if str(set_id).startswith("preview"):
-            print(f"[STARTGG] Cannot double-DQ preview set {set_id}")
-            return False
-
-        # Ensure ACTIVE — a report requires a reportable state.
-        try:
-            state = await self.fetch_set_state(set_id)
-            if state in (None, 1):  # CREATED or unknown — try to advance
-                await self.mark_in_progress(set_id)
-        except Exception as e:
-            print(f"[STARTGG] double-DQ pre-flight failed for {set_id}: {e}")
-
-        try:
-            await self.query(queries.MARK_SET_DQ, {"setId": set_id, "winnerId": entrant1_id})
-            return True
-        except Exception as e:
-            print(f"Failed to double-DQ: {e}")
             return False
 
     async def reset_set(self, set_id: str) -> bool:

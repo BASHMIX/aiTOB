@@ -10,7 +10,7 @@ from backend.core.database import (
     get_live_sync_state_v2, get_setting, cancel_pending_dispatcher_work,
     get_tournament_game_metadata, set_tournament_game_metadata,
 )
-from backend.core.providers.registry import get_provider, get_provider_for_tournament
+from backend.core.providers.registry import get_provider_for_account, get_provider_for_tournament
 from backend.core.contracts.tournament_types import ProviderSet, ProviderTournament
 from backend.core.provider_sync_manager import sync_manager, serialize_set
 from backend.core.provider_projection import tournament_provider_projection
@@ -167,6 +167,10 @@ async def api_tournament_lifecycle(slug: str, body: dict[str, object], principal
             # matches instead of publishing an empty projection.
             ignore_activity_guard=(action == "reset"),
         )
+        command_id = (result.diagnostics or {}).get("provider_command_id")
+        if command_id:
+            from backend.core.database import update_provider_command_state_v2
+            await update_provider_command_state_v2(str(command_id), "snapshot_verified")
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Provider changed state, but Hub sync failed: {exc}") from exc
     await hub_mgr.broadcast({"type": "match_update", "_workspace_id": workspace_id})
@@ -255,7 +259,11 @@ async def api_add_tournament(body: AddTournamentRequest, principal: SessionPrinc
         try:
             if not body.provider_account_id:
                 raise HTTPException(status_code=422, detail="Select a Challonge integration account before importing.")
-            resolved = await resolution_service.resolve(body.provider_account_id, slug, body.subdomain)
+            if not workspace_id:
+                raise HTTPException(status_code=409, detail="Workspace ownership is required")
+            resolved = await resolution_service.resolve(
+                body.provider_account_id, slug, body.subdomain, workspace_id=workspace_id
+            )
             stored = await persist_challonge_identity(
                 resolved, locator_key=resolved["locator_key"], workspace_id=_workspace(principal)
             )
@@ -269,18 +277,7 @@ async def api_add_tournament(body: AddTournamentRequest, principal: SessionPrinc
         except Exception as exc:
             raise HTTPException(status_code=502, detail="Challonge identity import failed.") from exc
     else:
-        flags = get_provider_feature_flags()
-        if (
-            provider_type == "startgg"
-            and _workspace(principal)
-            and flags.provider_v2_contracts_enabled
-            and flags.provider_coordinator_enabled
-            and not body.provider_account_id
-        ):
-            # Account-bound V2 imports must select an integration explicitly;
-            # never let a tenant-owned tournament silently use the platform
-            # credential bucket.  Legacy flags-off imports retain their
-            # existing compatibility behavior until migration is complete.
+        if provider_type == "startgg" and not body.provider_account_id:
             raise HTTPException(
                 status_code=422,
                 detail="Select a Start.gg integration account before importing.",
@@ -291,14 +288,15 @@ async def api_add_tournament(body: AddTournamentRequest, principal: SessionPrinc
                 slug = f"{parts[0]}/{parts[1]}"
         provider_id, provider_subdomain = slug, None
 
-    # Resolve an account-bound Start.gg adapter before the tournament row is
-    # persisted.  Calling the legacy singleton here would fetch the shared
-    # platform credential even when the request selected a workspace account.
-    if provider_type == "startgg" and body.provider_account_id:
-        from backend.core.providers.startgg import StartGGProvider
-        provider = StartGGProvider(provider_account_id=body.provider_account_id)
-    else:
-        provider = get_provider(provider_type)
+    workspace_id = _workspace(principal)
+    if not workspace_id or not body.provider_account_id:
+        raise HTTPException(status_code=422, detail="A workspace provider account is required.")
+    try:
+        provider = await get_provider_for_account(
+            provider_type, body.provider_account_id, workspace_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     info = await provider.fetch_tournament(f"{provider_id}@{provider_subdomain}" if provider_type == "challonge" and provider_subdomain else provider_id)
     if not info:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Could not find tournament on {provider.provider_name}: {slug}")
@@ -504,8 +502,10 @@ async def api_refresh_tournament(slug: str, principal: SessionPrincipal = Depend
             detail="Challonge identity imports do not refresh bracket or metadata in Phase 4.",
         )
     workspace_id = _workspace(principal)
+    if not workspace_id:
+        raise HTTPException(status_code=409, detail="Tournament workspace binding is required.")
     try:
-        provider = await get_provider_for_tournament(slug, workspace_id) if workspace_id else await get_provider_for_tournament(slug)
+        provider = await get_provider_for_tournament(slug, workspace_id)
     except ValueError as exc:
         # A tenant-owned tournament without a provider account is a
         # configuration dependency, not an unhandled server failure. Keep the
@@ -584,7 +584,9 @@ async def api_tournament_game_metadata(
     if cached and not refresh:
         return {**cached, "metadata_source": "cache", "metadata_stale": False}
 
-    provider = await get_provider_for_tournament(slug, workspace_id) if workspace_id else await get_provider_for_tournament(slug)
+    if not workspace_id:
+        raise HTTPException(status_code=409, detail="Tournament workspace binding is required.")
+    provider = await get_provider_for_tournament(slug, workspace_id)
     fetch_catalog = getattr(provider, "fetch_event_game_metadata", None)
     if fetch_catalog is None:
         raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="This provider does not expose a game catalog.")
@@ -666,7 +668,7 @@ async def api_list_tournament_events(slug: str, principal: SessionPrincipal = De
         raw = {}
     source_events = raw.get("events") or []
     # Wizard-materialized tournaments preserve the redacted provider preview
-    # under ``provider.scopes`` rather than copying the legacy raw tournament
+    # under ``provider.scopes`` rather than copying the raw tournament
     # payload. Project that selected Event shape here as well so the Hub can
     # restore event scope after a reload.
     if not source_events:
@@ -679,7 +681,7 @@ async def api_list_tournament_events(slug: str, principal: SessionPrincipal = De
     def fact_value(value: Any) -> Any:
         if not isinstance(value, dict):
             return value
-        # Wizard previews use fact wrappers while legacy provider snapshots
+        # Wizard previews use fact wrappers while raw provider snapshots
         # keep the GraphQL ``videogame { name }`` object.
         return value.get("value") or value.get("name")
 
@@ -747,8 +749,10 @@ async def api_verify_tournament_stream(slug: str, principal: SessionPrincipal = 
 
     # LIVE fetch (not the cache) — this is the whole point of the preflight.
     workspace_id = _workspace(principal)
+    if not workspace_id:
+        raise HTTPException(status_code=409, detail="Tournament workspace binding is required.")
     try:
-        provider = await get_provider_for_tournament(slug, workspace_id) if workspace_id else await get_provider_for_tournament(slug)
+        provider = await get_provider_for_tournament(slug, workspace_id)
     except ValueError as exc:
         # Missing tenant-owned provider configuration is actionable setup
         # state, not an unhandled server error or permission to use a global

@@ -7,7 +7,7 @@ from backend.core.provider_projection import provider_capability_projection, tou
 from backend.core.providers.startgg.provider import StartGGProvider
 
 
-def test_startgg_v2_profile_is_non_secret_and_declares_local_stream_removal():
+def test_startgg_canonical_profile_is_non_secret_and_declares_local_stream_removal():
     provider = StartGGProvider(client=AsyncMock(token="must-not-appear"))
     projection = tournament_provider_projection(
         {
@@ -19,20 +19,20 @@ def test_startgg_v2_profile_is_non_secret_and_declares_local_stream_removal():
     )
 
     actions = {item["action"]: item for item in projection["actions"]}
-    assert projection["contract_version"] == "v2"
+    assert projection["contract_version"] == "canonical"
     assert projection["provider_tournament_id"] == "tournament-1"
     assert actions["report_score"]["availability"] == "remote"
     assert actions["remove_stream"]["availability"] == "local"
     assert "must-not-appear" not in str(projection)
 
 
-def test_legacy_profile_has_no_v2_actions_or_credentials():
-    class LegacyProvider:
-        provider_name = "Legacy"
+def test_canonical_projection_has_one_contract_and_no_credentials():
+    provider = StartGGProvider(client=AsyncMock(token="must-not-appear"))
+    projection = provider_capability_projection(provider)
 
-    assert provider_capability_projection(LegacyProvider()) == {
-        "contract_version": "legacy", "actions": []
-    }
+    assert projection["contract_version"] == "canonical"
+    assert projection["actions"]
+    assert "must-not-appear" not in str(projection)
 
 
 async def test_tournament_profile_route_reads_saved_identity_without_a_provider_request(monkeypatch):
@@ -49,5 +49,5 @@ async def test_tournament_profile_route_reads_saved_identity_without_a_provider_
     response = await tournaments.api_provider_profile("fixture")
 
     assert response["provider_tournament_id"] == "remote-1"
-    assert response["contract_version"] == "v2"
+    assert response["contract_version"] == "canonical"
     client.query.assert_not_called()

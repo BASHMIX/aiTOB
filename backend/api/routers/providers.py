@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from typing import Optional
 from backend.api.auth import require_permission
 from backend.core.workspace_auth import SessionPrincipal
-from backend.core.providers.registry import get_provider
+from backend.core.providers.registry import describe_provider
 from backend.core.database import get_provider_usage
 from backend.core.entitlements import get_workspace_limit
 from backend.core.provider_projection import provider_capability_projection
@@ -24,7 +24,7 @@ def _workspace(principal: SessionPrincipal | object) -> str | None:
 async def provider_capabilities(provider_type: str, principal: SessionPrincipal = Depends(require_permission("workspace.read"))):
     """Local, non-secret capability declaration; never calls a provider API."""
     try:
-        provider = get_provider(provider_type)
+        provider = describe_provider(provider_type)
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
     return {
@@ -73,14 +73,15 @@ async def resolve_tournament(provider_type: str, body: ChallongeResolveRequest, 
         raise HTTPException(409, "Challonge read support is not enabled for this Hub.")
     from backend.core.integrations import get_integration_account
     workspace_id = _workspace(principal)
-    # Legacy direct callers are kept compatible during staged ownership
-    # migration; real account sessions must prove ownership of the account.
-    if workspace_id is not None:
-        account = await get_integration_account(body.provider_account_id, workspace_id=workspace_id)
-        if not account or account.get("provider_type") != "challonge":
-            raise HTTPException(404, "Challonge integration account not found")
+    if workspace_id is None:
+        raise HTTPException(409, "Workspace ownership is required")
+    account = await get_integration_account(body.provider_account_id, workspace_id=workspace_id)
+    if not account or account.get("provider_type") != "challonge":
+        raise HTTPException(404, "Challonge integration account not found")
     try:
-        return await resolution_service.resolve(body.provider_account_id, body.identifier, body.subdomain)
+        return await resolution_service.resolve(
+            body.provider_account_id, body.identifier, body.subdomain, workspace_id=workspace_id
+        )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     except ChallongeRateLimitError as exc:

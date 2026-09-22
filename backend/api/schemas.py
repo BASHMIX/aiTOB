@@ -3,13 +3,7 @@ from typing import Any, Optional, Literal, Dict, List
 
 
 class ProviderFeatureFlagsResponse(BaseModel):
-    """Non-secret feature-flag projection for future rollout diagnostics.
-
-    No route consumes this during Phase 1, preserving current API behavior.
-    """
-
-    provider_v2_contracts_enabled: bool = False
-    provider_coordinator_enabled: bool = False
+    """Non-secret product rollout diagnostics."""
     challonge_read_enabled: bool = False
     challonge_local_workflow_enabled: bool = False
     challonge_score_commands_enabled: bool = False

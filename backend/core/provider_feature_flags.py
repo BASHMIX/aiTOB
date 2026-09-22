@@ -1,4 +1,4 @@
-"""Dark-launch flags for provider migration and Tournament Setup rollout.
+"""Product rollout flags for Challonge and Tournament Setup.
 
 Every flag is disabled unless its environment variable is explicitly set to a
 truthy value.  Keeping the rollout controls in one immutable projection gives
@@ -19,9 +19,7 @@ def _enabled(value: str | None) -> bool:
 
 @dataclass(frozen=True)
 class ProviderFeatureFlags:
-    # Existing provider-isolation migration gates.
-    provider_v2_contracts_enabled: bool = False
-    provider_coordinator_enabled: bool = False
+    # Provider product rollout gates.
     challonge_read_enabled: bool = False
     challonge_local_workflow_enabled: bool = False
     challonge_score_commands_enabled: bool = False
@@ -54,8 +52,6 @@ def get_provider_feature_flags(
     """Read flags without caching so tests and controlled rollout stay explicit."""
     env = environment if environment is not None else os.environ
     return ProviderFeatureFlags(
-        provider_v2_contracts_enabled=_enabled(env.get("PROVIDER_V2_CONTRACTS_ENABLED")),
-        provider_coordinator_enabled=_enabled(env.get("PROVIDER_COORDINATOR_ENABLED")),
         challonge_read_enabled=_enabled(env.get("CHALLONGE_READ_ENABLED")),
         challonge_local_workflow_enabled=_enabled(
             env.get("CHALLONGE_LOCAL_WORKFLOW_ENABLED")

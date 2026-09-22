@@ -66,18 +66,6 @@ async def api_patch_settings(body: PatchSettingsRequest):
     d = body.model_dump(exclude_none=True)
     for k, v in d.items():
         await set_setting(k, str(v))
-    if "STARTGG_API_TOKEN" in d:
-        import asyncio
-        from backend.core.providers.startgg.client import get_client
-        import json
-        async def background_probe():
-            client = get_client()
-            client.token = None
-            res = await client.probe_token_permissions()
-            await set_setting("token_scope_status", json.dumps(res))
-            from backend.api.ws_manager import manager as hub_mgr
-            await hub_mgr.broadcast({"type": "match_update"})
-        asyncio.create_task(background_probe())
     return MessageResponse(message="Settings updated")
 
 
@@ -145,18 +133,6 @@ async def api_patch_env(body: PatchEnvRequest):
         await delete_connections([
             "CHALLONGE_OAUTH_ACCESS_TOKEN", "CHALLONGE_OAUTH_REFRESH_TOKEN", "CHALLONGE_OAUTH_EXPIRES_AT",
         ])
-    if "STARTGG_API_TOKEN" in d:
-        import asyncio
-        from backend.core.providers.startgg.client import get_client
-        import json
-        async def background_probe():
-            client = get_client()
-            client.token = None
-            res = await client.probe_token_permissions()
-            await set_setting("token_scope_status", json.dumps(res))
-            from backend.api.ws_manager import manager as hub_mgr
-            await hub_mgr.broadcast({"type": "match_update"})
-        asyncio.create_task(background_probe())
     return MessageResponse(message="Environment updated")
 
 
@@ -169,16 +145,8 @@ async def api_patch_env(body: PatchEnvRequest):
     operation_id="testStartggToken"
 )
 async def api_trigger_token_check():
-    """Manually trigger the safe authentication and mutation write permission probe on the configured Start.gg token."""
-    from backend.core.providers.startgg.client import get_client
-    import json
-    client = get_client()
-    client.token = None # Force reload
-    result = await client.probe_token_permissions()
-    await set_setting("token_scope_status", json.dumps(result))
-    from backend.api.ws_manager import manager as hub_mgr
-    await hub_mgr.broadcast({"type": "match_update"})
-    return result
+    """Reject the retired global-token probe."""
+    raise HTTPException(410, "Global Start.gg tokens are retired. Test the Workspace integration account instead.")
 
 
 @router.post(

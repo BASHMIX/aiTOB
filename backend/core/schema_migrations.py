@@ -36,6 +36,7 @@ async def apply_postgres_schema(db):
         await db.execute(statement)
         await db.execute("INSERT INTO schema_migration_history (migration_id, phase) VALUES (?, ?)", (migration_id, phase))
     await apply_workspace_constraint_migrations(db)
+    await apply_tournament_setup_constraints(db)
     if os.getenv("AITOB_ENFORCE_WORKSPACE_NOT_NULL", "").strip().lower() in {"1", "true", "yes"}:
         await enforce_postgres_workspace_ownership(db)
     # Caller commits the schema and its receipts in the same transaction.
@@ -130,3 +131,159 @@ async def apply_workspace_constraint_migrations(db):
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_overlays_workspace_name "
         "ON overlays (workspace_id, name)"
     )
+
+
+async def _ensure_foreign_key(
+    db, source_table: str, source_column: str, target_table: str, target_column: str
+) -> None:
+    row = await (await db.execute(
+        """SELECT 1
+             FROM pg_constraint c
+             JOIN pg_class r ON r.oid=c.conrelid
+             JOIN pg_attribute a ON a.attrelid=r.oid AND a.attnum=ANY(c.conkey)
+            WHERE c.contype='f' AND r.relname=? AND a.attname=?
+              AND c.confrelid=?::regclass""",
+        (source_table, source_column, target_table),
+    )).fetchone()
+    if row:
+        return
+    suffix = hashlib.sha256(
+        f"{source_table}:{source_column}:{target_table}:{target_column}".encode()
+    ).hexdigest()[:10]
+    await db.execute(
+        f'ALTER TABLE "{source_table}" ADD CONSTRAINT "fk_phase11_{suffix}" '
+        f'FOREIGN KEY ("{source_column}") REFERENCES "{target_table}"("{target_column}")'
+    )
+
+
+async def apply_tournament_setup_constraints(db):
+    """Finish Feature 004 ownership and cross-aggregate PostgreSQL contracts."""
+    await db.execute(
+        "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS id TEXT "
+        "GENERATED ALWAYS AS (slug) STORED"
+    )
+    await db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_tournaments_canonical_id ON tournaments(id)"
+    )
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS player_identities (
+               id TEXT PRIMARY KEY,
+               workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+               discord_user_id TEXT NOT NULL,
+               prefix TEXT,
+               gamertag TEXT,
+               created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+               updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+               UNIQUE(workspace_id, discord_user_id)
+           )"""
+    )
+
+    await db.execute(
+        "ALTER TABLE ai_usage_ledger ADD COLUMN IF NOT EXISTS tournament_id TEXT"
+    )
+    await db.execute(
+        "ALTER TABLE ai_usage_ledger ADD COLUMN IF NOT EXISTS integration_account_id TEXT"
+    )
+    await db.execute(
+        "ALTER TABLE tournament_player_enrollments "
+        "ALTER COLUMN provider_identity_link_id TYPE BIGINT "
+        "USING NULLIF(provider_identity_link_id::TEXT, '')::BIGINT"
+    )
+    await db.execute(
+        """UPDATE integration_accounts a
+              SET workspace_id=a.owner_id
+            WHERE a.workspace_id IS NULL
+              AND EXISTS (SELECT 1 FROM workspaces w WHERE w.id=a.owner_id)"""
+    )
+    await db.execute(
+        """UPDATE ai_usage_ledger u
+              SET workspace_id=t.workspace_id,
+                  tournament_id=t.id
+             FROM tournaments t
+            WHERE u.tournament_slug=t.slug
+              AND (u.workspace_id IS NULL OR u.tournament_id IS NULL)"""
+    )
+    await db.execute(
+        """UPDATE ai_usage_ledger u
+              SET integration_account_id=c.selected_account_id
+             FROM workspace_ai_configs c
+            WHERE u.workspace_id=c.workspace_id
+              AND u.integration_account_id IS NULL"""
+    )
+    await db.execute("ALTER TABLE integration_accounts ALTER COLUMN workspace_id SET NOT NULL")
+    await db.execute("ALTER TABLE ai_usage_ledger ALTER COLUMN workspace_id SET NOT NULL")
+
+    await db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_integration_accounts_workspace_identity "
+        "ON integration_accounts(workspace_id, provider_type, external_account_id)"
+    )
+    await db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_enrollments_workspace_discord "
+        "ON tournament_player_enrollments(workspace_id, tournament_id, discord_user_id) "
+        "WHERE discord_user_id IS NOT NULL"
+    )
+    await db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_enrollments_workspace_entrant "
+        "ON tournament_player_enrollments(workspace_id, tournament_id, provider_entrant_id) "
+        "WHERE provider_entrant_id IS NOT NULL"
+    )
+
+    foreign_keys = (
+        ("tournament_setup_drafts", "workspace_id", "workspaces", "id"),
+        ("tournament_setup_drafts", "created_by", "users", "id"),
+        ("tournament_setup_drafts", "updated_by", "users", "id"),
+        ("tournament_setup_drafts", "provider_account_id", "integration_accounts", "id"),
+        ("tournament_setup_drafts", "discord_account_id", "integration_accounts", "id"),
+        ("tournament_setup_drafts", "ai_account_id", "integration_accounts", "id"),
+        ("tournament_setup_drafts", "logo_asset_id", "media_assets", "id"),
+        ("tournament_setup_drafts", "materialized_tournament_id", "tournaments", "id"),
+        ("integration_accounts", "workspace_id", "workspaces", "id"),
+        ("integration_connection_health", "account_id", "integration_accounts", "id"),
+        ("integration_connection_health", "workspace_id", "workspaces", "id"),
+        ("workspace_ai_configs", "workspace_id", "workspaces", "id"),
+        ("workspace_ai_configs", "selected_account_id", "integration_accounts", "id"),
+        ("ai_usage_ledger", "workspace_id", "workspaces", "id"),
+        ("ai_usage_ledger", "tournament_id", "tournaments", "id"),
+        ("ai_usage_ledger", "integration_account_id", "integration_accounts", "id"),
+        ("provider_scope_bindings", "tournament_id", "tournaments", "id"),
+        ("provider_scope_bindings", "workspace_id", "workspaces", "id"),
+        ("provider_scope_bindings", "provider_account_id", "integration_accounts", "id"),
+        ("match_call_occurrences", "tournament_id", "tournaments", "id"),
+        ("match_call_occurrences", "workspace_id", "workspaces", "id"),
+        ("tournament_brands", "tournament_id", "tournaments", "id"),
+        ("tournament_brands", "workspace_id", "workspaces", "id"),
+        ("tournament_brands", "logo_asset_id", "media_assets", "id"),
+        ("tournament_operating_profiles", "tournament_id", "tournaments", "id"),
+        ("tournament_operating_profiles", "workspace_id", "workspaces", "id"),
+        ("tournament_discord_bindings", "tournament_id", "tournaments", "id"),
+        ("tournament_discord_bindings", "workspace_id", "workspaces", "id"),
+        ("tournament_discord_bindings", "discord_account_id", "integration_accounts", "id"),
+        ("tournament_discord_bindings", "match_destination_id", "integration_destinations", "id"),
+        ("tournament_discord_bindings", "escalation_destination_id", "integration_destinations", "id"),
+        ("tournament_registration_configs", "tournament_id", "tournaments", "id"),
+        ("tournament_registration_configs", "workspace_id", "workspaces", "id"),
+        ("tournament_player_enrollments", "tournament_id", "tournaments", "id"),
+        ("tournament_player_enrollments", "workspace_id", "workspaces", "id"),
+        ("tournament_player_enrollments", "player_identity_id", "player_identities", "id"),
+        ("tournament_player_enrollments", "provider_identity_link_id", "provider_identity_links", "id"),
+        ("tournament_player_enrollments", "roster_snapshot_id", "provider_roster_snapshots", "id"),
+        ("tournament_player_enrollments", "image_asset_id", "media_assets", "id"),
+        ("player_identity_verification_challenges", "workspace_id", "workspaces", "id"),
+        ("player_identity_verification_challenges", "tournament_id", "tournaments", "id"),
+        ("player_identity_verification_challenges", "enrollment_id", "tournament_player_enrollments", "id"),
+        ("provider_roster_snapshots", "workspace_id", "workspaces", "id"),
+        ("provider_roster_snapshots", "tournament_id", "tournaments", "id"),
+        ("provider_roster_snapshots", "provider_account_id", "integration_accounts", "id"),
+        ("bot_experience_profiles", "workspace_id", "workspaces", "id"),
+        ("bot_experience_profiles", "tournament_id", "tournaments", "id"),
+        ("bot_experience_profiles", "guild_avatar_asset_id", "media_assets", "id"),
+        ("bot_experience_profiles", "guild_banner_asset_id", "media_assets", "id"),
+        ("tournament_setup_templates", "workspace_id", "workspaces", "id"),
+        ("tournament_setup_templates", "created_by", "users", "id"),
+        ("tournament_setup_templates", "updated_by", "users", "id"),
+        ("tournament_readiness_snapshots", "workspace_id", "workspaces", "id"),
+        ("tournament_readiness_snapshots", "draft_id", "tournament_setup_drafts", "id"),
+        ("tournament_readiness_snapshots", "tournament_id", "tournaments", "id"),
+    )
+    for edge in foreign_keys:
+        await _ensure_foreign_key(db, *edge)

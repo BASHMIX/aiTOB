@@ -138,22 +138,16 @@ async def api_hub_command(
 )
 async def api_get_status(principal: SessionPrincipal | None = Depends(require_global_settings_admin)):
     """Verify operational and connection statuses for database, websockets, and credentials scope. Requires admin password authentication."""
-    from backend.core.database import get_all_connections, get_all_settings
-    import json
-    import datetime
-    settings = await get_all_settings()
-    conns = await get_all_connections()
-
-    startgg_token = settings.get("STARTGG_API_TOKEN") or conns.get("STARTGG_API_TOKEN")
-    discord_token = settings.get("DISCORD_BOT_TOKEN") or conns.get("DISCORD_BOT_TOKEN")
-
-    token_scope_status = settings.get("token_scope_status")
-    token_scope = None
-    if token_scope_status:
-        try:
-            token_scope = json.loads(token_scope_status)
-        except Exception:
-            pass
+    from backend.core.integrations import configured_secret_types, list_integration_accounts
+    workspace_id = getattr(principal, "workspace_id", None)
+    startgg_connected = False
+    if workspace_id:
+        for account in await list_integration_accounts(workspace_id):
+            if account.get("provider_type") != "startgg" or account.get("status") != "active":
+                continue
+            if "access_token" in await configured_secret_types(str(account["id"])):
+                startgg_connected = True
+                break
 
     global _auto_dispatcher_cache
     if _auto_dispatcher_cache is None:
@@ -165,11 +159,11 @@ async def api_get_status(principal: SessionPrincipal | None = Depends(require_gl
     bot_connected = ws_manager.bot_connection is not None
 
     return {
-        "startgg_api": startgg_token is not None and startgg_token != "",
+        "startgg_api": startgg_connected,
         "discord_bot": bot_connected,
         "websockets": True,
         "db": True,
-        "token_scope": token_scope,
+        "token_scope": None,
         "auto_dispatcher": dispatcher_on,
     }
 

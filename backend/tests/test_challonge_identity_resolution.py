@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import AsyncMock
 
 from backend.core.storage import dbapi
 import pytest
@@ -49,8 +50,12 @@ async def isolated_identity_db(tmp_path, monkeypatch):
     await database.init_db()
     async with dbapi.connect(database_dsn) as db:
         await db.execute(
-            """INSERT INTO integration_accounts (id, owner_id, provider_type, external_account_id, display_name)
-               VALUES ('account-fnc', 'admin', 'challonge', 'test-account', 'Test Challonge')"""
+            "INSERT INTO workspaces (id, slug, name) VALUES ('workspace-fnc', 'workspace-fnc', 'FNC')"
+        )
+        await db.execute(
+            """INSERT INTO integration_accounts
+               (id, owner_id, workspace_id, provider_type, external_account_id, display_name)
+               VALUES ('account-fnc', 'admin', 'workspace-fnc', 'challonge', 'test-account', 'Test Challonge')"""
         )
         await db.commit()
     return database_dsn
@@ -63,7 +68,7 @@ async def test_identifier_forms_persist_one_account_and_community_scoped_record(
     adapter = _ResolverAdapter()
     service = resolution.ChallongeResolutionService(SyncCoordinator())
     adapter.provider_account_id = "account-fnc"
-    monkeypatch.setattr(resolution, "ChallongeProvider", lambda provider_account_id: adapter)
+    monkeypatch.setattr(resolution, "get_provider_for_account", AsyncMock(return_value=adapter))
 
     stored = []
     for value, subdomain in [
@@ -72,9 +77,9 @@ async def test_identifier_forms_persist_one_account_and_community_scoped_record(
         ("https://fnc-jo.challonge.com/ap6fj0k1", None),
         ("18449397@fnc-jo", None),
     ]:
-        resolved = await service.resolve("account-fnc", value, subdomain)
+        resolved = await service.resolve("account-fnc", value, subdomain, workspace_id="workspace-fnc")
         stored.append(await database.persist_challonge_identity(
-            resolved, locator_key=resolved["locator_key"]
+            resolved, locator_key=resolved["locator_key"], workspace_id="workspace-fnc"
         ))
 
     assert {row["slug"] for row in stored} == {"challonge:account-fnc:fnc-jo:18449397"}
@@ -92,12 +97,12 @@ async def test_duplicate_concurrent_resolve_joins_one_coordinator_operation(
     adapter = _ResolverAdapter(hold=True)
     service = resolution.ChallongeResolutionService(SyncCoordinator())
     adapter.provider_account_id = "account-fnc"
-    monkeypatch.setattr(resolution, "ChallongeProvider", lambda provider_account_id: adapter)
+    monkeypatch.setattr(resolution, "get_provider_for_account", AsyncMock(return_value=adapter))
 
-    first = asyncio.create_task(service.resolve("account-fnc", "https://fnc-jo.challonge.com/ap6fj0k1"))
+    first = asyncio.create_task(service.resolve("account-fnc", "https://fnc-jo.challonge.com/ap6fj0k1", workspace_id="workspace-fnc"))
     await adapter.started.wait()
     # Case and trailing slash normalize to the same coordinator key.
-    second = asyncio.create_task(service.resolve("account-fnc", "https://FNC-JO.challonge.com/AP6FJ0K1/"))
+    second = asyncio.create_task(service.resolve("account-fnc", "https://FNC-JO.challonge.com/AP6FJ0K1/", workspace_id="workspace-fnc"))
     # Database alias lookup is async I/O; wait for the second caller to reach
     # coordinator admission while the first adapter operation remains held.
     try:
@@ -120,10 +125,10 @@ async def test_saved_fresh_alias_skips_a_second_provider_resolve(
     adapter = _ResolverAdapter()
     service = resolution.ChallongeResolutionService(SyncCoordinator())
     adapter.provider_account_id = "account-fnc"
-    monkeypatch.setattr(resolution, "ChallongeProvider", lambda provider_account_id: adapter)
-    first = await service.resolve("account-fnc", "https://fnc-jo.challonge.com/ap6fj0k1")
-    await database.persist_challonge_identity(first, locator_key=first["locator_key"])
-    cached = await service.resolve("account-fnc", "https://FNC-JO.challonge.com/AP6FJ0K1/")
+    monkeypatch.setattr(resolution, "get_provider_for_account", AsyncMock(return_value=adapter))
+    first = await service.resolve("account-fnc", "https://fnc-jo.challonge.com/ap6fj0k1", workspace_id="workspace-fnc")
+    await database.persist_challonge_identity(first, locator_key=first["locator_key"], workspace_id="workspace-fnc")
+    cached = await service.resolve("account-fnc", "https://FNC-JO.challonge.com/AP6FJ0K1/", workspace_id="workspace-fnc")
 
     assert adapter.calls == 1
     assert cached["cached"] is True
@@ -137,11 +142,11 @@ async def test_preview_then_import_reuses_short_lived_safe_identity_metadata(
     adapter = _ResolverAdapter()
     service = resolution.ChallongeResolutionService(SyncCoordinator())
     adapter.provider_account_id = "account-fnc"
-    monkeypatch.setattr(resolution, "ChallongeProvider", lambda provider_account_id: adapter)
-    preview = await service.resolve("account-fnc", "https://fnc-jo.challonge.com/ap6fj0k1")
-    imported_identity = await service.resolve("account-fnc", "https://FNC-JO.challonge.com/AP6FJ0K1/")
+    monkeypatch.setattr(resolution, "get_provider_for_account", AsyncMock(return_value=adapter))
+    preview = await service.resolve("account-fnc", "https://fnc-jo.challonge.com/ap6fj0k1", workspace_id="workspace-fnc")
+    imported_identity = await service.resolve("account-fnc", "https://FNC-JO.challonge.com/AP6FJ0K1/", workspace_id="workspace-fnc")
     stored = await database.persist_challonge_identity(
-        imported_identity, locator_key=imported_identity["locator_key"]
+        imported_identity, locator_key=imported_identity["locator_key"], workspace_id="workspace-fnc"
     )
 
     assert adapter.calls == 1
@@ -161,10 +166,10 @@ async def test_duplicate_concurrent_imports_keep_one_canonical_record(isolated_i
     }
     first, second = await asyncio.gather(
         database.persist_challonge_identity(
-            resolved, locator_key="id:fnc-jo:18449397"
+            resolved, locator_key="id:fnc-jo:18449397", workspace_id="workspace-fnc"
         ),
         database.persist_challonge_identity(
-            resolved, locator_key="slug:fnc-jo:ap6fj0k1"
+            resolved, locator_key="slug:fnc-jo:ap6fj0k1", workspace_id="workspace-fnc"
         ),
     )
 
@@ -185,10 +190,13 @@ async def test_unsafe_locator_is_rejected_before_adapter_or_network(monkeypatch)
         raise AssertionError("unsafe input must never reach adapter construction")
 
     service = resolution.ChallongeResolutionService(SyncCoordinator())
-    monkeypatch.setattr(resolution, "ChallongeProvider", no_adapter)
+    monkeypatch.setattr(resolution, "get_provider_for_account", no_adapter)
 
     with pytest.raises(ValueError):
-        await service.resolve("account-fnc", "https://user:secret-token@challonge.com/ap6fj0k1")
+        await service.resolve(
+            "account-fnc", "https://user:secret-token@challonge.com/ap6fj0k1",
+            workspace_id="workspace-fnc",
+        )
 
     assert called is False
 
@@ -214,6 +222,7 @@ def test_provider_error_messages_do_not_reflect_credentials():
 
 @pytest.mark.asyncio
 async def test_provider_route_never_reflects_a_provider_exception_token(monkeypatch):
+    from types import SimpleNamespace
     from fastapi import HTTPException
     from backend.api.routers import providers
     from backend.api.schemas import ChallongeResolveRequest
@@ -226,9 +235,15 @@ async def test_provider_route_never_reflects_a_provider_exception_token(monkeypa
     monkeypatch.setattr(
         providers, "get_provider_feature_flags", lambda: type("Flags", (), {"challonge_read_enabled": True})()
     )
+    monkeypatch.setattr(
+        "backend.core.integrations.get_integration_account",
+        AsyncMock(return_value={"provider_type": "challonge"}),
+    )
     with pytest.raises(HTTPException) as exc:
-            await providers.resolve_tournament(
-            "challonge", ChallongeResolveRequest(identifier="18449397", provider_account_id="account-fnc")
+        await providers.resolve_tournament(
+            "challonge",
+            ChallongeResolveRequest(identifier="18449397", provider_account_id="account-fnc"),
+            SimpleNamespace(workspace_id="workspace-fnc"),
             )
 
     assert exc.value.status_code == 422

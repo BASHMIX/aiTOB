@@ -221,6 +221,14 @@ async def test_concurrent_owner_bootstrap_creates_one_workspace(monkeypatch):
 @pytest.mark.asyncio
 async def test_ai_usage_reservations_obey_limit_across_connections():
     from backend.core.ai_service import _reserve, update_ai_config, AIUsageLimitError
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute(
+            "INSERT INTO workspaces (id, slug, name) VALUES ('ai-workspace', 'ai-workspace', 'AI')"
+        )
+        await db.execute(
+            "INSERT INTO tournaments (slug, name, workspace_id) VALUES ('ai/test', 'AI Test', 'ai-workspace')"
+        )
+        await db.commit()
     config = await update_ai_config({"request_limit": 1, "token_limit": 100_000})
     outcomes = await asyncio.gather(*(_reserve(config, "ai/test", 10) for _ in range(8)), return_exceptions=True)
     assert sum(isinstance(value, str) for value in outcomes) == 1

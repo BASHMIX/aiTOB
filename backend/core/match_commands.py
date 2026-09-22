@@ -297,7 +297,7 @@ class MatchCommandService:
             priority=SnapshotPriority.PREFLIGHT_MUTATION,
         )
         gate = coordinator or SyncCoordinator()
-        return await gate.run_snapshot(request, lambda: provider.fetch_snapshot_v2(request))
+        return await gate.run_snapshot(request, lambda: provider.fetch_snapshot(request))
 
     @staticmethod
     def _matching_remote_set(snapshot, match_id: str):
