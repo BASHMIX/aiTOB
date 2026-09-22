@@ -33,6 +33,7 @@ from backend.api.routers.organizer_console import router as organizer_console_ro
 from backend.api.routers.ai_service import router as ai_service_router
 from backend.api.routers.session import router as session_router
 from backend.api.routers.entitlements import router as entitlements_router
+from backend.api.routers.player_profiles import router as player_profiles_router
 
 load_dotenv()
 logger = logging.getLogger("aitob.api")
@@ -216,6 +217,7 @@ app.include_router(action_proposals_router, prefix="/api")
 app.include_router(organizer_console_router, prefix="/api")
 app.include_router(ai_service_router, prefix="/api")
 app.include_router(entitlements_router, prefix="/api")
+app.include_router(player_profiles_router, prefix="/api/player-profiles")
 
 
 # Static files

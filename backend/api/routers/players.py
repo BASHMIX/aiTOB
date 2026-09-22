@@ -13,6 +13,7 @@ from backend.core.database import (
 from backend.api.auth import verify_hub_password, optional_session_principal, require_permission
 from backend.core.workspace_auth import SessionPrincipal
 from backend.api.schemas import CreatePlayerRequest, MessageResponse, ErrorResponse, TournamentPlayerLinkRequest
+from backend.core.contracts.player_presentation import PlayerPresentationV1
 
 router = APIRouter(tags=["players"])
 
@@ -99,6 +100,52 @@ async def _canonical_character_override(
     }
 
 
+async def _validate_tournament_override_scope(
+    *,
+    entrant_id: str,
+    tournament_slug: str,
+    event_id: str,
+    provider: str,
+    workspace_id: str,
+) -> None:
+    """Ensure an entrant override is attached to a real event in this workspace."""
+    tournament = await get_tournament(tournament_slug, workspace_id)
+    if not tournament:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tournament not found.")
+    expected_provider = str(tournament.get("provider_type") or "startgg").strip().lower()
+    if provider.strip().lower() != expected_provider:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Provider does not match the tournament.")
+    try:
+        raw = json.loads(tournament.get("raw_data") or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        raw = {}
+    events = raw.get("events") or (raw.get("tournament") or {}).get("events") or []
+    selected_event = next((event for event in events if str(event.get("id")) == str(event_id)), None)
+    if not selected_event:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Selected Event does not belong to this tournament.")
+    entrant_nodes = ((selected_event.get("entrants") or {}).get("nodes") or [])
+    if entrant_id and entrant_nodes and not any(str(entrant.get("id")) == str(entrant_id) for entrant in entrant_nodes):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Player does not belong to the selected Event.")
+
+
+def _scoped_override_response(override: dict[str, Any]) -> dict[str, Any]:
+    """Keep the Participants response shape while its storage is event-scoped."""
+    return {
+        "id": override.get("entrant_id"),
+        "name": override.get("display_name"),
+        "display_name": override.get("display_name"),
+        "team": override.get("prefix"),
+        "prefix": override.get("prefix"),
+        "country": override.get("country"),
+        "avatar_url": override.get("avatar_url"),
+        "character": override.get("character_name"),
+        "character_name": override.get("character_name"),
+        "character_id": override.get("character_id"),
+        "character_image_url": override.get("character_image_url"),
+        "notes": override.get("notes"),
+    }
+
+
 @router.get("/{discord_id}/avatar", summary="Get player avatar image", operation_id="getPlayerAvatar")
 async def api_player_avatar(discord_id: str, principal: SessionPrincipal | None = Depends(optional_session_principal)):
     """Return a player's avatar image file or the default placeholder."""
@@ -168,8 +215,21 @@ async def api_unlink_tournament_entrant(tournament_slug: str, entrant_id: str, p
     response_model=Dict[str, Dict[str, Optional[str]]],
     operation_id="listPlayerOverrides"
 )
-async def api_get_overrides(principal: SessionPrincipal = Depends(require_permission("workspace.read"))):
-    """Return all player display name / avatar overrides. Accessible without admin authentication."""
+async def api_get_overrides(
+    tournament_slug: Optional[str] = None,
+    event_id: Optional[str] = None,
+    provider: str = "startgg",
+    principal: SessionPrincipal = Depends(require_permission("workspace.read")),
+):
+    """Return legacy overrides or the explicitly requested event-scoped overrides."""
+    if tournament_slug or event_id:
+        if not tournament_slug or not event_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tournament and Event are required together.")
+        from backend.core.player_profiles import list_tournament_entrant_overrides
+        scoped = await list_tournament_entrant_overrides(
+            principal.workspace_id, tournament_slug, event_id, provider
+        )
+        return {str(row["entrant_id"]): _scoped_override_response(row) for row in scoped}
     return await get_all_player_overrides(principal.workspace_id)
 
 
@@ -181,10 +241,31 @@ async def api_get_overrides(principal: SessionPrincipal = Depends(require_permis
     responses={401: {"model": ErrorResponse}},
     operation_id="clearPlayerOverrides"
 )
-async def api_delete_all_overrides(principal: SessionPrincipal = Depends(require_permission("tournament.manage"))):
-    """Delete all configured player overrides from the database. Requires admin password authentication."""
-    await delete_all_player_overrides(principal.workspace_id)
-    await _broadcast_override_update(principal.workspace_id)
+async def api_delete_all_overrides(
+    tournament_slug: Optional[str] = None,
+    event_id: Optional[str] = None,
+    provider: str = "startgg",
+    principal: SessionPrincipal = Depends(require_permission("tournament.manage")),
+):
+    """Clear legacy overrides or the explicitly requested event-scoped overrides."""
+    if bool(tournament_slug) != bool(event_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tournament and Event are required together.")
+    if tournament_slug and event_id:
+        await _validate_tournament_override_scope(
+            entrant_id="", tournament_slug=tournament_slug, event_id=event_id,
+            provider=provider, workspace_id=principal.workspace_id,
+        )
+        from backend.core.player_profiles import list_tournament_entrant_overrides, delete_tournament_entrant_override
+        scoped = await list_tournament_entrant_overrides(
+            principal.workspace_id, tournament_slug, event_id, provider
+        )
+        for row in scoped:
+            await delete_tournament_entrant_override(
+                principal.workspace_id, provider, tournament_slug, event_id, str(row["entrant_id"])
+            )
+    else:
+        await delete_all_player_overrides(principal.workspace_id)
+        await _broadcast_override_update(principal.workspace_id)
     return MessageResponse(message="All overrides cleared", ok=True)
 
 
@@ -194,8 +275,24 @@ async def api_delete_all_overrides(principal: SessionPrincipal = Depends(require
     responses={404: {"model": ErrorResponse}},
     operation_id="getPlayerOverride"
 )
-async def api_get_override(id: str, principal: SessionPrincipal = Depends(require_permission("workspace.read"))):
-    """Retrieve details for a single configured player override by their entrant ID."""
+async def api_get_override(
+    id: str,
+    tournament_slug: Optional[str] = None,
+    event_id: Optional[str] = None,
+    provider: str = "startgg",
+    principal: SessionPrincipal = Depends(require_permission("workspace.read")),
+):
+    """Retrieve a legacy override or the explicitly requested event-scoped override."""
+    if bool(tournament_slug) != bool(event_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tournament and Event are required together.")
+    if tournament_slug and event_id:
+        from backend.core.player_profiles import get_tournament_entrant_override
+        scoped = await get_tournament_entrant_override(
+            principal.workspace_id, provider, tournament_slug, event_id, id
+        )
+        if not scoped:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Override not found")
+        return _scoped_override_response(scoped)
     ov = await get_player_override(id, principal.workspace_id)
     if not ov:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Override not found")
@@ -211,7 +308,7 @@ async def api_get_override(id: str, principal: SessionPrincipal = Depends(requir
     operation_id="savePlayerOverride"
 )
 async def api_patch_override(id: str, request: Request, principal: SessionPrincipal = Depends(require_permission("tournament.manage"))):
-    """Save or update override properties for a player. Requires admin password authentication."""
+    """Save one legacy override or one explicit event-scoped override, never both."""
     d = await request.json()
     validated = {
         k: str(v) for k, v in d.items()
@@ -221,11 +318,29 @@ async def api_patch_override(id: str, request: Request, principal: SessionPrinci
         validated["prefix"] = str(d["team"])
     if any(key in d for key in ("character", "character_id", "character_image_url")):
         validated.update(await _canonical_character_override(id, d, principal.workspace_id))
+    t_slug = str(d.get("tournament_slug") or "").strip()
+    ev_id = str(d.get("event_id") or "").strip()
+    provider = str(d.get("provider") or "startgg").strip().lower()
+    if bool(t_slug) != bool(ev_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tournament and Event are required together.")
     try:
-        await save_player_override(id, validated, principal.workspace_id)
+        if t_slug:
+            await _validate_tournament_override_scope(
+                entrant_id=id, tournament_slug=t_slug, event_id=ev_id,
+                provider=provider, workspace_id=principal.workspace_id,
+            )
+            from backend.core.player_profiles import set_tournament_entrant_override
+            await set_tournament_entrant_override(
+                workspace_id=principal.workspace_id, provider=provider,
+                tournament_slug=t_slug, event_id=ev_id, entrant_id=id,
+                data=validated, updated_by=principal.user_id,
+            )
+        else:
+            await save_player_override(id, validated, principal.workspace_id)
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-    await _broadcast_override_update(principal.workspace_id)
+    if not t_slug:
+        await _broadcast_override_update(principal.workspace_id)
     return MessageResponse(message="Override saved", ok=True)
 
 
@@ -237,11 +352,34 @@ async def api_patch_override(id: str, request: Request, principal: SessionPrinci
     responses={401: {"model": ErrorResponse}},
     operation_id="deletePlayerOverride"
 )
-async def api_delete_override(id: str, principal: SessionPrincipal = Depends(require_permission("tournament.manage"))):
-    """Remove a configured player override. Requires admin password authentication."""
-    await delete_player_override(id, principal.workspace_id)
-    await _broadcast_override_update(principal.workspace_id)
+async def api_delete_override(
+    id: str,
+    tournament_slug: Optional[str] = None,
+    event_id: Optional[str] = None,
+    provider: Optional[str] = "startgg",
+    principal: SessionPrincipal = Depends(require_permission("tournament.manage")),
+):
+    """Reset one legacy override or one explicit event-scoped override, never both."""
+    if bool(tournament_slug) != bool(event_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tournament and Event are required together.")
+    if tournament_slug and event_id:
+        await _validate_tournament_override_scope(
+            entrant_id=id, tournament_slug=tournament_slug, event_id=event_id,
+            provider=provider or "startgg", workspace_id=principal.workspace_id,
+        )
+        from backend.core.player_profiles import delete_tournament_entrant_override
+        await delete_tournament_entrant_override(
+            workspace_id=principal.workspace_id,
+            provider=provider or "startgg",
+            tournament_slug=tournament_slug,
+            event_id=event_id,
+            entrant_id=id,
+        )
+    else:
+        await delete_player_override(id, principal.workspace_id)
+        await _broadcast_override_update(principal.workspace_id)
     return MessageResponse(message="Override deleted", ok=True)
+
 
 
 @router.post(
@@ -265,6 +403,11 @@ async def api_upload_avatar(id: str, request: Request, principal: SessionPrincip
 
     from backend.core.image_store import store_avatar, delete_stored_avatar
     linked_discord_id = str(form.get("discord_id") or "").strip() or None
+    tournament_slug = str(form.get("tournament_slug") or "").strip()
+    event_id = str(form.get("event_id") or "").strip()
+    provider = str(form.get("provider") or "startgg").strip().lower()
+    if bool(tournament_slug) != bool(event_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tournament and Event are required together.")
     old_override = await get_player_override(id, principal.workspace_id)
     old_urls: list[str] = []
     if old_override and old_override.get("avatar_url"):
@@ -284,6 +427,33 @@ async def api_upload_avatar(id: str, request: Request, principal: SessionPrincip
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    if tournament_slug:
+        await _validate_tournament_override_scope(
+            entrant_id=id, tournament_slug=tournament_slug, event_id=event_id,
+            provider=provider, workspace_id=principal.workspace_id,
+        )
+        from backend.core.player_profiles import get_tournament_entrant_override, set_tournament_entrant_override
+        scoped_before = await get_tournament_entrant_override(
+            principal.workspace_id, provider, tournament_slug, event_id, id
+        )
+        await set_tournament_entrant_override(
+            workspace_id=principal.workspace_id, provider=provider,
+            tournament_slug=tournament_slug, event_id=event_id, entrant_id=id,
+            data={"avatar_url": avatar_url}, updated_by=principal.user_id,
+        )
+        from backend.core.database import record_media_asset
+        await record_media_asset(
+            workspace_id=principal.workspace_id,
+            asset_type="participant_avatar",
+            owner_type="tournament_entrant_override",
+            owner_id=str((scoped_before or {}).get("id") or id),
+            storage_url=avatar_url,
+            storage_key=avatar_url.rsplit("/", 1)[-1] if avatar_url else None,
+            mime_type=getattr(file, "content_type", None), byte_size=len(content),
+        )
+        # The old object may still be referenced by a profile, another event, or
+        # an archived projection. A later asset cleanup pass owns its retirement.
+        return {"avatar_url": avatar_url}
     try:
         await save_player_override(id, {"avatar_url": avatar_url}, principal.workspace_id)
         if linked_discord_id:
@@ -306,6 +476,46 @@ async def api_upload_avatar(id: str, request: Request, principal: SessionPrincip
         if old_url != avatar_url:
             await delete_stored_avatar(old_url, preserve_url=avatar_url)
     return {"avatar_url": avatar_url}
+
+
+@router.get(
+    "/presentation",
+    summary="Get tournament participants presentation",
+    response_model=List[PlayerPresentationV1],
+    operation_id="getTournamentParticipantsPresentation",
+)
+async def api_get_tournament_participants_presentation(
+    tournament_slug: str,
+    event_id: Optional[str] = None,
+    principal: SessionPrincipal = Depends(require_permission("workspace.read")),
+):
+    """Return resolved presentation models for all entrants in a tournament/event."""
+    from backend.core.player_presentation import resolve_tournament_participants_presentation
+    return await resolve_tournament_participants_presentation(
+        workspace_id=principal.workspace_id,
+        tournament_slug=tournament_slug,
+        event_id=event_id,
+    )
+
+
+@router.get(
+    "/presentation/{tournament_slug}",
+    summary="Get tournament participants presentation by tournament slug",
+    response_model=List[PlayerPresentationV1],
+    operation_id="getTournamentParticipantsPresentationBySlug",
+)
+async def api_get_tournament_participants_presentation_by_slug(
+    tournament_slug: str,
+    event_id: Optional[str] = None,
+    principal: SessionPrincipal = Depends(require_permission("workspace.read")),
+):
+    """Return resolved presentation models for all entrants in a tournament/event by slug."""
+    from backend.core.player_presentation import resolve_tournament_participants_presentation
+    return await resolve_tournament_participants_presentation(
+        workspace_id=principal.workspace_id,
+        tournament_slug=tournament_slug,
+        event_id=event_id,
+    )
 
 
 # ── Dynamic single-segment catch-all — keep last ────────────────────────────

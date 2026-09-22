@@ -60,6 +60,11 @@ POSTGRES_WORKSPACE_TABLES = (
     "bot_experience_profiles", "tournament_setup_templates", "tournament_readiness_snapshots",
     "discord_oauth_states",
     "provider_oauth_states",
+    "player_profiles",
+    "player_provider_identities",
+    "player_game_profiles",
+    "player_character_defaults",
+    "tournament_entrant_overrides",
 )
 
 

@@ -106,6 +106,13 @@ export function TopNavigation() {
         >
           <span>🚪</span> Logout{session?.workspace_name ? ` · ${session.workspace_name}` : ''}
         </button>
+        <a
+          href="/admin/players"
+          className="text-textDim hover:text-accentYellow transition-colors flex items-center gap-1.5 border-l border-white/20 pl-4 text-xs font-semibold"
+          data-testid="nav-player-archive"
+        >
+          <span>👥</span> Player Archive
+        </a>
         <div className="flex items-center gap-2 border-l border-white/20 pl-4">
           <span>Tournament:</span>
           <select 

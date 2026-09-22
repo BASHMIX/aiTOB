@@ -556,3 +556,20 @@ class TournamentsResponse(BaseModel):
 
 class BotFeedResponse(BaseModel):
     feed: List[Dict[str, Any]] = Field(description="Collection of recently logged bot actions and events")
+
+
+from backend.core.contracts.player_presentation import (
+    CharacterValue,
+    EntrantPresentationRequest,
+    EntrantScope,
+    PlayerPresentationV1,
+    PresentationField,
+    ResolvedPresentation,
+)
+
+
+class ParticipantPresentationResponse(BaseModel):
+    presentations: List[PlayerPresentationV1] = Field(
+        default_factory=list,
+        description="Resolved presentation models for tournament entrants",
+    )

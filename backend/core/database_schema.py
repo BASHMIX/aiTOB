@@ -1072,8 +1072,86 @@ TABLE_SCHEMAS = [
         consumed_at TIMESTAMP,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS player_profiles (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+        display_name TEXT NOT NULL,
+        prefix TEXT,
+        country TEXT,
+        avatar_url TEXT,
+        discord_id TEXT,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (workspace_id, id)
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS player_provider_identities (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+        player_profile_id TEXT NOT NULL REFERENCES player_profiles(id) ON DELETE CASCADE,
+        provider TEXT NOT NULL,
+        provider_user_id TEXT NOT NULL,
+        provider_gamer_tag TEXT,
+        verified BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (workspace_id, provider, provider_user_id)
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS player_game_profiles (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+        player_profile_id TEXT NOT NULL REFERENCES player_profiles(id) ON DELETE CASCADE,
+        game_id TEXT NOT NULL,
+        in_game_name TEXT,
+        in_game_id TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (workspace_id, player_profile_id, game_id)
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS player_character_defaults (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+        player_game_profile_id TEXT NOT NULL REFERENCES player_game_profiles(id) ON DELETE CASCADE,
+        character_id TEXT NOT NULL,
+        character_name TEXT NOT NULL,
+        character_image_url TEXT,
+        is_primary BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (workspace_id, player_game_profile_id, character_id)
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS tournament_entrant_overrides (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+        provider TEXT NOT NULL DEFAULT 'startgg',
+        tournament_slug TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        entrant_id TEXT NOT NULL,
+        display_name TEXT,
+        prefix TEXT,
+        country TEXT,
+        avatar_url TEXT,
+        character_id TEXT,
+        character_name TEXT,
+        character_image_url TEXT,
+        notes TEXT,
+        updated_by TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (workspace_id, provider, tournament_slug, event_id, entrant_id)
+    )
     '''
 ]
+
 
 # Indexes for the hottest active_matches filters (tournament_slug, status).
 # IF NOT EXISTS → idempotent; speeds up list / poll / OBS-telemetry reads.
@@ -1103,6 +1181,11 @@ INDEXES = [
     ,"CREATE UNIQUE INDEX IF NOT EXISTS uq_stations_workspace_public_id ON stations(workspace_id, public_id)"
     ,"CREATE INDEX IF NOT EXISTS idx_overlay_access_station ON overlay_access_tokens(workspace_id, station_id, revoked_at)"
     ,"CREATE INDEX IF NOT EXISTS idx_station_queue_lookup ON station_queue(station_id, sort_order)"
+    ,"CREATE INDEX IF NOT EXISTS idx_player_profiles_workspace ON player_profiles(workspace_id, display_name)"
+    ,"CREATE INDEX IF NOT EXISTS idx_player_provider_identities_lookup ON player_provider_identities(workspace_id, provider, provider_user_id)"
+    ,"CREATE INDEX IF NOT EXISTS idx_player_game_profiles_profile ON player_game_profiles(workspace_id, player_profile_id)"
+    ,"CREATE INDEX IF NOT EXISTS idx_player_character_defaults_game ON player_character_defaults(workspace_id, player_game_profile_id)"
+    ,"CREATE INDEX IF NOT EXISTS idx_tournament_entrant_overrides_scope ON tournament_entrant_overrides(workspace_id, tournament_slug, event_id, entrant_id)"
 ]
 
 # ── Safe migrations (add new columns if missing) ─────────────────
@@ -1280,4 +1363,16 @@ MIGRATIONS = [
     "ALTER TABLE stations ADD COLUMN IF NOT EXISTS preview_match_json TEXT",
     "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS game_metadata_json TEXT",
     "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS game_metadata_synced_at TIMESTAMP",
+    "ALTER TABLE player_overrides ADD COLUMN IF NOT EXISTS requires_review BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE player_overrides ADD COLUMN IF NOT EXISTS character_id TEXT",
+    "ALTER TABLE player_overrides ADD COLUMN IF NOT EXISTS character_name TEXT",
+    "ALTER TABLE player_overrides ADD COLUMN IF NOT EXISTS character_image_url TEXT",
+    "CREATE TABLE IF NOT EXISTS player_profiles (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id), display_name TEXT NOT NULL, prefix TEXT, country TEXT, avatar_url TEXT, discord_id TEXT, notes TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE (workspace_id, id))",
+    "ALTER TABLE player_profiles ADD COLUMN IF NOT EXISTS notes TEXT",
+    "CREATE TABLE IF NOT EXISTS player_provider_identities (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id), player_profile_id TEXT NOT NULL REFERENCES player_profiles(id) ON DELETE CASCADE, provider TEXT NOT NULL, provider_user_id TEXT NOT NULL, provider_gamer_tag TEXT, verified BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE (workspace_id, provider, provider_user_id))",
+    "CREATE TABLE IF NOT EXISTS player_game_profiles (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id), player_profile_id TEXT NOT NULL REFERENCES player_profiles(id) ON DELETE CASCADE, game_id TEXT NOT NULL, in_game_name TEXT, in_game_id TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE (workspace_id, player_profile_id, game_id))",
+    "CREATE TABLE IF NOT EXISTS player_character_defaults (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id), player_game_profile_id TEXT NOT NULL REFERENCES player_game_profiles(id) ON DELETE CASCADE, character_id TEXT NOT NULL, character_name TEXT NOT NULL, character_image_url TEXT, is_primary BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE (workspace_id, player_game_profile_id, character_id))",
+    "CREATE TABLE IF NOT EXISTS tournament_entrant_overrides (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id), provider TEXT NOT NULL DEFAULT 'startgg', tournament_slug TEXT NOT NULL, event_id TEXT NOT NULL, entrant_id TEXT NOT NULL, display_name TEXT, prefix TEXT, country TEXT, avatar_url TEXT, character_id TEXT, character_name TEXT, character_image_url TEXT, notes TEXT, updated_by TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE (workspace_id, provider, tournament_slug, event_id, entrant_id))",
+    "ALTER TABLE tournament_entrant_overrides ADD COLUMN IF NOT EXISTS notes TEXT",
+    "ALTER TABLE tournament_entrant_overrides ADD COLUMN IF NOT EXISTS updated_by TEXT",
 ]

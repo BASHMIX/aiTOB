@@ -186,6 +186,8 @@ async def init_db():
 async def create_or_update_player(discord_id: str, workspace_id: str | None = None, **kwargs):
     if not kwargs:
         return
+    if "gamertag" in kwargs and "gamer_tag" not in kwargs:
+        kwargs["gamer_tag"] = kwargs.pop("gamertag")
     async with dbapi.connect(DATABASE_DSN) as db:
         valid_cols = await _table_columns(db, "players")
 
@@ -360,10 +362,15 @@ async def get_tournament_player_links(tournament_slug: str, workspace_id: str | 
         async with db.execute(
             """
             SELECT l.entrant_id, l.player_discord_id, p.gamer_tag, p.avatar_path,
-                   p.team, p.country, p.cfn_id
+                   p.team, p.country, p.cfn_id,
+                   pr.id AS profile_id, pr.display_name AS profile_name,
+                   pr.prefix AS profile_prefix, pr.country AS profile_country,
+                   pr.avatar_url AS profile_avatar_url
             FROM tournament_player_links l
             LEFT JOIN players p ON p.discord_id = l.player_discord_id
                                   AND (CAST(? AS TEXT) IS NULL OR p.workspace_id = l.workspace_id)
+            LEFT JOIN player_profiles pr ON pr.discord_id = l.player_discord_id
+                                  AND (CAST(? AS TEXT) IS NULL OR pr.workspace_id = l.workspace_id)
             WHERE l.tournament_slug = ?
               AND (CAST(? AS TEXT) IS NULL OR EXISTS (
                     SELECT 1 FROM tournaments t
@@ -372,17 +379,21 @@ async def get_tournament_player_links(tournament_slug: str, workspace_id: str | 
               ))
               AND (CAST(? AS TEXT) IS NULL OR l.workspace_id = ?)
             """,
-            (workspace_id, tournament_slug, workspace_id, workspace_id, workspace_id, workspace_id),
+            (workspace_id, workspace_id, tournament_slug, workspace_id, workspace_id, workspace_id, workspace_id),
         ) as cursor:
             rows = await cursor.fetchall()
     return {
         str(row["entrant_id"]): {
             "discord_id": str(row["player_discord_id"]),
-            "gamer_tag": row["gamer_tag"] or str(row["player_discord_id"]),
-            "avatar_path": row["avatar_path"],
-            "team": row["team"],
-            "country": row["country"],
+            "gamer_tag": row["profile_name"] or row["gamer_tag"] or str(row["player_discord_id"]),
+            "display_name": row["profile_name"] or row["gamer_tag"] or str(row["player_discord_id"]),
+            "avatar_path": row["profile_avatar_url"] or row["avatar_path"],
+            "avatar_url": row["profile_avatar_url"] or row["avatar_path"],
+            "team": row["profile_prefix"] or row["team"],
+            "prefix": row["profile_prefix"] or row["team"],
+            "country": row["profile_country"] or row["country"],
             "cfn_id": row["cfn_id"],
+            "player_profile_id": str(row["profile_id"]) if row["profile_id"] else None,
         }
         for row in rows
     }
@@ -468,6 +479,18 @@ async def unlink_tournament_entrant(tournament_slug: str, entrant_id: str, works
             )
         await db.commit()
     return True
+
+
+async def get_tournament_slug_for_entrant(entrant_id: str, workspace_id: str | None = None) -> str | None:
+    """Return the tournament slug linked to an entrant in a workspace."""
+    async with dbapi.connect(DATABASE_DSN) as db:
+        async with db.execute(
+            "SELECT tournament_slug FROM tournament_player_links WHERE entrant_id = ? AND (CAST(? AS TEXT) IS NULL OR workspace_id = ?) LIMIT 1",
+            (str(entrant_id).strip(), workspace_id, workspace_id),
+        ) as c:
+            row = await c.fetchone()
+            return str(row[0]) if row else None
+
 
 async def get_all_tournament_slugs(workspace_id: str | None = None) -> list[str]:
     """Return tracked tournament slugs, optionally limited to one workspace."""
@@ -842,7 +865,9 @@ async def delete_media_asset(asset_id: str, workspace_id: str) -> bool:
         url, key = asset[0], asset[1]
         checks = (
             ("SELECT 1 FROM players WHERE workspace_id=? AND avatar_path IN (?, ?) LIMIT 1", (workspace_id, url, key or "")),
-            ("SELECT 1 FROM player_overrides WHERE avatar_url IN (?, ?) LIMIT 1", (url, key or "")),
+            ("SELECT 1 FROM player_overrides WHERE workspace_id=? AND avatar_url IN (?, ?) LIMIT 1", (workspace_id, url, key or "")),
+            ("SELECT 1 FROM player_profiles WHERE workspace_id=? AND avatar_url IN (?, ?) LIMIT 1", (workspace_id, url, key or "")),
+            ("SELECT 1 FROM tournament_entrant_overrides WHERE workspace_id=? AND avatar_url IN (?, ?) LIMIT 1", (workspace_id, url, key or "")),
             ("SELECT 1 FROM active_matches WHERE workspace_id=? AND (p1_avatar IN (?, ?) OR p2_avatar IN (?, ?)) LIMIT 1", (workspace_id, url, key or "", url, key or "")),
         )
         for query, params in checks:
@@ -2773,7 +2798,23 @@ async def get_player_override(entrant_id: str, workspace_id: str | None = None):
         async with db.execute(query, params) as c:
             row = await c.fetchone()
             if row:
-                return dict(zip([col[0] for col in c.description], row))
+                d = dict(row)
+                return {
+                    "id": d.get("id"),
+                    "workspace_id": d.get("workspace_id"),
+                    "display_name": d.get("display_name"),
+                    "name": d.get("display_name"),
+                    "team": d.get("team"),
+                    "prefix": d.get("team"),
+                    "country": d.get("country"),
+                    "cfn": d.get("cfn"),
+                    "avatar_url": d.get("avatar_url"),
+                    "character": d.get("character_name"),
+                    "character_name": d.get("character_name"),
+                    "character_id": d.get("character_id"),
+                    "character_image_url": d.get("character_image_url"),
+                    "requires_review": bool(d.get("requires_review")),
+                }
             return None
 
 async def save_player_override(entrant_id: str, data: dict, workspace_id: str | None = None):
@@ -2797,15 +2838,26 @@ async def save_player_override(entrant_id: str, data: dict, workspace_id: str | 
         params = []
         mapping = {
             "name": "display_name",
+            "display_name": "display_name",
             "team": "team",
+            "prefix": "team",
             "country": "country",
             "cfn": "cfn",
-            "avatar_url": "avatar_url"
+            "avatar_url": "avatar_url",
+            "character": "character_name",
+            "character_name": "character_name",
+            "character_id": "character_id",
+            "character_image_url": "character_image_url",
+            "requires_review": "requires_review",
         }
+        col_values = {}
         for key, col in mapping.items():
             if key in data and data[key] is not None:
-                fields.append(f"{col} = ?")
-                params.append(data[key])
+                col_values[col] = data[key]
+        for col, val in col_values.items():
+            fields.append(f"{col} = ?")
+            params.append(val)
+
         
         if fields:
             params.append(entrant_id)
@@ -2827,16 +2879,194 @@ async def get_all_player_overrides(workspace_id: str | None = None):
             rows = await c.fetchall()
             out = {}
             for row in rows:
-                d = dict(zip([col[0] for col in c.description], row))
+                d = dict(row)
                 # Map database column names back to frontend property names
                 out[d.get('id', '')] = {
                     "name": d.get('display_name'),
+                    "display_name": d.get('display_name'),
                     "team": d.get('team'),
+                    "prefix": d.get('team'),
                     "country": d.get('country'),
                     "cfn": d.get('cfn'),
-                    "avatar_url": d.get('avatar_url')
+                    "avatar_url": d.get('avatar_url'),
+                    "character": d.get('character_name'),
+                    "character_name": d.get('character_name'),
+                    "character_id": d.get('character_id'),
+                    "character_image_url": d.get('character_image_url'),
+                    "requires_review": "true" if d.get('requires_review') else None,
                 }
             return out
+
+async def backfill_player_profiles_and_overrides(workspace_id: str | None = None) -> dict:
+    """Deterministically backfill player_profiles, provider_identities, and game profiles
+    from workspace-owned players. Convert deterministically attributable legacy overrides
+    to scoped tournament_entrant_overrides; mark ambiguous ones for review.
+    """
+    import json
+    import uuid
+
+    profiles_created = 0
+    provider_identities_created = 0
+    game_profiles_created = 0
+    overrides_converted = 0
+    overrides_marked_review = 0
+
+    async with dbapi.connect(DATABASE_DSN) as db:
+        sql_players = "SELECT * FROM players"
+        params_players = []
+        if workspace_id is not None:
+            sql_players += " WHERE workspace_id = ?"
+            params_players.append(workspace_id)
+
+        async with db.execute(sql_players, params_players) as c:
+            players = [dict(r) for r in await c.fetchall()]
+
+        for p in players:
+            p_ws = p.get("workspace_id") or workspace_id
+            if not p_ws:
+                continue
+            d_id = p.get("discord_id")
+            gamer_tag = p.get("gamer_tag") or d_id
+            prefix = p.get("team")
+            country = p.get("country")
+            avatar_url = p.get("avatar_path")
+
+            async with db.execute(
+                "SELECT id FROM player_profiles WHERE discord_id = ? AND workspace_id = ?",
+                (d_id, p_ws),
+            ) as c:
+                existing_prof = await c.fetchone()
+
+            if not existing_prof:
+                profile_id = str(uuid.uuid4())
+                await db.execute(
+                    """INSERT INTO player_profiles (
+                        id, workspace_id, display_name, prefix, country, avatar_url, discord_id, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)""",
+                    (profile_id, p_ws, gamer_tag, prefix, country, avatar_url, d_id),
+                )
+                profiles_created += 1
+            else:
+                profile_id = existing_prof[0]
+
+            startgg_id = p.get("startgg_id")
+            if startgg_id:
+                clean_sgg = str(startgg_id).strip()
+                async with db.execute(
+                    "SELECT 1 FROM player_provider_identities WHERE workspace_id = ? AND provider = 'startgg' AND provider_user_id = ?",
+                    (p_ws, clean_sgg),
+                ) as c:
+                    if not await c.fetchone():
+                        await db.execute(
+                            """INSERT INTO player_provider_identities (
+                                id, workspace_id, player_profile_id, provider, provider_user_id, provider_gamer_tag, verified, created_at, updated_at
+                            ) VALUES (?, ?, ?, 'startgg', ?, ?, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)""",
+                            (str(uuid.uuid4()), p_ws, profile_id, clean_sgg, gamer_tag),
+                        )
+                        provider_identities_created += 1
+
+            cfn_id = p.get("cfn_id")
+            if cfn_id:
+                clean_cfn = str(cfn_id).strip()
+                async with db.execute(
+                    "SELECT id FROM player_game_profiles WHERE workspace_id = ? AND player_profile_id = ? AND game_id = 'SF6'",
+                    (p_ws, profile_id),
+                ) as c:
+                    if not await c.fetchone():
+                        await db.execute(
+                            """INSERT INTO player_game_profiles (
+                                id, workspace_id, player_profile_id, game_id, in_game_name, in_game_id, created_at, updated_at
+                            ) VALUES (?, ?, ?, 'SF6', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)""",
+                            (str(uuid.uuid4()), p_ws, profile_id, gamer_tag, clean_cfn),
+                        )
+                        game_profiles_created += 1
+
+        sql_ov = "SELECT * FROM player_overrides"
+        params_ov = []
+        if workspace_id is not None:
+            sql_ov += " WHERE workspace_id = ?"
+            params_ov.append(workspace_id)
+
+        async with db.execute(sql_ov, params_ov) as c:
+            legacy_overrides = [dict(r) for r in await c.fetchall()]
+
+        for ov in legacy_overrides:
+            entrant_id = str(ov.get("id") or "")
+            ov_ws = ov.get("workspace_id") or workspace_id
+            if not entrant_id or not ov_ws:
+                continue
+
+            async with db.execute(
+                "SELECT tournament_slug FROM tournament_player_links WHERE entrant_id = ? AND workspace_id = ?",
+                (entrant_id, ov_ws),
+            ) as c:
+                linked_tourneys = [r[0] for r in await c.fetchall()]
+
+            target_slug = None
+            target_event = None
+
+            if len(linked_tourneys) == 1:
+                target_slug = linked_tourneys[0]
+                async with db.execute(
+                    "SELECT raw_data FROM tournaments WHERE slug = ? AND (workspace_id = ? OR workspace_id IS NULL)",
+                    (target_slug, ov_ws),
+                ) as c:
+                    t_row = await c.fetchone()
+                    if t_row and t_row[0]:
+                        try:
+                            raw = json.loads(t_row[0])
+                            events = raw.get("events") or (raw.get("tournament") or {}).get("events") or []
+                            if len(events) == 1:
+                                target_event = str(events[0].get("id") or "")
+                            elif len(events) > 1:
+                                for ev in events:
+                                    nodes = (ev.get("entrants") or {}).get("nodes") or []
+                                    if any(str(n.get("id") or "") == entrant_id for n in nodes):
+                                        target_event = str(ev.get("id") or "")
+                                        break
+                        except Exception:
+                            pass
+
+            if target_slug and target_event:
+                await db.execute(
+                    """INSERT INTO tournament_entrant_overrides (
+                        id, workspace_id, provider, tournament_slug, event_id, entrant_id,
+                        display_name, prefix, country, avatar_url, character_id, character_name, character_image_url,
+                        created_at, updated_at
+                    ) VALUES (?, ?, 'startgg', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    ON CONFLICT (workspace_id, provider, tournament_slug, event_id, entrant_id) DO UPDATE SET
+                        display_name = COALESCE(excluded.display_name, tournament_entrant_overrides.display_name),
+                        prefix = COALESCE(excluded.prefix, tournament_entrant_overrides.prefix),
+                        country = COALESCE(excluded.country, tournament_entrant_overrides.country),
+                        avatar_url = COALESCE(excluded.avatar_url, tournament_entrant_overrides.avatar_url),
+                        character_id = COALESCE(excluded.character_id, tournament_entrant_overrides.character_id),
+                        character_name = COALESCE(excluded.character_name, tournament_entrant_overrides.character_name),
+                        character_image_url = COALESCE(excluded.character_image_url, tournament_entrant_overrides.character_image_url),
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (
+                        str(uuid.uuid4()), ov_ws, target_slug, target_event, entrant_id,
+                        ov.get("display_name"), ov.get("team"), ov.get("country"), ov.get("avatar_url"),
+                        ov.get("character_id"), ov.get("character_name"), ov.get("character_image_url"),
+                    ),
+                )
+                overrides_converted += 1
+            else:
+                await db.execute(
+                    "UPDATE player_overrides SET requires_review = TRUE WHERE id = ?",
+                    (entrant_id,),
+                )
+                overrides_marked_review += 1
+
+        await db.commit()
+
+    return {
+        "profiles_created": profiles_created,
+        "provider_identities_created": provider_identities_created,
+        "game_profiles_created": game_profiles_created,
+        "overrides_converted": overrides_converted,
+        "overrides_marked_review": overrides_marked_review,
+    }
 
 async def delete_player_override(entrant_id: str, workspace_id: str | None = None):
     async with dbapi.connect(DATABASE_DSN) as db:

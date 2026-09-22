@@ -1,0 +1,516 @@
+"""Workspace-scoped repositories for player profiles, provider identities,
+
+game preferences, character defaults, and scoped tournament overrides.
+"""
+
+from __future__ import annotations
+
+import uuid
+from typing import Any
+from backend.core.storage import dbapi, Row
+from backend.core import database
+
+
+def _uuid() -> str:
+    return str(uuid.uuid4())
+
+
+# ── Player Profiles ─────────────────────────────────────────────────────────
+
+async def create_player_profile(
+    workspace_id: str,
+    display_name: str,
+    prefix: str | None = None,
+    country: str | None = None,
+    avatar_url: str | None = None,
+    discord_id: str | None = None,
+    notes: str | None = None,
+    profile_id: str | None = None,
+) -> dict[str, Any]:
+    """Create a workspace-scoped player profile."""
+    pid = profile_id or _uuid()
+    clean_name = display_name.strip()
+    clean_prefix = prefix.strip() if prefix else None
+    clean_country = country.strip() if country else None
+    clean_avatar = avatar_url.strip() if avatar_url else None
+    clean_discord = discord_id.strip() if discord_id else None
+    clean_notes = notes.strip() if notes else None
+
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute(
+            """INSERT INTO player_profiles (
+                id, workspace_id, display_name, prefix, country, avatar_url, discord_id, notes, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT (workspace_id, id) DO UPDATE SET
+                display_name = excluded.display_name,
+                prefix = excluded.prefix,
+                country = excluded.country,
+                avatar_url = excluded.avatar_url,
+                discord_id = excluded.discord_id,
+                notes = excluded.notes,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (pid, workspace_id, clean_name, clean_prefix, clean_country, clean_avatar, clean_discord, clean_notes),
+        )
+        await db.commit()
+    return await get_player_profile(pid, workspace_id) or {}
+
+
+async def get_player_profile(profile_id: str, workspace_id: str) -> dict[str, Any] | None:
+    """Retrieve a single player profile by ID within a workspace."""
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        async with db.execute(
+            "SELECT * FROM player_profiles WHERE id = ? AND workspace_id = ?",
+            (profile_id, workspace_id),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+
+async def get_player_profile_by_discord_id(discord_id: str, workspace_id: str) -> dict[str, Any] | None:
+    """Find a player profile associated with a Discord ID in a workspace."""
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        async with db.execute(
+            "SELECT * FROM player_profiles WHERE discord_id = ? AND workspace_id = ?",
+            (discord_id, workspace_id),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+
+async def list_player_profiles(
+    workspace_id: str,
+    limit: int = 100,
+    offset: int = 0,
+    query: str | None = None,
+) -> list[dict[str, Any]]:
+    """List player profiles in a workspace with optional name search and pagination."""
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        sql = "SELECT * FROM player_profiles WHERE workspace_id = ?"
+        params: list[Any] = [workspace_id]
+        if query and query.strip():
+            sql += " AND (display_name ILIKE ? OR prefix ILIKE ?)"
+            params.extend([f"%{query.strip()}%", f"%{query.strip()}%"])
+        sql += " ORDER BY display_name ASC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        async with db.execute(sql, params) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+
+async def update_player_profile(
+    profile_id: str,
+    workspace_id: str,
+    data: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Update editable fields of a player profile."""
+    allowed = {"display_name", "prefix", "country", "avatar_url", "discord_id", "notes"}
+    fields: list[str] = []
+    params: list[Any] = []
+    for key, value in data.items():
+        if key in allowed:
+            fields.append(f"{key} = ?")
+            params.append(value.strip() if isinstance(value, str) else value)
+    if not fields:
+        return await get_player_profile(profile_id, workspace_id)
+
+    fields.append("updated_at = CURRENT_TIMESTAMP")
+    params.extend([profile_id, workspace_id])
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute(
+            f"UPDATE player_profiles SET {', '.join(fields)} WHERE id = ? AND workspace_id = ?",
+            params,
+        )
+        await db.commit()
+    return await get_player_profile(profile_id, workspace_id)
+
+
+async def delete_player_profile(profile_id: str, workspace_id: str) -> bool:
+    """Delete a player profile and cascade associations."""
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        async with db.execute(
+            "DELETE FROM player_profiles WHERE id = ? AND workspace_id = ?",
+            (profile_id, workspace_id),
+        ) as cursor:
+            count = cursor.rowcount
+        await db.commit()
+        return count > 0
+
+
+# ── Provider Identities ─────────────────────────────────────────────────────
+
+async def add_provider_identity(
+    workspace_id: str,
+    player_profile_id: str,
+    provider: str,
+    provider_user_id: str,
+    provider_gamer_tag: str | None = None,
+    verified: bool = True,
+) -> dict[str, Any]:
+    """Link a provider account identity to a player profile."""
+    ident_id = _uuid()
+    clean_provider = provider.strip().lower()
+    clean_uid = str(provider_user_id).strip()
+    clean_tag = provider_gamer_tag.strip() if provider_gamer_tag else None
+
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        async with db.execute(
+            "SELECT 1 FROM player_profiles WHERE id = ? AND workspace_id = ?",
+            (player_profile_id, workspace_id),
+        ) as cursor:
+            if not await cursor.fetchone():
+                raise ValueError("Player profile not found in this workspace")
+        async with db.execute(
+            """SELECT player_profile_id FROM player_provider_identities
+               WHERE workspace_id = ? AND provider = ? AND provider_user_id = ?""",
+            (workspace_id, clean_provider, clean_uid),
+        ) as cursor:
+            existing = await cursor.fetchone()
+        if existing and existing[0] != player_profile_id:
+            raise ValueError("Provider identity is already linked to another player profile")
+        await db.execute(
+            """INSERT INTO player_provider_identities (
+                id, workspace_id, player_profile_id, provider, provider_user_id, provider_gamer_tag, verified, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT (workspace_id, provider, provider_user_id) DO UPDATE SET
+                provider_gamer_tag = excluded.provider_gamer_tag,
+                verified = excluded.verified,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (ident_id, workspace_id, player_profile_id, clean_provider, clean_uid, clean_tag, verified),
+        )
+        await db.commit()
+
+        async with db.execute(
+            "SELECT * FROM player_provider_identities WHERE workspace_id = ? AND provider = ? AND provider_user_id = ?",
+            (workspace_id, clean_provider, clean_uid),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else {}
+
+
+async def list_provider_identities(workspace_id: str, player_profile_id: str) -> list[dict[str, Any]]:
+    """List all provider identities linked to a player profile."""
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        async with db.execute(
+            "SELECT * FROM player_provider_identities WHERE workspace_id = ? AND player_profile_id = ? ORDER BY provider ASC",
+            (workspace_id, player_profile_id),
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+
+async def find_profile_by_provider_identity(
+    workspace_id: str,
+    provider: str,
+    provider_user_id: str,
+) -> dict[str, Any] | None:
+    """Look up a player profile using a provider identity."""
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        async with db.execute(
+            """SELECT p.* FROM player_profiles p
+               JOIN player_provider_identities i ON i.player_profile_id = p.id AND i.workspace_id = p.workspace_id
+               WHERE i.workspace_id = ? AND i.provider = ? AND i.provider_user_id = ?""",
+            (workspace_id, provider.strip().lower(), str(provider_user_id).strip()),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+
+# ── Game Profiles & Character Defaults ──────────────────────────────────────
+
+async def set_player_game_profile(
+    workspace_id: str,
+    player_profile_id: str,
+    game_id: str,
+    in_game_name: str | None = None,
+    in_game_id: str | None = None,
+) -> dict[str, Any]:
+    """Create or update a player's game-specific profile."""
+    gid = _uuid()
+    clean_game = game_id.strip()
+    clean_ign = in_game_name.strip() if in_game_name else None
+    clean_cfn = in_game_id.strip() if in_game_id else None
+
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        async with db.execute(
+            "SELECT 1 FROM player_profiles WHERE id = ? AND workspace_id = ?",
+            (player_profile_id, workspace_id),
+        ) as cursor:
+            if not await cursor.fetchone():
+                raise ValueError("Player profile not found in this workspace")
+        await db.execute(
+            """INSERT INTO player_game_profiles (
+                id, workspace_id, player_profile_id, game_id, in_game_name, in_game_id, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT (workspace_id, player_profile_id, game_id) DO UPDATE SET
+                in_game_name = excluded.in_game_name,
+                in_game_id = excluded.in_game_id,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (gid, workspace_id, player_profile_id, clean_game, clean_ign, clean_cfn),
+        )
+        await db.commit()
+
+        async with db.execute(
+            "SELECT * FROM player_game_profiles WHERE workspace_id = ? AND player_profile_id = ? AND game_id = ?",
+            (workspace_id, player_profile_id, clean_game),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else {}
+
+
+async def get_player_game_profile(
+    workspace_id: str,
+    player_profile_id: str,
+    game_id: str,
+) -> dict[str, Any] | None:
+    """Retrieve a game profile for a player."""
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        async with db.execute(
+            "SELECT * FROM player_game_profiles WHERE workspace_id = ? AND player_profile_id = ? AND game_id = ?",
+            (workspace_id, player_profile_id, game_id.strip()),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+
+async def list_player_game_profiles(workspace_id: str, player_profile_id: str) -> list[dict[str, Any]]:
+    """List all game profiles for a player."""
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        async with db.execute(
+            "SELECT * FROM player_game_profiles WHERE workspace_id = ? AND player_profile_id = ? ORDER BY game_id ASC",
+            (workspace_id, player_profile_id),
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+
+async def set_player_character_default(
+    workspace_id: str,
+    player_game_profile_id: str,
+    character_id: str,
+    character_name: str,
+    character_image_url: str | None = None,
+    is_primary: bool = True,
+) -> dict[str, Any]:
+    """Set a default character choice for a player game profile."""
+    cid = _uuid()
+    clean_char_id = str(character_id).strip()
+    clean_char_name = character_name.strip()
+    clean_char_image = character_image_url.strip() if character_image_url else None
+
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        async with db.execute(
+            """SELECT 1 FROM player_game_profiles
+               WHERE id = ? AND workspace_id = ?""",
+            (player_game_profile_id, workspace_id),
+        ) as cursor:
+            if not await cursor.fetchone():
+                raise ValueError("Player game profile not found in this workspace")
+        if is_primary:
+            await db.execute(
+                "UPDATE player_character_defaults SET is_primary = FALSE WHERE workspace_id = ? AND player_game_profile_id = ?",
+                (workspace_id, player_game_profile_id),
+            )
+        await db.execute(
+            """INSERT INTO player_character_defaults (
+                id, workspace_id, player_game_profile_id, character_id, character_name, character_image_url, is_primary, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT (workspace_id, player_game_profile_id, character_id) DO UPDATE SET
+                character_name = excluded.character_name,
+                character_image_url = excluded.character_image_url,
+                is_primary = excluded.is_primary
+            """,
+            (cid, workspace_id, player_game_profile_id, clean_char_id, clean_char_name, clean_char_image, is_primary),
+        )
+        await db.commit()
+
+        async with db.execute(
+            "SELECT * FROM player_character_defaults WHERE workspace_id = ? AND player_game_profile_id = ? AND character_id = ?",
+            (workspace_id, player_game_profile_id, clean_char_id),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else {}
+
+
+async def get_player_character_defaults(
+    workspace_id: str,
+    player_game_profile_id: str,
+) -> list[dict[str, Any]]:
+    """List character defaults for a game profile."""
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        async with db.execute(
+            "SELECT * FROM player_character_defaults WHERE workspace_id = ? AND player_game_profile_id = ? ORDER BY is_primary DESC, created_at ASC",
+            (workspace_id, player_game_profile_id),
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+
+# ── Tournament Entrant Overrides ───────────────────────────────────────────
+
+async def set_tournament_entrant_override(
+    workspace_id: str,
+    provider: str,
+    tournament_slug: str,
+    event_id: str,
+    entrant_id: str,
+    data: dict[str, Any],
+    updated_by: str | None = None,
+) -> dict[str, Any]:
+    """Create or update an event-scoped tournament entrant override with row-locking and audit metadata."""
+    clean_provider = provider.strip().lower()
+    clean_slug = tournament_slug.strip()
+    clean_event = str(event_id).strip()
+    clean_entrant = str(entrant_id).strip()
+
+    name = data.get("name") if "name" in data else data.get("display_name")
+    prefix = data.get("prefix") if "prefix" in data else data.get("team")
+    country = data.get("country")
+    avatar_url = data.get("avatar_url")
+    char_id = data.get("character_id")
+    char_name = data.get("character") if "character" in data else data.get("character_name")
+    char_image = data.get("character_image_url")
+    notes = data.get("notes")
+
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        oid = _uuid()
+        await db.execute(
+            """INSERT INTO tournament_entrant_overrides (
+                id, workspace_id, provider, tournament_slug, event_id, entrant_id,
+                display_name, prefix, country, avatar_url, character_id, character_name, character_image_url,
+                notes, updated_by, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT (workspace_id, provider, tournament_slug, event_id, entrant_id) DO UPDATE SET
+                display_name = CASE WHEN ? THEN excluded.display_name ELSE tournament_entrant_overrides.display_name END,
+                prefix = CASE WHEN ? THEN excluded.prefix ELSE tournament_entrant_overrides.prefix END,
+                country = CASE WHEN ? THEN excluded.country ELSE tournament_entrant_overrides.country END,
+                avatar_url = CASE WHEN ? THEN excluded.avatar_url ELSE tournament_entrant_overrides.avatar_url END,
+                character_id = CASE WHEN ? THEN excluded.character_id ELSE tournament_entrant_overrides.character_id END,
+                character_name = CASE WHEN ? THEN excluded.character_name ELSE tournament_entrant_overrides.character_name END,
+                character_image_url = CASE WHEN ? THEN excluded.character_image_url ELSE tournament_entrant_overrides.character_image_url END,
+                notes = CASE WHEN ? THEN excluded.notes ELSE tournament_entrant_overrides.notes END,
+                updated_by = CASE WHEN ? THEN excluded.updated_by ELSE tournament_entrant_overrides.updated_by END,
+                updated_at = CURRENT_TIMESTAMP""",
+            (
+                oid, workspace_id, clean_provider, clean_slug, clean_event, clean_entrant,
+                name, prefix, country, avatar_url, char_id, char_name, char_image,
+                notes, updated_by,
+                bool("name" in data or "display_name" in data),
+                bool("prefix" in data or "team" in data),
+                bool("country" in data),
+                bool("avatar_url" in data),
+                bool("character_id" in data),
+                bool("character" in data or "character_name" in data),
+                bool("character_image_url" in data),
+                bool("notes" in data),
+                bool(updated_by),
+            ),
+        )
+        await db.commit()
+
+    return await get_tournament_entrant_override(workspace_id, clean_provider, clean_slug, clean_event, clean_entrant) or {}
+
+
+async def get_tournament_entrant_override(
+    workspace_id: str,
+    provider: str,
+    tournament_slug: str,
+    event_id: str,
+    entrant_id: str,
+) -> dict[str, Any] | None:
+    """Retrieve an event-scoped entrant override."""
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        async with db.execute(
+            """SELECT * FROM tournament_entrant_overrides
+               WHERE workspace_id = ? AND provider = ? AND tournament_slug = ? AND event_id = ? AND entrant_id = ?""",
+            (workspace_id, provider.strip().lower(), tournament_slug.strip(), str(event_id).strip(), str(entrant_id).strip()),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+
+async def delete_tournament_entrant_override(
+    workspace_id: str,
+    provider: str,
+    tournament_slug: str,
+    event_id: str,
+    entrant_id: str,
+) -> bool:
+    """Delete a scoped tournament entrant override (reset to profile/provider)."""
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        async with db.execute(
+            """DELETE FROM tournament_entrant_overrides
+               WHERE workspace_id = ? AND provider = ? AND tournament_slug = ? AND event_id = ? AND entrant_id = ?""",
+            (workspace_id, provider.strip().lower(), tournament_slug.strip(), str(event_id).strip(), str(entrant_id).strip()),
+        ) as cursor:
+            count = cursor.rowcount
+        await db.commit()
+        return count > 0
+
+
+async def list_tournament_entrant_overrides(
+    workspace_id: str,
+    tournament_slug: str,
+    event_id: str | None = None,
+    provider: str | None = None,
+) -> list[dict[str, Any]]:
+    """List scoped overrides for a tournament, optionally scoped to an event."""
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        sql = "SELECT * FROM tournament_entrant_overrides WHERE workspace_id = ? AND tournament_slug = ?"
+        params: list[Any] = [workspace_id, tournament_slug.strip()]
+        if event_id:
+            sql += " AND event_id = ?"
+            params.append(str(event_id).strip())
+        if provider:
+            sql += " AND provider = ?"
+            params.append(provider.strip().lower())
+        sql += " ORDER BY entrant_id ASC"
+
+        async with db.execute(sql, params) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+
+# ── Entrant Link Resolution ─────────────────────────────────────────────────
+
+async def get_entrant_linked_profile(
+    workspace_id: str,
+    tournament_slug: str,
+    entrant_id: str,
+) -> dict[str, Any] | None:
+    """Retrieve the confirmed linked PlayerProfile for an entrant."""
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        # First check tournament_player_links
+        async with db.execute(
+            """SELECT l.player_discord_id, p.* FROM tournament_player_links l
+               LEFT JOIN player_profiles p ON p.discord_id = l.player_discord_id AND p.workspace_id = l.workspace_id
+               WHERE l.workspace_id = ? AND l.tournament_slug = ? AND l.entrant_id = ?""",
+            (workspace_id, tournament_slug.strip(), str(entrant_id).strip()),
+        ) as cursor:
+            row = await cursor.fetchone()
+            if not row or not row.get("player_discord_id"):
+                return None
+            if row.get("id"):
+                return dict(row)
+
+            # Fallback: if player_profiles row doesn't exist yet but players row does
+            async with db.execute(
+                "SELECT * FROM players WHERE discord_id = ? AND (workspace_id = ? OR workspace_id IS NULL)",
+                (row["player_discord_id"], workspace_id),
+            ) as p_cursor:
+                player_row = await p_cursor.fetchone()
+                if player_row:
+                    p = dict(player_row)
+                    return {
+                        "id": None,
+                        "workspace_id": workspace_id,
+                        "display_name": p.get("gamer_tag") or p.get("discord_id"),
+                        "prefix": p.get("team"),
+                        "country": p.get("country"),
+                        "avatar_url": p.get("avatar_path"),
+                        "discord_id": p.get("discord_id"),
+                    }
+            return None
