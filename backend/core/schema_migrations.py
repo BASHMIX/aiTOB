@@ -156,6 +156,65 @@ async def _ensure_foreign_key(
     )
 
 
+async def _normalize_discord_destination_references(db) -> None:
+    """Upgrade wizard-era channel IDs to integration destination IDs.
+
+    Early Feature 004 builds stored Discord external channel IDs directly in
+    the two binding columns even though the final schema defines those columns
+    as foreign keys. Preserve those channels by reusing an existing destination
+    or creating a deterministic migration destination before adding the FKs.
+    """
+    for column, destination_type in (
+        ("match_destination_id", "match_call_channel"),
+        ("escalation_destination_id", "escalation_channel"),
+    ):
+        await db.execute(
+            f"""INSERT INTO integration_destinations
+                   (id, account_id, workspace_id, destination_type, external_id, display_name)
+                SELECT 'phase11-' || md5(
+                           b.discord_account_id || ':' || b.workspace_id || ':' || b."{column}"
+                       ),
+                       b.discord_account_id, b.workspace_id, ?, b."{column}",
+                       'Migrated tournament destination'
+                  FROM tournament_discord_bindings b
+                 WHERE b."{column}" <> ''
+                   AND NOT EXISTS (
+                       SELECT 1 FROM integration_destinations by_id
+                        WHERE by_id.id=b."{column}"
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1 FROM integration_destinations by_external
+                        WHERE by_external.account_id=b.discord_account_id
+                          AND by_external.workspace_id=b.workspace_id
+                          AND by_external.external_id=b."{column}"
+                   )
+                ON CONFLICT DO NOTHING""",
+            (destination_type,),
+        )
+        await db.execute(
+            f"""UPDATE tournament_discord_bindings b
+                   SET "{column}"=(
+                       SELECT d.id
+                         FROM integration_destinations d
+                        WHERE d.account_id=b.discord_account_id
+                          AND d.workspace_id=b.workspace_id
+                          AND d.external_id=b."{column}"
+                        ORDER BY d.created_at, d.id
+                        LIMIT 1
+                   )
+                 WHERE NOT EXISTS (
+                       SELECT 1 FROM integration_destinations by_id
+                        WHERE by_id.id=b."{column}"
+                   )
+                   AND EXISTS (
+                       SELECT 1 FROM integration_destinations by_external
+                        WHERE by_external.account_id=b.discord_account_id
+                          AND by_external.workspace_id=b.workspace_id
+                          AND by_external.external_id=b."{column}"
+                   )"""
+        )
+
+
 async def apply_tournament_setup_constraints(db):
     """Finish Feature 004 ownership and cross-aggregate PostgreSQL contracts."""
     await db.execute(
@@ -227,6 +286,8 @@ async def apply_tournament_setup_constraints(db):
         "ON tournament_player_enrollments(workspace_id, tournament_id, provider_entrant_id) "
         "WHERE provider_entrant_id IS NOT NULL"
     )
+
+    await _normalize_discord_destination_references(db)
 
     foreign_keys = (
         ("tournament_setup_drafts", "workspace_id", "workspaces", "id"),

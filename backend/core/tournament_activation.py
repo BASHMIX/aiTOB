@@ -18,6 +18,45 @@ class ActivationError(RuntimeError):
     pass
 
 
+async def _ensure_discord_destination_id(
+    db: Any,
+    *,
+    account_id: str,
+    workspace_id: str,
+    value: str,
+    destination_type: str,
+) -> str:
+    """Return a same-workspace destination ID for an ID or external channel ID."""
+    candidate = str(value or "").strip()
+    if not candidate:
+        raise ActivationError("Discord destination is required when Discord is enabled.")
+    row = await (await db.execute(
+        """SELECT id FROM integration_destinations
+            WHERE account_id=? AND workspace_id=? AND status='active'
+              AND (id=? OR external_id=?)
+            ORDER BY CASE WHEN id=? THEN 0 ELSE 1 END, created_at
+            LIMIT 1""",
+        (account_id, workspace_id, candidate, candidate, candidate),
+    )).fetchone()
+    if row:
+        return str(row[0])
+
+    destination_id = str(uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"aitob:{workspace_id}:{account_id}:discord-destination:{candidate}",
+    ))
+    row = await (await db.execute(
+        """INSERT INTO integration_destinations
+               (id, account_id, workspace_id, destination_type, external_id, display_name)
+            VALUES (?, ?, ?, ?, ?, 'Tournament destination')
+            ON CONFLICT(account_id, destination_type, external_id) DO UPDATE SET
+               status='active'
+            RETURNING id""",
+        (destination_id, account_id, workspace_id, destination_type, candidate),
+    )).fetchone()
+    return str(row[0])
+
+
 async def _persist_materialized_settings(db: Any, draft: dict[str, Any], tournament_id: str, workspace_id: str, actor_id: str, now: str) -> None:
     """Project wizard answers into the durable tournament settings tables."""
     provider = draft.get("provider_scope") or {}
@@ -95,10 +134,33 @@ async def _persist_materialized_settings(db: Any, draft: dict[str, Any], tournam
     match_destination = str(discord.get("destination_external_id") or registration.get("destination_external_id") or "")
     if discord.get("enabled"):
         account_row = await (await db.execute(
-            "SELECT id FROM integration_accounts WHERE owner_id=? AND provider_type='discord' AND status='active' ORDER BY created_at LIMIT 1",
+            "SELECT id FROM integration_accounts WHERE workspace_id=? AND provider_type='discord' AND status='active' ORDER BY created_at LIMIT 1",
             (workspace_id,),
         )).fetchone()
         discord_account_id = str(discord.get("discord_account_id") or discord.get("account_id") or (account_row[0] if account_row else ""))
+        if not discord_account_id:
+            raise ActivationError("An active Discord integration account is required.")
+        selected_account = await (await db.execute(
+            """SELECT id FROM integration_accounts
+                WHERE id=? AND workspace_id=? AND provider_type='discord' AND status='active'""",
+            (discord_account_id, workspace_id),
+        )).fetchone()
+        if not selected_account:
+            raise ActivationError("The selected Discord account is unavailable in this workspace.")
+        match_destination_id = await _ensure_discord_destination_id(
+            db,
+            account_id=discord_account_id,
+            workspace_id=workspace_id,
+            value=match_destination,
+            destination_type="match_call_channel",
+        )
+        escalation_destination_id = await _ensure_discord_destination_id(
+            db,
+            account_id=discord_account_id,
+            workspace_id=workspace_id,
+            value=str(discord.get("escalation_destination_id") or match_destination),
+            destination_type="escalation_channel",
+        )
         await db.execute("UPDATE tournaments SET discord_account_id=? WHERE slug=? AND workspace_id=?", (discord_account_id, tournament_id, workspace_id))
         await db.execute(
             """INSERT INTO tournament_discord_bindings
@@ -110,8 +172,8 @@ async def _persist_materialized_settings(db: Any, draft: dict[str, Any], tournam
                 escalation_destination_id=excluded.escalation_destination_id,
                 moderator_role_external_id=excluded.moderator_role_external_id,
                 status=excluded.status, updated_at=excluded.updated_at""",
-            (tournament_id, workspace_id, discord_account_id, guild_id, match_destination,
-             str(discord.get("escalation_destination_id") or match_destination),
+            (tournament_id, workspace_id, discord_account_id, guild_id, match_destination_id,
+             escalation_destination_id,
              discord.get("moderator_role_external_id") or registration.get("verified_role_external_id"),
              "ready" if guild_id and match_destination and discord_account_id else "degraded", now, now),
         )

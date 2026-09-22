@@ -27,3 +27,60 @@ async def test_materialize_and_activate_are_idempotent(tmp_path, monkeypatch):
     async with database.dbapi.connect(database.DATABASE_DSN) as db:
         count = await (await db.execute("SELECT COUNT(*) FROM workflow_outbox WHERE event_type='initial_sync'")).fetchone()
     assert count[0] == 1
+
+
+@pytest.mark.asyncio
+async def test_materialization_resolves_discord_channel_to_destination_id(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DATABASE_DSN", str(tmp_path / "discord-activation.pg"))
+    await database.init_db()
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute("INSERT INTO workspaces(id,slug,name) VALUES ('w','w','W')")
+        await db.execute("INSERT INTO users(id,email,display_name,password_hash) VALUES ('u','u@example.com','U','x')")
+        await db.execute(
+            """INSERT INTO integration_accounts
+               (id, owner_id, workspace_id, provider_type, external_account_id, display_name)
+               VALUES
+               ('provider-a', 'w', 'w', 'startgg', 'remote-a', 'Start.gg'),
+               ('discord-a', 'w', 'w', 'discord', 'guild-1', 'Discord')"""
+        )
+        await db.commit()
+
+    draft = await create_draft("w", "u")
+    draft = await patch_draft(
+        draft["id"], "w", "u", section="provider_scope",
+        value={
+            "provider": "startgg", "account_id": "provider-a",
+            "selected_scope": {"external_id": "event-1", "name": "Event"},
+            "tournament": {"external_id": "tournament-1", "canonical_slug": "discord-test", "name": "Discord Test"},
+        },
+        expected_revision=draft["revision"], current_step="provider",
+    )
+    draft = await patch_draft(
+        draft["id"], "w", "u", section="tournament_review",
+        value={"display_name": "Discord Test"},
+        expected_revision=draft["revision"], current_step="tournament",
+    )
+    draft = await patch_draft(
+        draft["id"], "w", "u", section="discord_setup",
+        value={
+            "enabled": True, "discord_account_id": "discord-a",
+            "guild_id": "guild-1", "destination_external_id": "channel-1",
+        },
+        expected_revision=draft["revision"], current_step="discord",
+    )
+
+    materialized = await materialize_draft(
+        draft["id"], "w", "u", expected_revision=draft["revision"]
+    )
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
+        row = await (await db.execute(
+            """SELECT b.match_destination_id, b.escalation_destination_id, d.external_id
+                 FROM tournament_discord_bindings b
+                 JOIN integration_destinations d ON d.id=b.match_destination_id
+                WHERE b.tournament_id=?""",
+            (materialized["tournament_id"],),
+        )).fetchone()
+
+    assert row is not None
+    assert row[0] == row[1]
+    assert row[2] == "channel-1"
