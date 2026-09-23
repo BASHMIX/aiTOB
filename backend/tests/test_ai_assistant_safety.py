@@ -73,34 +73,38 @@ async def test_legacy_assistant_path_rejects_unscoped_input_without_touching_dis
 
 
 @pytest.mark.asyncio
-async def test_legacy_player_read_tool_is_bound_to_active_workspace(monkeypatch):
-    """The compatibility assistant read must not enumerate another tenant."""
+async def test_legacy_player_read_tool_cannot_use_process_global_workspace(monkeypatch):
+    """The shared bot's legacy assistant tool cannot enumerate tenant data."""
     from backend.bot import main
     import core.database as bot_database
 
     reader = AsyncMock(return_value=[{"discord_id": "player-a"}])
     monkeypatch.setattr(bot_database, "get_players_for_workspace", reader)
-    monkeypatch.setattr(main, "ACTIVE_DISCORD_WORKSPACE_ID", "workspace-a")
-
     result = await main.get_players_tool.ainvoke({})
 
-    assert "player-a" in result
-    reader.assert_awaited_once_with("workspace-a")
+    assert result == "[]"
+    reader.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_manual_bot_endpoint_keeps_explicit_commands_unchanged(monkeypatch):
+async def test_manual_bot_endpoint_durably_queues_workspace_scoped_command(monkeypatch):
     connection = SimpleNamespace(send_text=AsyncMock())
     monkeypatch.setattr(hub.hub_mgr, "bot_connection", connection)
     monkeypatch.setattr(hub.hub_mgr, "broadcast", AsyncMock())
     monkeypatch.setattr(hub, "add_bot_feed", AsyncMock())
+    enqueue = AsyncMock()
+    monkeypatch.setattr(hub, "add_hub_command", enqueue)
 
-    response = await hub.api_bot_command(BotCommandRequest(command="call_match 471045156"))
+    principal = SimpleNamespace(workspace_id="workspace-a")
+    response = await hub.api_bot_command(
+        BotCommandRequest(command="call_match 471045156"), principal=principal,
+    )
 
     import json
     delivered = json.loads(connection.send_text.await_args.args[0])
     assert response.ok is True
-    assert delivered["command"] == "call_match 471045156"
+    assert delivered == {"type": "drain"}
+    enqueue.assert_awaited_once_with("call_match 471045156", workspace_id="workspace-a")
 
 
 @pytest.mark.asyncio

@@ -68,29 +68,30 @@ async def api_clear_feed(principal: SessionPrincipal | None = Depends(verify_hub
     operation_id="queueBotCommand"
 )
 async def api_bot_command(body: BotCommandRequest, principal: SessionPrincipal | None = Depends(verify_hub_password)):
-    """Enqueue a text command to be processed by the background Discord bot client. Requires admin password authentication."""
+    """Durably enqueue a workspace-scoped command for the managed Discord bot."""
     cmd = body.command
     if cmd:
         import datetime
         import json
         workspace_id = getattr(principal, "workspace_id", None)
+        if not workspace_id:
+            raise HTTPException(status_code=403, detail="A workspace session is required")
         await add_bot_feed(f"Admin command: {cmd}", "info", workspace_id)
         await hub_mgr.broadcast({"type": "bot_feed_update", "log": {
             "message": f"Admin command: {cmd}",
             "level": "info",
             "timestamp": datetime.datetime.now().isoformat()
-        }})
+        }, "_workspace_id": workspace_id})
+        await add_hub_command(cmd, workspace_id=workspace_id)
         if hub_mgr.bot_connection:
             try:
                 await hub_mgr.bot_connection.send_text(json.dumps({
-                    "type": "command",
-                    "command": cmd
+                    "type": "drain",
                 }))
-                return MessageResponse(message="Command sent to bot", ok=True)
             except Exception as e:
-                print(f"Error sending command to bot WS: {e}")
-        await add_hub_command(cmd, workspace_id=workspace_id)
-    return MessageResponse(message="Command queued (Bot offline)", ok=True)
+                print(f"Error nudging bot command queue: {e}")
+        return MessageResponse(message="Command queued", ok=True)
+    return MessageResponse(message="No command supplied", ok=False)
 
 
 @router.post(

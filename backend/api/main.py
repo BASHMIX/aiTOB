@@ -452,9 +452,10 @@ async def bot_websocket_endpoint(websocket: WebSocket):
             if message.get("type") == "log":
                 log_msg = message.get("message")
                 log_level = message.get("level", "info")
-                if log_msg:
+                workspace_id = message.get("workspace_id")
+                if log_msg and workspace_id:
                     from backend.core.database import add_bot_feed
-                    await add_bot_feed(log_msg, log_level)
+                    await add_bot_feed(log_msg, log_level, workspace_id)
                     import datetime
                     await ws_manager.broadcast({
                         "type": "bot_feed_update",
@@ -462,7 +463,8 @@ async def bot_websocket_endpoint(websocket: WebSocket):
                             "message": log_msg,
                             "level": log_level,
                             "timestamp": datetime.datetime.now().isoformat()
-                        }
+                        },
+                        "_workspace_id": workspace_id,
                     })
             elif message.get("type") == "agent_response":
                 resp_text = message.get("response")

@@ -1183,6 +1183,7 @@ INDEXES = [
     ,"CREATE INDEX IF NOT EXISTS idx_auth_rate_limits_window ON auth_rate_limits(window_started_at)"
     ,"CREATE INDEX IF NOT EXISTS idx_workspace_entitlements_expiry ON workspace_entitlements(expires_at, suspended_at)"
     ,"CREATE INDEX IF NOT EXISTS idx_error_events_created ON error_events(created_at)"
+    ,"CREATE UNIQUE INDEX IF NOT EXISTS uq_active_discord_guild_owner ON integration_accounts(external_account_id) WHERE provider_type='discord' AND status='active'"
     ,"CREATE UNIQUE INDEX IF NOT EXISTS uq_stations_workspace_public_id ON stations(workspace_id, public_id)"
     ,"CREATE INDEX IF NOT EXISTS idx_overlay_access_station ON overlay_access_tokens(workspace_id, station_id, revoked_at)"
     ,"CREATE INDEX IF NOT EXISTS idx_station_queue_lookup ON station_queue(station_id, sort_order)"

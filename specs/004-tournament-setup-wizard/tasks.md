@@ -137,7 +137,7 @@ supports authorized single-player DQ only.
 - [X] T052 [P] [US3] Implement safe guild/channel/thread/role discovery and effective permission calculations including channel overwrites in `backend/core/discord_resources.py`
 - [X] T053 [P] [US3] Implement bot experience inheritance, supported-variable registry, shared renderer, escaping, and destination length limits in `backend/core/tournament_templates.py`
 - [X] T054 [US3] Implement Discord resource, recheck, and message-preview endpoints with safe projections in `backend/api/routers/integrations.py`
-- [ ] T055 [US3] Replace process-global active workspace/account selection with explicit inbound and outbound routing in `backend/bot/main.py`
+- [X] T055 [US3] Replace process-global active workspace/account selection with explicit inbound and outbound routing in `backend/bot/main.py`
 - [ ] T056 [P] [US3] Route match calls, reminders, result receipts, clarifications, and escalations through the validated renderer in `backend/bot/messages.py`
 - [X] T057 [P] [US3] Build Discord enablement, connection, resource, permissions, behavior, locale, tone, and template panels in `frontend-react/src/features/tournament-setup/components/DiscordStep.tsx`
 - [ ] T058 [US3] Integrate Discord OAuth return restoration and permission/readiness state into `frontend-react/src/features/tournament-setup/store.ts`

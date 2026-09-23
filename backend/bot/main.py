@@ -23,9 +23,9 @@ from bot.runtime_logging import console_message, ready_message
 load_dotenv()
 
 TOKEN = None
-ACTIVE_DISCORD_ACCOUNT_ID = None
-ACTIVE_DISCORD_WORKSPACE_ID = None
-# Credentials are fetched from the encrypted account store at process startup.
+# One platform-managed bot serves every connected guild. Tenant routing is
+# resolved per interaction/effect from PostgreSQL; no process-global workspace
+# or customer-supplied bot token is allowed.
 API_BASE_URL_ENV = os.getenv("API_BASE_URL", "http://localhost:8000")
 
 intents = discord.Intents.default()
@@ -54,6 +54,49 @@ class TournamentBot(commands.Bot):
 
 
 bot = TournamentBot(command_prefix="!", intents=intents)
+
+
+async def _workspace_for_interaction(interaction: discord.Interaction) -> str:
+    """Resolve a slash/button interaction through its Discord guild."""
+
+    guild_id = getattr(interaction, "guild_id", None)
+    if guild_id is None and getattr(interaction, "guild", None) is not None:
+        guild_id = interaction.guild.id
+    if guild_id is None:
+        raise RuntimeError("Continue this action from the connected tournament server.")
+    from backend.core.bot_routing import DiscordRoutingError, resolve_workspace_for_guild
+    try:
+        return await resolve_workspace_for_guild(str(guild_id))
+    except DiscordRoutingError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
+async def _workspace_for_context(ctx) -> str:
+    guild = getattr(ctx, "guild", None)
+    if guild is None:
+        raise RuntimeError("This command is available only in a connected tournament server.")
+    from backend.core.bot_routing import DiscordRoutingError, resolve_workspace_for_guild
+    try:
+        return await resolve_workspace_for_guild(str(guild.id))
+    except DiscordRoutingError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
+async def _require_organizer_tournament_channel(ctx):
+    """Authorize a guild manager inside one configured tournament channel."""
+
+    guild = getattr(ctx, "guild", None)
+    channel = getattr(ctx, "channel", None)
+    permissions = getattr(getattr(ctx, "author", None), "guild_permissions", None)
+    if guild is None or channel is None:
+        raise RuntimeError("This command is available only in a connected tournament server.")
+    if not bool(getattr(permissions, "manage_guild", False)):
+        raise RuntimeError("Manage Server permission is required for this organizer command.")
+    from backend.core.bot_routing import DiscordRoutingError, resolve_inbound_discord_route
+    try:
+        return await resolve_inbound_discord_route(str(guild.id), str(channel.id))
+    except DiscordRoutingError as exc:
+        raise RuntimeError(str(exc)) from exc
 
 # Result Claims are not available yet. A Discord message may never be treated as
 # an authoritative score, regardless of whether it contains a strict command or
@@ -111,9 +154,10 @@ async def on_ready():
         drain_workflow_outbox.start()
     if get_provider_feature_flags().challonge_local_workflow_enabled:
         from backend.bot.match_threads import restore_ready_check_views
-        restored_ready_views = await restore_ready_check_views(
-            bot, workspace_id=ACTIVE_DISCORD_WORKSPACE_ID,
-        )
+        from backend.core.bot_routing import list_managed_discord_workspaces
+        restored_ready_views = 0
+        for workspace_id in await list_managed_discord_workspaces():
+            restored_ready_views += await restore_ready_check_views(bot, workspace_id=workspace_id)
         if restored_ready_views:
             await ws_add_bot_feed(f"Restored {restored_ready_views} persisted Challonge Ready view(s)", "info")
     # Drain anything queued before the bot came online.
@@ -173,15 +217,11 @@ def _generate_verify_code() -> str:
     return "".join(_secrets.choice(alphabet) for _ in range(8))
 
 
-async def _start_bio_verification(interaction: discord.Interaction, slug: str):
+async def _start_bio_verification(interaction: discord.Interaction, slug: str, workspace_id: str):
     """Issue a fresh code for this Discord user + slug, DM-style ephemeral reply."""
     from core.database import create_pending_verification
 
     discord_id = str(interaction.user.id)
-    workspace_id = ACTIVE_DISCORD_WORKSPACE_ID
-    if not workspace_id:
-        await interaction.response.send_message("Verification is temporarily unavailable: the bot has no workspace-owned identity.", ephemeral=True)
-        return
     code = _generate_verify_code()
     await create_pending_verification(discord_id, slug, code, ttl_seconds=300, workspace_id=workspace_id)
 
@@ -253,7 +293,6 @@ async def _finalize_or_request_cfn(
     a holding reply via the followup so the interaction doesn't expire silently.
     """
     from core.database import get_player, create_or_update_player, sync_player_cfns_to_matches
-    workspace_id = workspace_id or ACTIVE_DISCORD_WORKSPACE_ID
     if not workspace_id:
         raise RuntimeError("Verification requires a workspace-owned bot context.")
     player = await get_player(discord_id, workspace_id)
@@ -287,7 +326,9 @@ class BroadcastAvatarView(discord.ui.View):
         self.discord_id = str(discord_id)
         self.gamer_tag = gamer_tag
         self.lang = lang
-        self.workspace_id = workspace_id or ACTIVE_DISCORD_WORKSPACE_ID
+        if not workspace_id:
+            raise ValueError("A workspace is required for avatar verification.")
+        self.workspace_id = workspace_id
 
         keep_btn = discord.ui.Button(
             label=get_msg("avatar_keep_btn", lang) or "Keep Existing Avatar",
@@ -360,7 +401,9 @@ class NewAvatarPromptView(discord.ui.View):
         self.discord_id = str(discord_id)
         self.gamer_tag = gamer_tag
         self.lang = lang
-        self.workspace_id = workspace_id or ACTIVE_DISCORD_WORKSPACE_ID
+        if not workspace_id:
+            raise ValueError("A workspace is required for avatar verification.")
+        self.workspace_id = workspace_id
 
         skip_btn = discord.ui.Button(
             label=get_msg("avatar_skip_btn", lang) or "Skip for Now",
@@ -401,9 +444,10 @@ class NewAvatarPromptView(discord.ui.View):
 async def verify_command(interaction: discord.Interaction, profile: str | None = None):
     from core.database import get_player
     discord_id = str(interaction.user.id)
-    workspace_id = ACTIVE_DISCORD_WORKSPACE_ID
-    if not workspace_id:
-        await interaction.response.send_message("Verification is temporarily unavailable: the bot has no workspace-owned identity.", ephemeral=True)
+    try:
+        workspace_id = await _workspace_for_interaction(interaction)
+    except RuntimeError as exc:
+        await interaction.response.send_message(str(exc), ephemeral=True)
         return
 
     # Idempotency — already verified?
@@ -427,7 +471,7 @@ async def verify_command(interaction: discord.Interaction, profile: str | None =
                 ephemeral=True,
             )
             return
-        await _start_bio_verification(interaction, slug)
+        await _start_bio_verification(interaction, slug, workspace_id)
         return
 
     # No profile provided — let LLM disambiguation handle it (Gap B).
@@ -444,9 +488,10 @@ async def verify_confirm_command(interaction: discord.Interaction):
     )
 
     discord_id = str(interaction.user.id)
-    workspace_id = ACTIVE_DISCORD_WORKSPACE_ID
-    if not workspace_id:
-        await interaction.response.send_message("Verification is temporarily unavailable: the bot has no workspace-owned identity.", ephemeral=True)
+    try:
+        workspace_id = await _workspace_for_interaction(interaction)
+    except RuntimeError as exc:
+        await interaction.response.send_message(str(exc), ephemeral=True)
         return
 
     # Cheap idempotency guard.
@@ -605,9 +650,10 @@ async def avatar_command(interaction: discord.Interaction):
     """
     from core.database import get_player, create_or_update_player
     discord_id = str(interaction.user.id)
-    workspace_id = ACTIVE_DISCORD_WORKSPACE_ID
-    if not workspace_id:
-        await interaction.response.send_message("Avatar updates are temporarily unavailable: the bot has no workspace-owned identity.", ephemeral=True)
+    try:
+        workspace_id = await _workspace_for_interaction(interaction)
+    except RuntimeError as exc:
+        await interaction.response.send_message(str(exc), ephemeral=True)
         return
     player = await get_player(discord_id, workspace_id)
 
@@ -649,65 +695,12 @@ async def avatar_command(interaction: discord.Interaction):
 _VERIFY_DISAMBIG_TIMEOUT = 120  # seconds the picker stays interactive
 
 
-def _collect_candidate_entrants() -> list[dict]:
-    """Flatten entrants across all tracked tournaments. Each candidate has:
-        slug      — start.gg user slug (None if no linked user)
-        user_id   — start.gg user.id (None if no linked user)
-        gamerTag  — display name
-        prefix    — team/sponsor tag
-        country   — best-effort flag emoji input ("US", "AE", etc.)
-        tournament— tournament name (for context)
-    Returns at most ~30 to keep the LLM prompt bounded.
-    """
-    import asyncio as _aio
-    import json as _json
-    from core.database import get_tournaments
-
-    async def _gather():
-        tournaments = await get_tournaments()
-        candidates: list[dict] = []
-        for t in tournaments:
-            raw = t.get("raw_data")
-            if not raw:
-                continue
-            try:
-                parsed = _json.loads(raw)
-            except Exception:
-                continue
-            for ev in (parsed.get("events") or []):
-                for ent in ((ev.get("entrants") or {}).get("nodes") or []):
-                    participants = ent.get("participants") or []
-                    if not participants:
-                        continue
-                    user = (participants[0] or {}).get("user") or {}
-                    candidates.append({
-                        "slug": user.get("slug"),
-                        "user_id": user.get("id"),
-                        "gamerTag": ent.get("name") or "",
-                        "prefix": (user.get("player") or {}).get("prefix"),
-                        "tournament": t.get("name"),
-                    })
-        # Drop entries with no slug (can't bio-verify against them).
-        candidates = [c for c in candidates if c.get("slug")]
-        # Dedupe by slug.
-        seen = set()
-        unique = []
-        for c in candidates:
-            if c["slug"] in seen:
-                continue
-            seen.add(c["slug"])
-            unique.append(c)
-        return unique[:50]  # hard cap on prompt size
-
-    return _aio.get_event_loop().run_until_complete(_gather()) if False else None  # see below
-
-
-async def _collect_candidate_entrants_async() -> list[dict]:
+async def _collect_candidate_entrants_async(workspace_id: str) -> list[dict]:
     """Async version (the sync wrapper above is unused; kept for clarity)."""
     import json as _json
     from core.database import get_tournaments
 
-    tournaments = await get_tournaments()
+    tournaments = await get_tournaments(workspace_id)
     candidates: list[dict] = []
     for t in tournaments:
         raw = t.get("raw_data")
@@ -743,9 +736,10 @@ async def _collect_candidate_entrants_async() -> list[dict]:
 class _VerifyPickerView(discord.ui.View):
     """Buttoned picker showing top-3 LLM-ranked candidates + a 'None of these' fallback."""
 
-    def __init__(self, top: list[dict], invoking_user_id: int):
+    def __init__(self, top: list[dict], invoking_user_id: int, workspace_id: str):
         super().__init__(timeout=_VERIFY_DISAMBIG_TIMEOUT)
         self.invoking_user_id = invoking_user_id
+        self.workspace_id = workspace_id
 
         for idx, cand in enumerate(top[:3]):
             label = cand["gamerTag"]
@@ -770,7 +764,7 @@ class _VerifyPickerView(discord.ui.View):
                 for c in self.children:
                     c.disabled = True
                 await interaction.message.edit(view=self)
-                await _start_bio_verification(interaction, _slug)
+                await _start_bio_verification(interaction, _slug, self.workspace_id)
             btn.callback = _cb
             self.add_item(btn)
 
@@ -799,7 +793,7 @@ class _VerifyPickerView(discord.ui.View):
 
 
 async def _llm_rank_entrants(discord_user: discord.User | discord.Member,
-                              candidates: list[dict]) -> list[dict]:
+                              candidates: list[dict], workspace_id: str) -> list[dict]:
     """Ask Gemini to rank candidates by likelihood of being this Discord user.
 
     Returns up to 3 candidates ordered most→least likely. Falls back to
@@ -842,7 +836,7 @@ async def _llm_rank_entrants(discord_user: discord.User | discord.Member,
         # AI ranking is a deliberate assistant use and must resolve the
         # current workspace's selected BYOK account.  An unscoped call cannot
         # fall back to a process/global key.
-        llm, _ = await _get_llm(ACTIVE_DISCORD_WORKSPACE_ID)
+        llm, _ = await _get_llm(workspace_id)
         ranker = llm.with_structured_output(_RankResult)
 
         # Compact prompt — bound at ~50 candidates so it stays cheap.
@@ -896,7 +890,9 @@ async def auto_dispatch_pool_matches():
 
     # Lets the Hub distinguish a saved ON setting from a running dispatcher.
     await set_setting("auto_dispatcher_last_seen", datetime.now(UTC).isoformat())
-    await AutoDispatcherService(workspace_id=ACTIVE_DISCORD_WORKSPACE_ID).run_once()
+    from backend.core.bot_routing import list_managed_discord_workspaces
+    for workspace_id in await list_managed_discord_workspaces():
+        await AutoDispatcherService(workspace_id=workspace_id).run_once()
 
 
 # ── Hub-command drain (event-driven outbox) ──────────────────────────────
@@ -919,19 +915,21 @@ async def run_drain():
     lease_owner = f"discord-bot:{os.getpid()}"
     async with _drain_lock:
         try:
-            # The bot process is bound to exactly one Discord integration
-            # account at startup. Resolve its workspace once and constrain the
-            # queue claim itself; filtering after a global claim is too late
-            # because it temporarily leases another tenant's command.
-            pending = await claim_pending_hub_commands(
-                lease_owner, workspace_id=ACTIVE_DISCORD_WORKSPACE_ID,
-            )
+            # The managed bot owns delivery for every connected guild. Each
+            # claimed row still carries its immutable workspace scope and is
+            # rejected below if that scope is absent.
+            pending = await claim_pending_hub_commands(lease_owner)
         except Exception as e:
             print(f"[BOT] drain fetch failed: {e}")
             return
         for row in pending:
             cmd_id = row.get("id")
             cmd_text = row.get("command_text")
+            if not row.get("workspace_id"):
+                await finish_hub_command(
+                    cmd_id, lease_owner, "needs_review", "Managed bot command has no workspace scope"
+                )
+                continue
             if not cmd_text:
                 await finish_hub_command(cmd_id, lease_owner, "done")
                 continue
@@ -960,19 +958,13 @@ async def _dispatch_workflow_outbox_event(event: dict):
     # concrete match row, so handle them before the match-specific paths.
     if event_type == "discord_announcement":
         payload = event.get("payload") or {}
-        tournament = await get_tournament(
-            str(payload.get("tournament_slug") or ""), event.get("workspace_id")
+        workspace_id = str(event.get("workspace_id") or "")
+        tournament_slug = str(payload.get("tournament_slug") or "")
+        from backend.core.bot_routing import resolve_discord_route
+        route = await resolve_discord_route(
+            workspace_id, tournament_slug, destination_kind="match"
         )
-        account_id = (tournament or {}).get("discord_account_id")
-        if account_id and ACTIVE_DISCORD_ACCOUNT_ID and account_id != ACTIVE_DISCORD_ACCOUNT_ID:
-            raise RuntimeError("Workflow event belongs to a different Discord account.")
-        if not account_id:
-            raise RuntimeError("Tournament has no Discord account destination.")
-        from backend.core.integrations import get_destination
-        destination = await get_destination(account_id, "match_call_channel")
-        if not destination:
-            raise RuntimeError("Discord announcement destination is not configured.")
-        channel = bot.get_channel(int(destination["external_id"]))
+        channel = bot.get_channel(int(route.channel_id))
         if not channel:
             raise RuntimeError("Discord announcement channel is unavailable.")
         await channel.send(str(payload.get("text") or ""))
@@ -984,11 +976,6 @@ async def _dispatch_workflow_outbox_event(event: dict):
     tournament = await get_tournament(
         match.get("tournament_slug") or "", match.get("workspace_id") or event.get("workspace_id")
     )
-    account_id = (tournament or {}).get("discord_account_id")
-    if account_id and ACTIVE_DISCORD_ACCOUNT_ID and account_id != ACTIVE_DISCORD_ACCOUNT_ID:
-        # A separate bot process owns the other Discord account. Do not leak a
-        # destination across accounts; the durable outbox will wait safely.
-        raise RuntimeError("Workflow event belongs to a different Discord account.")
     if event_type == "discord_call":
         # A pre-existing thread is the durable idempotency proof after a restart.
         if match.get("discord_thread_id"):
@@ -1009,7 +996,11 @@ async def _dispatch_workflow_outbox_event(event: dict):
     if event_type in {"obs_match_started", "obs_station_assigned", "obs_match_complete"}:
         # Overlay state is already durable in PostgreSQL; notify the Hub/OBS bridge
         # only after the outbox item has been claimed by this bot process.
-        await ws_add_bot_feed(f"Workflow effect applied: {event_type} for {event['match_id']}", "info")
+        await ws_add_bot_feed(
+            f"Workflow effect applied: {event_type} for {event['match_id']}",
+            "info",
+            event.get("workspace_id"),
+        )
         return
     if event_type == "discord_match_complete" and match.get("discord_thread_id"):
         thread = bot.get_channel(int(match["discord_thread_id"]))
@@ -1043,9 +1034,10 @@ class RegistrationView(discord.ui.View):
     async def register_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         from core.database import get_connection
         discord_id = str(interaction.user.id)
-        workspace_id = ACTIVE_DISCORD_WORKSPACE_ID
-        if not workspace_id:
-            await interaction.response.send_message("Registration is temporarily unavailable: the bot has no workspace-owned identity.", ephemeral=True)
+        try:
+            workspace_id = await _workspace_for_interaction(interaction)
+        except RuntimeError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
             return
         
         # Check if already registered
@@ -1058,7 +1050,10 @@ class RegistrationView(discord.ui.View):
         await create_or_update_player(discord_id, workspace_id=workspace_id, registration_step="startgg_linked")
         
         api_base = await get_connection("API_BASE_URL", API_BASE_URL_ENV)
-        login_url = f"{api_base}/api/auth/startgg/login?discord_id={discord_id}"
+        from backend.core.player_oauth import create_player_oauth_state
+        from urllib.parse import quote
+        oauth_state = await create_player_oauth_state(workspace_id, discord_id)
+        login_url = f"{api_base}/api/auth/startgg/login?state={quote(oauth_state)}"
 
         
         try:
@@ -1076,6 +1071,11 @@ class RegistrationView(discord.ui.View):
 @bot.command()
 async def setup_registration(ctx):
     """Sets up the registration button in the current channel."""
+    try:
+        await _require_organizer_tournament_channel(ctx)
+    except RuntimeError as exc:
+        await ctx.send(str(exc))
+        return
     from core.database import get_setting
     welcome_msg = await get_setting("registration_msg", "Welcome to the AI Tournament Organizer! Click the button below to register.")
     view = RegistrationView()
@@ -1083,47 +1083,8 @@ async def setup_registration(ctx):
 
 @bot.command()
 async def start_match(ctx, opponent: discord.Member):
-    """Starts a match thread between the command caller and the opponent."""
-    player1 = ctx.author
-    player2 = opponent
-    
-    if player1 == player2:
-        await ctx.send("You cannot start a match with yourself!")
-        return
-
-    # Create a thread
-    thread = await ctx.channel.create_thread(
-        name=f"Match: {player1.display_name} vs {player2.display_name}",
-        type=discord.ChannelType.public_thread,
-        invitable=False
-    )
-    
-    await thread.add_user(player1)
-    await thread.add_user(player2)
-    
-    # Initialize LangGraph state
-    config = {"configurable": {"thread_id": str(thread.id)}}
-    initial_state = {
-        "set_id": thread.id, 
-        "thread_id": thread.id,
-        "player1_discord": player1.id,
-        "player2_discord": player2.id,
-        "player1_ready": False,
-        "player2_ready": False,
-        "chat_history": [],
-        "match_status": "playing",
-        "winner_id": None,
-        "score_string": None
-    }
-    
-    app.update_state(config, initial_state)
-    
-    await thread.send(
-        f"Match Started! {player1.mention} vs {player2.mention}\n"
-        "Please coordinate and play your match. When it ends, contact the tournament organizer "
-        "with the result; aiTOB does not accept or submit player-reported scores in Discord yet."
-    )
-    await ctx.send(f"Match thread created: {thread.mention}")
+    """Reject the legacy synthetic-match path; provider-backed Hub calls own lifecycle."""
+    await ctx.send("Use the authenticated aiTOB tournament Hub to call a provider-backed match.")
 
 @bot.group(name="workflow", invoke_without_command=True)
 async def workflow_group(ctx):
@@ -1197,7 +1158,12 @@ async def workflow_rules(ctx):
 async def workflow_status(ctx):
     """Show current states of all active matches."""
     from core.database import get_active_matches
-    matches = await get_active_matches(workspace_id=ACTIVE_DISCORD_WORKSPACE_ID)
+    try:
+        workspace_id = await _workspace_for_context(ctx)
+    except RuntimeError as exc:
+        await ctx.send(str(exc))
+        return
+    matches = await get_active_matches(workspace_id=workspace_id)
     
     if not matches:
         await ctx.send("ℹ️ No active matches in the system right now.")
@@ -1231,7 +1197,12 @@ async def workflow_status(ctx):
 async def workflow_validate(ctx, set_id: str):
     """Validate transition pathways for a match."""
     from core.database import get_active_match
-    match = await get_active_match(set_id, ACTIVE_DISCORD_WORKSPACE_ID)
+    try:
+        workspace_id = await _workspace_for_context(ctx)
+    except RuntimeError as exc:
+        await ctx.send(str(exc))
+        return
+    match = await get_active_match(set_id, workspace_id)
     if not match:
         await ctx.send(f"❌ Match with set ID `{set_id}` not found.")
         return
@@ -1332,19 +1303,24 @@ async def handle_conflict_statement_dm(message) -> bool:
     )
     author_id = str(message.author.id)
 
-    # Find a conflicted match this player belongs to.
-    match, slot = None, None
-    for m in await get_active_matches(workspace_id=ACTIVE_DISCORD_WORKSPACE_ID):
+    # A DM has no guild context. Accept it only when the player belongs to one
+    # unambiguous conflicted match across all workspaces.
+    candidates: list[tuple[dict, str]] = []
+    for m in await get_active_matches():
         if m.get("status") != "conflict":
             continue
         if str(m.get("p1_discord")) == author_id:
-            match, slot = m, "p1"
-            break
+            candidates.append((m, "p1"))
         if str(m.get("p2_discord")) == author_id:
-            match, slot = m, "p2"
-            break
-    if not match:
+            candidates.append((m, "p2"))
+    if not candidates:
         return False
+    if len(candidates) != 1:
+        await message.channel.send(
+            "This DM matches more than one tournament. Continue from the correct tournament server."
+        )
+        return True
+    match, slot = candidates[0]
 
     set_id = str(match.get("set_id"))
     conflict = await get_conflict_by_set_id(set_id)
@@ -1407,10 +1383,15 @@ async def on_message(message):
         # investigation statement rather than a registration message.
         if await handle_conflict_statement_dm(message):
             return
-        if not ACTIVE_DISCORD_WORKSPACE_ID:
-            await message.channel.send("Registration is temporarily unavailable: the bot has no workspace-owned identity.")
+        from backend.core.bot_routing import DiscordRoutingError, resolve_dm_workspace
+        try:
+            workspace_id = await resolve_dm_workspace(str(message.author.id))
+        except DiscordRoutingError:
+            await message.channel.send(
+                "I cannot determine which tournament this DM belongs to. Continue from the connected tournament server."
+            )
             return
-        await registration_manager.handle_dm(message, workspace_id=ACTIVE_DISCORD_WORKSPACE_ID)
+        await registration_manager.handle_dm(message, workspace_id=workspace_id)
         return
 
     # A match thread remains available for player communication and the explicit
@@ -1430,11 +1411,7 @@ async def on_message(message):
 async def get_active_matches_tool():
     """Returns active/called matches as JSON. Use the `set_id` field (NOT any
     thread id) when reporting scores, DQ'ing, or calling a match."""
-    import json
-    from core.database import get_active_matches
-    from bot.agent.tool_helpers import project_match_for_agent
-    matches = await get_active_matches(workspace_id=ACTIVE_DISCORD_WORKSPACE_ID)
-    return json.dumps([project_match_for_agent(m) for m in matches])
+    return "[]"
 
 @tool
 async def get_players_tool():
@@ -1443,8 +1420,7 @@ async def get_players_tool():
     # through the repository boundary so PostgreSQL is used at runtime.  The
     # assistant process is bound to one integration workspace; omitting that
     # scope would expose every tenant's player projection to a read-only tool.
-    from core.database import get_players_for_workspace
-    return str(await get_players_for_workspace(ACTIVE_DISCORD_WORKSPACE_ID))
+    return "[]"
 
 @tool
 async def call_match_tool(set_id: str = "", p1_discord_id: str = "", p2_discord_id: str = ""):
@@ -1559,7 +1535,6 @@ async def audit_registration_tool(tournament_slug: str = None):
         f"DMs sent to {total_sent}; {failed} could not be reached (DMs likely closed)."
     )
 
-MATCH_CALL_CHANNEL_ID = os.getenv("MATCH_CALL_CHANNEL_ID", "")
 
 # ── Helper: extract clean text from LangChain response ─────────────────
 def extract_text_from_response(content) -> str:
@@ -1580,51 +1555,20 @@ def extract_text_from_response(content) -> str:
     return str(content)
 
 # ── msg command: send match call to public channel ─────────────────────
-async def handle_msg_command(cmd_text: str) -> str:
-    """
-    Parses 'msg Player1 vs Player2' and sends an Arabic call
-    to the configured public Discord channel.
-    """
-    import re
-    # Strip the 'msg' prefix
-    body = cmd_text[3:].strip()
-    # Split on ' vs ' (case-insensitive)
-    parts = re.split(r'\s+vs\s+', body, flags=re.IGNORECASE)
-    if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
-        return "❌ Invalid format. Use: msg Player1 vs Player2"
-
-    p1 = parts[0].strip()
-    p2 = parts[1].strip()
-
-    from core.database import get_setting, get_connection
-    channel_id = await get_connection("MATCH_CALL_CHANNEL_ID") or await get_setting("MATCH_CALL_CHANNEL_ID") or MATCH_CALL_CHANNEL_ID
-    if not channel_id:
-        return "❌ MATCH_CALL_CHANNEL_ID not configured in .env or DB"
-
-    channel = bot.get_channel(int(channel_id))
-    if not channel:
-        return f"❌ Could not find Discord channel with ID {channel_id}"
-
-    # Send Arabic match call
-    call_msg = f"📢 يرجى من اللاعبين **{p1}** و **{p2}** تأكيد الحضور للمباراة الخاصة بكم الآن."
-    await channel.send(call_msg)
-
-    return f"✅ Message sent to the public channel for {p1} and {p2}."
-
-
 bot_ws: any = None  # Global bot websocket reference
 
-async def ws_add_bot_feed(message: str, level: str = "info"):
+async def ws_add_bot_feed(message: str, level: str = "info", workspace_id: str | None = None):
     """Logs a message over the WebSocket connection to the API, falling back to local DB if disconnected."""
     global bot_ws
     print(console_message(level, message))
-    if bot_ws:
+    if bot_ws and workspace_id:
         try:
             import json
             await bot_ws.send(json.dumps({
                 "type": "log",
                 "message": message,
-                "level": level
+                "level": level,
+                "workspace_id": workspace_id,
             }))
             return
         except Exception as e:
@@ -1635,32 +1579,21 @@ async def ws_add_bot_feed(message: str, level: str = "info"):
     # Fallback: write directly to the PostgreSQL repository
     try:
         from core.database import add_bot_feed as db_add_bot_feed
-        await db_add_bot_feed(message, level)
+        await db_add_bot_feed(message, level, workspace_id)
     except Exception as e:
         print(f"[BOT] DB fallback logging failed: {e}")
 
 async def handle_ws_command(cmd_text: str, *, workspace_id: str | None = None):
     """Executes a hub command directly from the WebSocket connection."""
-    
+    if not workspace_id:
+        raise RuntimeError("Managed bot commands require an explicit workspace scope")
     try:
         # Check for built-in commands first
         if cmd_text.strip().lower().startswith("msg "):
-            result_text = await handle_msg_command(cmd_text.strip())
-            await ws_add_bot_feed(f"🤖 {result_text}", "success")
-            return
+            raise RuntimeError("Legacy msg routing is disabled; call a tournament match from the Hub")
 
         if cmd_text.strip().lower().startswith("announce "):
-            msg_to_send = cmd_text[9:].strip()
-            from core.database import get_setting, get_connection
-            channel_id = await get_connection("MATCH_CALL_CHANNEL_ID") or await get_setting("MATCH_CALL_CHANNEL_ID") or MATCH_CALL_CHANNEL_ID
-            if channel_id:
-                channel = bot.get_channel(int(channel_id))
-                if channel:
-                    await channel.send(msg_to_send)
-                    await ws_add_bot_feed(f"📢 Announced to Discord: {msg_to_send}", "success")
-                    return
-            await ws_add_bot_feed("❌ Failed to announce: MATCH_CALL_CHANNEL_ID not set or channel not found", "error")
-            return
+            raise RuntimeError("Legacy global announcements are disabled; use a tournament-scoped proposal")
 
         if cmd_text.strip().lower().startswith("execute_action_proposal "):
             proposal_id = cmd_text.split(" ", 1)[1].strip()
@@ -1669,6 +1602,7 @@ async def handle_ws_command(cmd_text: str, *, workspace_id: str | None = None):
             await ws_add_bot_feed(
                 f"Organizer proposal execution: {result.get('execution_status', 'unknown')}",
                 "success" if result.get("execution_status") in {"workflow_started", "outbox_queued"} else "warn",
+                workspace_id,
             )
             return
 
@@ -1695,9 +1629,9 @@ async def handle_ws_command(cmd_text: str, *, workspace_id: str | None = None):
                                 )
                 from bot.match_threads import create_match_thread
                 await create_match_thread(bot, t, match)
-                await ws_add_bot_feed(f"🤖 Created match thread for {match.get('p1_name')} vs {match.get('p2_name')}", "success")
+                await ws_add_bot_feed(f"🤖 Created match thread for {match.get('p1_name')} vs {match.get('p2_name')}", "success", workspace_id)
             else:
-                await ws_add_bot_feed(f"❌ call_match failed: Match {set_id} not found", "error")
+                await ws_add_bot_feed(f"❌ call_match failed: Match {set_id} not found", "error", workspace_id)
             return
 
         if cmd_text.strip().lower().startswith("dm_score_request "):
@@ -1737,6 +1671,7 @@ async def handle_ws_command(cmd_text: str, *, workspace_id: str | None = None):
             await ws_add_bot_feed(
                 f"▶️ start.gg check-in complete — {match.get('p1_name')} vs {match.get('p2_name')} is now live.",
                 "info",
+                workspace_id,
             )
             return
 
@@ -1774,6 +1709,13 @@ async def handle_ws_command(cmd_text: str, *, workspace_id: str | None = None):
             applied_in = 0
             for guild in bot.guilds:
                 try:
+                    from backend.core.bot_routing import DiscordRoutingError, resolve_workspace_for_guild
+                    try:
+                        guild_workspace = await resolve_workspace_for_guild(str(guild.id))
+                    except DiscordRoutingError:
+                        continue
+                    if guild_workspace != workspace_id:
+                        continue
                     member = guild.get_member(int(discord_id))
                     if not member:
                         try:
@@ -1801,18 +1743,22 @@ async def handle_ws_command(cmd_text: str, *, workspace_id: str | None = None):
                     print(f"apply_verified_role guild {guild.id} failed: {e}")
             await ws_add_bot_feed(
                 f"🎟️ Applied Verified role to {discord_id} in {applied_in} guild(s)",
-                "success" if applied_in else "warn"
+                "success" if applied_in else "warn",
+                workspace_id,
             )
             return
 
         await ws_add_bot_feed(
             "Unknown manual bot command. Use the Organizer Assistant for questions or a documented bot command.",
             "warn",
+            workspace_id,
         )
+        raise RuntimeError("Unknown managed bot command")
             
     except Exception as e:
         print(f"WS Command execution error: {e}")
-        await ws_add_bot_feed(f"❌ Error executing command '{cmd_text}': {e}", "error")
+        await ws_add_bot_feed(f"❌ Error executing command '{cmd_text}': {e}", "error", workspace_id)
+        raise
 
 async def bot_ws_listener():
     """Maintains a persistent, stateful WebSocket connection to the Hub API."""
@@ -1840,12 +1786,7 @@ async def bot_ws_listener():
                 while True:
                     data = await ws.recv()
                     msg = json.loads(data)
-                    if msg.get("type") == "command":
-                        cmd_text = msg.get("command")
-                        if cmd_text:
-                            # Run immediately inside an isolated task
-                            _runtime_tasks.start(handle_ws_command(cmd_text))
-                    elif msg.get("type") == "drain":
+                    if msg.get("type") == "drain":
                         # Event-driven nudge: a command was just queued API-side.
                         _runtime_tasks.start(run_drain())
         except Exception as e:
@@ -1853,54 +1794,13 @@ async def bot_ws_listener():
             print(f"[BOT] WebSocket connection failed: {e}. Retrying in 5 seconds...")
             await asyncio.sleep(5)
 
-async def load_discord_account_token():
-    """Load exactly one workspace-owned Discord account for this process.
+def load_managed_discord_token() -> str:
+    """Load the platform bot credential without consulting tenant storage."""
 
-    Runtime bot identity must never enumerate the global account bucket.  A
-    selected account is looked up with its workspace scope; when no account is
-    selected, an explicit workspace is required and only that workspace is
-    considered.  This keeps startup fail-closed while allowing a deployment
-    to choose its identity through non-secret environment configuration.
-    """
-    await init_db()
-    from backend.core.integrations import (
-        get_discord_credential,
-        get_integration_account,
-        get_integration_workspace_id,
-        list_integration_accounts,
-    )
-
-    selected = os.getenv("AITOB_DISCORD_ACCOUNT_ID", "").strip()
-    workspace_hint = os.getenv("AITOB_DISCORD_WORKSPACE_ID", "").strip()
-    account = None
-    if selected:
-        account = await get_integration_account(
-            selected, workspace_id=workspace_hint or None, active_only=True,
-        )
-        if not account:
-            raise RuntimeError("Selected Discord integration account is not active in the configured workspace.")
-    else:
-        if not workspace_hint:
-            raise RuntimeError("AITOB_DISCORD_WORKSPACE_ID is required when no Discord account is selected.")
-        accounts = [
-            item for item in await list_integration_accounts(workspace_hint)
-            if item["provider_type"] == "discord" and item["status"] == "active"
-        ]
-        if len(accounts) != 1:
-            raise RuntimeError("Select exactly one active Discord integration account for this workspace.")
-        account = accounts[0]
-
-    if account.get("provider_type") != "discord" or account.get("status") != "active":
-        raise RuntimeError("Selected integration account is not an active Discord account.")
-    account_workspace = await get_integration_workspace_id(account["id"])
-    if not account_workspace:
-        raise RuntimeError("Selected Discord integration account has no workspace owner.")
-    if workspace_hint and account_workspace != workspace_hint:
-        raise RuntimeError("Selected Discord integration account is outside the configured workspace.")
-    token = await get_discord_credential(account["id"])
+    token = os.getenv("DISCORD_BOT_TOKEN", "").strip()
     if not token:
-        raise RuntimeError("Selected Discord account has no bot token.")
-    return account["id"], token, account_workspace
+        raise RuntimeError("DISCORD_BOT_TOKEN is required for the managed aiTOB bot.")
+    return token
 
 
 if __name__ == "__main__":
@@ -1908,8 +1808,8 @@ if __name__ == "__main__":
     try:
         from backend.core.storage import require_runtime_database
         require_runtime_database()
-        ACTIVE_DISCORD_ACCOUNT_ID, TOKEN, ACTIVE_DISCORD_WORKSPACE_ID = asyncio.run(load_discord_account_token())
+        TOKEN = load_managed_discord_token()
         bot.run(TOKEN)
     except Exception:
-        print("Discord bot did not start: its selected integration account is unavailable.")
+        print("Discord bot did not start: the managed bot credential is unavailable.")
         sys.exit(1)

@@ -161,6 +161,140 @@ async def _binding_rows(workspace_id: str, tournament_id: str) -> list[dict[str,
             return [dict(row) for row in await cursor.fetchall()]
 
 
+async def resolve_workspace_for_guild(guild_id: str) -> str:
+    """Resolve one active workspace owner for a managed-bot guild install.
+
+    The shared bot may be present in many guilds, but a guild can belong to
+    only one active aiTOB workspace. Duplicate ownership is treated as a
+    configuration incident and never resolved by row order.
+    """
+
+    guild = _required(guild_id, "guild ID")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        rows = await (await db.execute(
+            """SELECT DISTINCT a.workspace_id
+                 FROM integration_accounts AS a
+                 JOIN workspaces AS w ON w.id=a.workspace_id AND w.status='active'
+                WHERE a.provider_type='discord'
+                  AND a.external_account_id=?
+                  AND a.status='active'
+                  AND a.workspace_id IS NOT NULL""",
+            (guild,),
+        )).fetchall()
+    if not rows:
+        raise DiscordRouteMissing("This Discord server is not connected to an active aiTOB workspace.")
+    if len(rows) != 1:
+        raise DiscordRouteAmbiguous("This Discord server is connected to more than one aiTOB workspace.")
+    return str(rows[0][0])
+
+
+async def list_managed_discord_workspaces() -> list[str]:
+    """List active workspaces reachable by the shared managed bot."""
+
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        rows = await (await db.execute(
+            """SELECT DISTINCT a.workspace_id
+                 FROM integration_accounts AS a
+                 JOIN workspaces AS w ON w.id=a.workspace_id AND w.status='active'
+                WHERE a.provider_type='discord'
+                  AND a.status='active'
+                  AND a.workspace_id IS NOT NULL
+                ORDER BY a.workspace_id"""
+        )).fetchall()
+    return [str(row[0]) for row in rows]
+
+
+async def resolve_dm_workspace(discord_user_id: str) -> str:
+    """Resolve a DM only when one active workspace owns its pending context.
+
+    Discord DMs do not carry a guild ID. A registration/enrollment state must
+    therefore provide an unambiguous durable owner; otherwise the bot stops
+    and asks the player to continue from the tournament server.
+    """
+
+    user_id = _required(discord_user_id, "Discord user ID")
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        rows = await (await db.execute(
+            """SELECT DISTINCT workspace_id FROM (
+                   SELECT e.workspace_id
+                     FROM tournament_player_enrollments AS e
+                     JOIN tournament_registration_configs AS c
+                       ON c.tournament_id=e.tournament_id
+                      AND c.workspace_id=e.workspace_id
+                    WHERE e.discord_user_id=?
+                      AND c.enabled=TRUE
+                      AND c.status IN ('scheduled', 'open', 'degraded')
+                   UNION
+                   SELECT p.workspace_id
+                     FROM players AS p
+                    WHERE p.discord_id=?
+                      AND p.workspace_id IS NOT NULL
+                      AND COALESCE(p.registration_step, '') NOT IN ('', 'verified')
+               ) AS candidates""",
+            (user_id, user_id),
+        )).fetchall()
+    if not rows:
+        raise DiscordRouteMissing("No active tournament registration is waiting for this DM.")
+    if len(rows) != 1:
+        raise DiscordRouteAmbiguous("This DM could belong to more than one tournament workspace.")
+    return str(rows[0][0])
+
+
+async def resolve_inbound_discord_route(
+    guild_id: str,
+    channel_id: str,
+    *,
+    thread_id: str | None = None,
+    set_id: str | None = None,
+) -> DiscordRoute:
+    """Resolve an inbound guild/channel context to one tournament binding."""
+
+    guild = _required(guild_id, "guild ID")
+    channel = _required(channel_id, "channel ID")
+    workspace_id = await resolve_workspace_for_guild(guild)
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
+        rows = await (await db.execute(
+            """SELECT b.tournament_id,
+                      md.external_id AS match_channel_id,
+                      ed.external_id AS escalation_channel_id
+                 FROM tournament_discord_bindings AS b
+                 JOIN integration_accounts AS a
+                   ON a.id=b.discord_account_id
+                  AND a.workspace_id=b.workspace_id
+                  AND a.provider_type='discord'
+                  AND a.status='active'
+                 LEFT JOIN integration_destinations AS md
+                   ON md.id=b.match_destination_id
+                  AND md.workspace_id=b.workspace_id
+                  AND md.status='active'
+                 LEFT JOIN integration_destinations AS ed
+                   ON ed.id=b.escalation_destination_id
+                  AND ed.workspace_id=b.workspace_id
+                  AND ed.status='active'
+                WHERE b.workspace_id=?
+                  AND b.guild_id=?
+                  AND b.status='ready'
+                  AND (md.external_id=? OR ed.external_id=?)""",
+            (workspace_id, guild, channel, channel),
+        )).fetchall()
+    if not rows:
+        raise DiscordRouteMissing("This channel is not bound to an active aiTOB tournament.")
+    if len(rows) != 1:
+        raise DiscordRouteAmbiguous("This channel is bound to more than one active aiTOB tournament.")
+    row = dict(rows[0])
+    destination_kind = "match" if str(row.get("match_channel_id") or "") == channel else "escalation"
+    return await resolve_discord_route(
+        workspace_id,
+        str(row["tournament_id"]),
+        guild_id=guild,
+        channel_id=channel,
+        thread_id=thread_id,
+        destination_kind=destination_kind,
+        set_id=set_id,
+    )
+
+
 async def _thread_context(
     workspace_id: str,
     tournament_id: str,
@@ -242,8 +376,8 @@ async def resolve_discord_route(
         raise DiscordRouteAmbiguous("More than one Discord binding exists for this tournament and workspace.")
     binding = rows[0]
 
-    if binding.get("binding_status") == "disabled":
-        raise DiscordRouteMissing("The Discord binding is disabled.")
+    if binding.get("binding_status") != "ready":
+        raise DiscordRouteMissing("The Discord binding is not ready for delivery.")
     if binding.get("account_status") != "active":
         raise DiscordRouteMissing("The selected Discord account is unavailable.")
     if provided_guild is not None and provided_guild != str(binding["guild_id"]):
@@ -310,9 +444,12 @@ __all__ = [
     "DiscordRouteMissing",
     "DiscordRouteAmbiguous",
     "DiscordRouteMismatch",
+    "resolve_workspace_for_guild",
+    "list_managed_discord_workspaces",
+    "resolve_dm_workspace",
+    "resolve_inbound_discord_route",
     "resolve_discord_route",
     "resolve_tournament_discord_route",
     "resolve_discord_binding",
     "try_resolve_discord_route",
 ]
-

@@ -30,20 +30,29 @@ FALLBACK_THREAD_TEXT = (
 )
 
 async def create_match_thread(bot, tournament, set_data):
-    # An account-bound destination is mandatory. Falling back to the first guild
-    # channel could route a match to a different organizer's Discord account.
-    from backend.core.integrations import get_destination
-    account_id = (tournament or {}).get("discord_account_id")
-    destination = await get_destination(str(account_id or ""), "match_call_channel") if account_id else None
-    channel_id = destination.get("external_id") if destination else None
-
-    if not channel_id:
-        await add_bot_feed("Match thread failed: selected Discord account has no match-call destination.", "error")
+    # The platform bot resolves every outbound effect from the durable
+    # workspace/tournament binding. It never falls back to a global channel.
+    workspace_id = str(set_data.get("workspace_id") or "")
+    tournament_id = str(set_data.get("tournament_slug") or (tournament or {}).get("slug") or "")
+    try:
+        from backend.core.bot_routing import resolve_discord_route
+        route = await resolve_discord_route(
+            workspace_id, tournament_id, destination_kind="match"
+        )
+    except Exception as exc:
+        await add_bot_feed(
+            f"Match thread failed: Discord route unavailable ({type(exc).__name__}).",
+            "error", workspace_id=workspace_id or None,
+        )
         return
+    channel_id = route.channel_id
 
     channel = bot.get_channel(int(channel_id))
     if not channel:
-        await add_bot_feed(f"Match thread failed: Channel {channel_id} not found.", "error")
+        await add_bot_feed(
+            f"Match thread failed: Channel {channel_id} not found.", "error",
+            workspace_id=workspace_id,
+        )
         return
 
     p1_name = set_data.get('p1_name', 'TBD')
@@ -505,8 +514,8 @@ async def restore_ready_check_views(bot, workspace_id: str | None = None) -> int
     provider request, and is intentionally limited to stored called matches.
     """
     restored = 0
-    # Keep the no-argument compatibility path for legacy test/tool providers;
-    # a real bot process always supplies its account workspace at startup.
+    # Runtime callers always supply one managed workspace. The no-argument path
+    # remains only for focused compatibility tests.
     matches = (await get_active_matches(workspace_id=workspace_id)
                if workspace_id is not None else await get_active_matches())
     for match in matches:

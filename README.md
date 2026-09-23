@@ -59,6 +59,10 @@ explicitly disposable provider resources with `AITOB_ALLOW_LIVE_TESTS=true`.
 ## Current operating rules
 
 - PostgreSQL owns all runtime, test, backup, restore, and maintenance state.
+- One platform-managed Discord application serves every connected server.
+  `DISCORD_BOT_TOKEN` is a deployment secret, never a customer credential.
+  Runtime effects resolve `guild → workspace` and then the tournament's ready
+  channel binding; missing or ambiguous routes fail closed.
 - Account authentication uses an HttpOnly session cookie. The old Hub-password
   bridge is disabled unless `AITOB_LEGACY_HUB_PASSWORD_COMPAT=true` is set for a
   reviewed compatibility window.

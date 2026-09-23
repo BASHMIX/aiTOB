@@ -2,10 +2,12 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import RedirectResponse, HTMLResponse
 import os
 import httpx
+from urllib.parse import urlencode
 
 from backend.core.database import (
     create_or_update_player, get_setting, get_connection, add_hub_command, add_bot_feed,
 )
+from backend.core.player_oauth import consume_player_oauth_state, inspect_player_oauth_state
 
 router = APIRouter(tags=["auth"])
 
@@ -27,22 +29,27 @@ async def _resolve_secret(key: str, default: str | None = None) -> str | None:
     summary="OAuth login link for Start.gg",
     operation_id="startggLogin",
 )
-async def login(discord_id: str):
+async def login(state: str):
     """Redirect the player's browser to start.gg's OAuth authorize page.
 
-    `state` carries the Discord ID so the callback can map the resulting
-    start.gg user to the right Discord account without any session storage.
+    The opaque state maps to a short-lived workspace + Discord-user route in
+    PostgreSQL. Neither tenant identifier is accepted from the browser.
     """
+    if not await inspect_player_oauth_state(state):
+        raise HTTPException(400, "Player verification link is invalid or expired")
     client_id = await _resolve_secret("STARTGG_CLIENT_ID")
     if not client_id:
         raise HTTPException(500, "STARTGG_CLIENT_ID not configured")
 
     api_base = os.getenv("API_BASE_URL", "http://localhost:8000")
     redirect_uri = f"{api_base}/api/auth/startgg/callback"
-    url = (
-        f"{STARTGG_OAUTH_AUTHORIZE}?client_id={client_id}"
-        f"&redirect_uri={redirect_uri}&response_type=code&scope={_SCOPE}&state={discord_id}"
-    )
+    url = f"{STARTGG_OAUTH_AUTHORIZE}?{urlencode({
+        'client_id': client_id,
+        'redirect_uri': redirect_uri,
+        'response_type': 'code',
+        'scope': _SCOPE,
+        'state': state,
+    })}"
     return RedirectResponse(url=url)
 
 
@@ -116,12 +123,17 @@ h1{{color:{color};margin:0 0 1rem}}p{{line-height:1.6;color:#ccc}}</style></head
 async def callback(code: str, state: str):
     """Exchange the OAuth code, identify the player, and link them in our DB.
 
-    `state` is the Discord ID we passed at /login time. This is safe here because
-    the value is never used as anything other than a foreign key — it doesn't grant
-    any privilege on its own and an attacker would need both a valid start.gg login
-    AND a target Discord ID, which they could just register normally anyway.
+    The state is single-use and resolves the trusted workspace and Discord user.
     """
-    discord_id = state
+    route = await consume_player_oauth_state(state)
+    if not route:
+        return _html_response(
+            "Link failed",
+            "<h1>❌ Verification failed</h1><p>This verification link is invalid, expired, or already used.</p>",
+            ok=False,
+        )
+    discord_id = str(route["actor_id"])
+    workspace_id = str(route["workspace_id"])
     api_base = os.getenv("API_BASE_URL", "http://localhost:8000")
     redirect_uri = f"{api_base}/api/auth/startgg/callback"
 
@@ -139,6 +151,7 @@ async def callback(code: str, state: str):
         # every downstream lookup (bracket→discord) silently failed.
         await create_or_update_player(
             discord_id=discord_id,
+            workspace_id=workspace_id,
             startgg_id=startgg_user_id,
             gamer_tag=gamer_tag,
             is_verified=True,
@@ -147,8 +160,14 @@ async def callback(code: str, state: str):
 
         # Hand off to the bot to apply the Verified role + nickname.
         # Doing it via hub_commands keeps the bot the single Discord actor.
-        await add_hub_command(f"apply_verified_role {discord_id} {gamer_tag}")
-        await add_bot_feed(f"✅ Linked Discord {discord_id} ↔ start.gg user {startgg_user_id} ({gamer_tag})", "success")
+        await add_hub_command(
+            f"apply_verified_role {discord_id} {gamer_tag}", workspace_id=workspace_id,
+        )
+        await add_bot_feed(
+            f"✅ Linked Discord {discord_id} ↔ start.gg user {startgg_user_id} ({gamer_tag})",
+            "success",
+            workspace_id,
+        )
 
         return _html_response(
             "Linked!",
@@ -157,14 +176,18 @@ async def callback(code: str, state: str):
             ok=True,
         )
     except HTTPException as e:
-        await add_bot_feed(f"OAuth callback failed for discord_id={discord_id}: {e.detail}", "error")
+        await add_bot_feed(
+            f"OAuth callback failed for discord_id={discord_id}: {e.detail}", "error", workspace_id,
+        )
         return _html_response(
             "Link failed",
             f"<h1>❌ Verification failed</h1><p>{e.detail}</p><p>Return to Discord and try again, or contact a T.O.</p>",
             ok=False,
         )
     except Exception as e:
-        await add_bot_feed(f"OAuth callback error for discord_id={discord_id}: {e}", "error")
+        await add_bot_feed(
+            f"OAuth callback error for discord_id={discord_id}: {e}", "error", workspace_id,
+        )
         return _html_response(
             "Link failed",
             f"<h1>❌ Verification failed</h1><p>{e}</p><p>Return to Discord and try again.</p>",

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -39,7 +40,6 @@ class _RestoreBot(_Bot):
 async def test_challonge_call_persists_thread_and_call_message_ids(monkeypatch):
     """A successful Call must leave a durable message ID for restart/audit."""
     from backend.bot import match_threads
-    from backend.core import integrations
     from backend.core import database
 
     # The PG acceptance fixture provides an empty disposable database; seed the
@@ -54,8 +54,8 @@ async def test_challonge_call_persists_thread_and_call_message_ids(monkeypatch):
 
     updates = []
 
-    async def destination(account_id, destination_type):
-        return {"external_id": "7001"}
+    async def route(*args, **kwargs):
+        return SimpleNamespace(channel_id="7001")
 
     async def update(match_id, **fields):
         updates.append(fields)
@@ -63,7 +63,7 @@ async def test_challonge_call_persists_thread_and_call_message_ids(monkeypatch):
     async def no_timeout(*args, **kwargs):
         return None
 
-    monkeypatch.setattr(integrations, "get_destination", destination)
+    monkeypatch.setattr("backend.core.bot_routing.resolve_discord_route", route)
     monkeypatch.setattr(match_threads, "update_active_match", update)
     monkeypatch.setattr(match_threads, "run_ready_check_timeout", no_timeout)
 
@@ -73,7 +73,7 @@ async def test_challonge_call_persists_thread_and_call_message_ids(monkeypatch):
         {
             "set_id": "challonge:test:match", "tournament_slug": "challonge:test",
             "p1_name": "One", "p2_name": "Two", "round_name": "Round 1",
-            "p1_discord": "100", "p2_discord": "200",
+            "p1_discord": "100", "p2_discord": "200", "workspace_id": "workspace",
         },
     )
     await asyncio.sleep(0)
@@ -95,8 +95,8 @@ async def test_startgg_call_uses_verified_entrant_links_for_mentions(monkeypatch
     await database.init_db()
     updates = []
 
-    async def destination(account_id, destination_type):
-        return {"external_id": "7001"}
+    async def route(*args, **kwargs):
+        return SimpleNamespace(channel_id="7001")
 
     async def update(match_id, **fields):
         updates.append(fields)
@@ -108,7 +108,7 @@ async def test_startgg_call_uses_verified_entrant_links_for_mentions(monkeypatch
     async def no_timeout(*args, **kwargs):
         return None
 
-    monkeypatch.setattr("backend.core.integrations.get_destination", destination)
+    monkeypatch.setattr("backend.core.bot_routing.resolve_discord_route", route)
     monkeypatch.setattr(match_threads, "update_active_match", update)
     monkeypatch.setattr(match_threads, "run_ready_check_timeout", no_timeout)
     monkeypatch.setattr("backend.core.identity_links.resolve_verified_discord_recipient", resolve)
