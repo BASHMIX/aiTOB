@@ -30,6 +30,17 @@ async def test_managed_bot_token_fails_closed_when_missing(monkeypatch):
         main.load_managed_discord_token()
 
 
+def test_managed_bot_startup_error_is_actionable_without_echoing_secret():
+    import discord
+    from backend.bot import main
+
+    error = discord.LoginFailure("secret-token-must-not-appear")
+    message = main.managed_bot_start_error(error)
+
+    assert "rejected DISCORD_BOT_TOKEN" in message
+    assert "secret-token-must-not-appear" not in message
+
+
 @pytest.mark.asyncio
 async def test_organizer_command_requires_manage_server_permission(monkeypatch):
     from backend.bot import main

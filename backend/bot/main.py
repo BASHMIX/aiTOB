@@ -1803,6 +1803,18 @@ def load_managed_discord_token() -> str:
     return token
 
 
+def managed_bot_start_error(exc: Exception) -> str:
+    """Return an actionable startup category without leaking credentials."""
+
+    if isinstance(exc, discord.LoginFailure):
+        return "Discord rejected DISCORD_BOT_TOKEN; rotate the platform bot token and restart aiTOB."
+    if isinstance(exc, discord.PrivilegedIntentsRequired):
+        return "Discord privileged intents are not enabled for the managed aiTOB application."
+    if isinstance(exc, RuntimeError) and "DISCORD_BOT_TOKEN" in str(exc):
+        return "DISCORD_BOT_TOKEN is missing for the managed aiTOB application."
+    return f"Discord bot startup failed ({type(exc).__name__}); inspect network and application settings."
+
+
 if __name__ == "__main__":
 
     try:
@@ -1810,6 +1822,6 @@ if __name__ == "__main__":
         require_runtime_database()
         TOKEN = load_managed_discord_token()
         bot.run(TOKEN)
-    except Exception:
-        print("Discord bot did not start: the managed bot credential is unavailable.")
+    except Exception as exc:
+        print(managed_bot_start_error(exc))
         sys.exit(1)
