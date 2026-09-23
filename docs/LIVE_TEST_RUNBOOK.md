@@ -7,8 +7,9 @@ and test provider brackets. Default CI must not contact an external provider.
 
 - Set `DATABASE_URL` to the disposable acceptance database.
 - Set `AITOB_ALLOW_LIVE_TESTS=true` only for the live run.
-- Store provider and Discord credentials through the Workspace integration UI;
-  do not commit them or paste them into this document.
+- Store provider credentials through the Workspace integration UI. Discord uses
+  the one platform-managed application: keep its bot token, client ID, and OAuth
+  client secret in the deployment secret store, never in a customer Workspace.
 - Confirm the Start.gg or Challonge bracket can be reset without affecting a
   real event.
 - Keep automatic and AI-selected DQ disabled.
@@ -77,3 +78,51 @@ python -c "import os,psycopg; c=psycopg.connect(os.environ['DATABASE_URL']); pri
 Record only timestamps, provider IDs safe for the test environment, state
 transitions, and redacted response categories. Never record access tokens,
 session cookies, player private data, or full upstream error bodies.
+
+## Two-tenant Discord isolation acceptance
+
+Use two test accounts, two Workspaces, and two Discord guilds. The same managed
+aiTOB application must be installed in both guilds.
+
+1. Account A installs guild A, selects channel A, sends a test message, and
+   materializes tournament A. Repeat independently for account/guild/channel B.
+2. Verify each Connections page lists only its own installation and named
+   channels. Cross-Workspace account and destination IDs must return not found.
+3. Call one match in each tournament. Each message and thread must appear only
+   in its bound guild/channel and use that tournament's players.
+4. From guild A, try an organizer command in channel B and an unbound channel.
+   Both attempts must fail closed. Repeat in the opposite direction.
+5. Verify a user without Manage Server cannot install/rebind the bot and a user
+   without the aiTOB organizer permission cannot execute organizer commands.
+6. Record redacted guild/channel IDs and delivery occurrence IDs as evidence;
+   never record OAuth codes, tokens, session cookies, or message contents with
+   private player data.
+
+## Production backup and restore gate
+
+Before deployment, normalize the ignored environment and require a clean check:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\prepare_production_env.py
+.\.venv\Scripts\python.exe scripts\prepare_production_env.py --check
+docker compose --env-file .env.production config --quiet
+```
+
+Create a PostgreSQL custom-format backup and its SHA-256 manifest:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\backup_database.py --output-dir .backups
+```
+
+Restore that exact artifact to an explicitly named disposable database, run the
+normal application migrations there, and execute smoke queries before cutover:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\restore_database.py .backups\<backup>.dump `
+  --manifest .backups\<backup>.dump.manifest.json `
+  --postgres-target postgresql://.../aitob_restore_drill
+```
+
+Never pass the production database as the restore target. Delete the disposable
+restore database only after confirming its resolved name is the intended drill
+database.

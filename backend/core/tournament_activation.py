@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -41,20 +40,10 @@ async def _ensure_discord_destination_id(
     if row:
         return str(row[0])
 
-    destination_id = str(uuid.uuid5(
-        uuid.NAMESPACE_URL,
-        f"aitob:{workspace_id}:{account_id}:discord-destination:{candidate}",
-    ))
-    row = await (await db.execute(
-        """INSERT INTO integration_destinations
-               (id, account_id, workspace_id, destination_type, external_id, display_name)
-            VALUES (?, ?, ?, ?, ?, 'Tournament destination')
-            ON CONFLICT(account_id, destination_type, external_id) DO UPDATE SET
-               status='active'
-            RETURNING id""",
-        (destination_id, account_id, workspace_id, destination_type, candidate),
-    )).fetchone()
-    return str(row[0])
+    raise ActivationError(
+        "Discord destination has not passed the managed bot permission check. "
+        "Recheck the server and save the channel before adding the tournament."
+    )
 
 
 async def _persist_materialized_settings(db: Any, draft: dict[str, Any], tournament_id: str, workspace_id: str, actor_id: str, now: str) -> None:
@@ -141,12 +130,20 @@ async def _persist_materialized_settings(db: Any, draft: dict[str, Any], tournam
         if not discord_account_id:
             raise ActivationError("An active Discord integration account is required.")
         selected_account = await (await db.execute(
-            """SELECT id FROM integration_accounts
+            """SELECT id, external_account_id, metadata_json FROM integration_accounts
                 WHERE id=? AND workspace_id=? AND provider_type='discord' AND status='active'""",
             (discord_account_id, workspace_id),
         )).fetchone()
         if not selected_account:
             raise ActivationError("The selected Discord account is unavailable in this workspace.")
+        try:
+            account_metadata = json.loads(selected_account["metadata_json"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            account_metadata = {}
+        if not account_metadata.get("installation_verified"):
+            raise ActivationError("The selected Discord installation has not been verified.")
+        if not guild_id or str(selected_account["external_account_id"]) != guild_id:
+            raise ActivationError("The selected Discord server does not match the verified installation.")
         match_destination_id = await _ensure_discord_destination_id(
             db,
             account_id=discord_account_id,

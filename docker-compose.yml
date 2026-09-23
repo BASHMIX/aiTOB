@@ -37,6 +37,12 @@ services:
       # in PostgreSQL or returned by the API.
       AITOB_INTEGRATION_MASTER_KEY: ${AITOB_INTEGRATION_MASTER_KEY:?Set AITOB_INTEGRATION_MASTER_KEY}
       AITOB_AI_SERVICE_MASTER_KEY: ${AITOB_AI_SERVICE_MASTER_KEY:?Set AITOB_AI_SERVICE_MASTER_KEY}
+      AITOB_AUTH_MASTER_KEY: ${AITOB_AUTH_MASTER_KEY:?Set AITOB_AUTH_MASTER_KEY}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:?Set the platform Discord bot token}
+      DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID:?Set the Discord application client ID}
+      DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET:?Set the Discord OAuth client secret}
+      DISCORD_OAUTH_REDIRECT_URI: ${DISCORD_OAUTH_REDIRECT_URI:?Set the Discord OAuth callback URL}
+      FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:?Set the public frontend URL}
       # Cutover/recovery can pause all API-owned workers before resuming them.
       AITOB_DISABLE_BACKGROUND_WORKERS: ${AITOB_DISABLE_BACKGROUND_WORKERS:-false}
     volumes:
@@ -67,6 +73,7 @@ services:
       DATABASE_URL: postgresql://aitob:${POSTGRES_PASSWORD}@postgres:5432/${AITOB_POSTGRES_DB:-aitob}
       AITOB_INTEGRATION_MASTER_KEY: ${AITOB_INTEGRATION_MASTER_KEY:?Set AITOB_INTEGRATION_MASTER_KEY}
       AITOB_AI_SERVICE_MASTER_KEY: ${AITOB_AI_SERVICE_MASTER_KEY:?Set AITOB_AI_SERVICE_MASTER_KEY}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:?Set the platform Discord bot token}
       AITOB_DISABLE_BACKGROUND_WORKERS: ${AITOB_DISABLE_BACKGROUND_WORKERS:-false}
     volumes:
       # Share only filesystem assets with the API. Runtime state is PostgreSQL;

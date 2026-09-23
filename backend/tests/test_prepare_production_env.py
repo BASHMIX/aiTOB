@@ -1,0 +1,54 @@
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
+
+
+def _module():
+    path = Path(__file__).resolve().parents[2] / "scripts" / "prepare_production_env.py"
+    spec = spec_from_file_location("prepare_production_env", path)
+    module = module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_prepare_removes_legacy_values_and_generates_distinct_keys(tmp_path):
+    module = _module()
+    env_file = tmp_path / ".env.production"
+    env_file.write_text(
+        "\n".join([
+            "DB_PATH=legacy.sqlite",
+            "AITOB_DISCORD_WORKSPACE_ID=workspace-1",
+            "API_BASE_URL=https://aitob.example",
+            "APP_PUBLIC_URL=http://127.0.0.1:5173",
+            "DATABASE_URL=postgresql://example",
+            "POSTGRES_PASSWORD=not-a-placeholder",
+            "DISCORD_BOT_TOKEN=bot-token",
+            "DISCORD_CLIENT_ID=client-id",
+            "DISCORD_CLIENT_SECRET=client-secret",
+        ]) + "\n",
+        encoding="utf-8",
+    )
+
+    result = module.prepare(env_file)
+    text = env_file.read_text(encoding="utf-8")
+    values = dict(module._assignment(line) for line in text.splitlines() if module._assignment(line))
+
+    assert set(result["removed"]) == {"DB_PATH", "AITOB_DISCORD_WORKSPACE_ID"}
+    assert "DB_PATH=" not in text and "AITOB_DISCORD_WORKSPACE_ID=" not in text
+    assert values["APP_PUBLIC_URL"] == values["FRONTEND_BASE_URL"] == "https://aitob.example"
+    assert values["DISCORD_OAUTH_REDIRECT_URI"].endswith("/api/integrations/discord/callback")
+    assert values["AITOB_SESSION_COOKIE_SECURE"] == "true"
+    assert len({values[key] for key in module.GENERATED_KEYS}) == len(module.GENERATED_KEYS)
+    assert module.validate(env_file) == []
+
+
+def test_validation_fails_closed_for_missing_external_discord_credentials(tmp_path):
+    module = _module()
+    env_file = tmp_path / ".env.production"
+    env_file.write_text(
+        "DATABASE_URL=postgresql://example\nPOSTGRES_PASSWORD=value\n",
+        encoding="utf-8",
+    )
+    errors = module.validate(env_file)
+    assert "DISCORD_CLIENT_ID is missing" in errors
+    assert "DISCORD_CLIENT_SECRET is missing" in errors

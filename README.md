@@ -32,7 +32,17 @@ python stop.py
 ```
 
 For containers, populate `.env.production`, including `POSTGRES_PASSWORD` and
-the encryption keys, then run:
+the Discord application credentials, then normalize and validate it without
+printing generated encryption keys:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\prepare_production_env.py
+.\.venv\Scripts\python.exe scripts\prepare_production_env.py --check
+```
+
+Register the exact `DISCORD_OAUTH_REDIRECT_URI` in the Discord Developer Portal.
+The platform owns `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, and
+`DISCORD_CLIENT_SECRET`; customers never enter any of them. Then run:
 
 ```powershell
 docker compose --env-file .env.production up --build
