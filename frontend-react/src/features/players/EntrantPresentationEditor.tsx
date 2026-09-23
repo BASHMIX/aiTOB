@@ -43,7 +43,8 @@ export function EntrantPresentationEditor({
   const providerImages = entrant.participants?.[0]?.user?.images || [];
   const providerAvatar = providerImages.find((img: any) => img.type === 'profile')?.url || providerImages[0]?.url || '';
 
-  // Form state initialized with override values, or fall back to linked profile, then provider
+  // The linked archive profile is durable. A scoped projection is kept in sync
+  // for the current event so existing station views update without ambiguity.
   const [displayName, setDisplayName] = useState(
     override.display_name || override.name || link?.display_name || link?.gamer_tag || providerName
   );
@@ -53,9 +54,9 @@ export function EntrantPresentationEditor({
   const [country, setCountry] = useState(
     override.country || link?.country || providerCountry
   );
-  const [characterId, setCharacterId] = useState(override.character_id || '');
-  const [characterName, setCharacterName] = useState(override.character || override.character_name || '');
-  const [characterImageUrl, setCharacterImageUrl] = useState(override.character_image_url || '');
+  const [characterId, setCharacterId] = useState(override.character_id || link?.default_character_id || '');
+  const [characterName, setCharacterName] = useState(override.character || override.character_name || link?.default_character_name || '');
+  const [characterImageUrl, setCharacterImageUrl] = useState(override.character_image_url || link?.default_character_image_url || '');
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -76,6 +77,7 @@ export function EntrantPresentationEditor({
 
   const getCharacterProvenance = (): ProvenanceSource => {
     if (override.character || override.character_name || override.character_id) return 'entrant_override';
+    if (link?.default_character_id || link?.default_character_name) return 'player_profile';
     return 'placeholder';
   };
 
@@ -173,7 +175,7 @@ export function EntrantPresentationEditor({
         <div className="flex items-center justify-between border-b border-white/10 pb-4">
           <div>
             <h3 className="text-lg font-bold text-white">Entrant Presentation Settings</h3>
-            <p className="text-xs text-textDim">Tournament-specific presentation without altering the reusable profile</p>
+            <p className="text-xs text-textDim">Edits update Player Archive and synchronise this tournament’s presentation.</p>
           </div>
           {onClose && (
             <button
@@ -320,7 +322,7 @@ export function EntrantPresentationEditor({
                 disabled={isSaving}
                 className="px-4 py-2 text-xs font-bold text-black bg-accentYellow hover:bg-yellow-400 rounded transition disabled:opacity-50"
               >
-                {isSaving ? 'Saving...' : 'Save Override'}
+                {isSaving ? 'Saving...' : 'Save Player Profile'}
               </button>
             </div>
           </div>

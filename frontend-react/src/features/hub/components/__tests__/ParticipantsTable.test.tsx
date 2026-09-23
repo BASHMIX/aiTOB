@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { ParticipantsTable } from '../ParticipantsTable';
 import { useHubStore } from '@/store/useHubStore';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -124,6 +125,15 @@ describe('ParticipantsTable', () => {
           }
         });
       }
+      if (url === '/api/player-profiles') {
+        return Promise.resolve({
+          data: {
+            profiles: [
+              { id: 'profile-1', display_name: 'SavedProfile1', prefix: 'FNC', country: 'JO' },
+            ],
+          },
+        });
+      }
       return Promise.resolve({ data: {} });
     });
   });
@@ -155,6 +165,25 @@ describe('ParticipantsTable', () => {
     const images = screen.getAllByRole('img');
     const p2Img = images.find(img => img.getAttribute('src') === 'https://cdn.example/provider_p2.png');
     expect(p2Img).toBeDefined();
+  });
+
+  it('links an entrant directly to a persistent player profile', async () => {
+    const user = userEvent.setup();
+    (axios.put as any).mockResolvedValue({
+      data: { link: { player_profile_id: 'profile-1', display_name: 'SavedProfile1' } },
+    });
+    render(<ParticipantsTable characters={mockCharacters} gameName="SF6" />);
+
+    const selector = await screen.findByLabelText('Link UnlinkedPlayer to a player profile');
+    await user.selectOptions(selector, 'profile-1');
+
+    await waitFor(() => {
+      expect(axios.put).toHaveBeenCalledWith('/api/players/links', {
+        tournament_slug: 'test-slug',
+        entrant_id: 'entrant-2',
+        player_profile_id: 'profile-1',
+      });
+    });
   });
 
   it('renders override avatar over linked profile avatar when override is set', async () => {

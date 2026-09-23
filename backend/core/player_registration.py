@@ -88,6 +88,28 @@ def _enrollment(row: Any) -> dict[str, Any] | None:
     return value
 
 
+async def _ensure_archive_profile(db: Any, enrollment: Mapping[str, Any], workspace_id: str, discord_user_id: str) -> str:
+    """Return the single reusable Player Archive profile for a Discord member.
+
+    This is called inside the enrollment transaction.  Registration facts are
+    allowed to fill an empty profile, but never overwrite organizer edits on an
+    existing profile.
+    """
+    profile_id = str(uuid.uuid4())
+    display_name = str(enrollment.get("gamertag") or discord_user_id).strip() or discord_user_id
+    prefix = str(enrollment.get("prefix") or "").strip() or None
+    row = await (await db.execute(
+        """INSERT INTO player_profiles
+           (id, workspace_id, display_name, prefix, discord_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+           ON CONFLICT (workspace_id, discord_id) WHERE discord_id IS NOT NULL
+           DO UPDATE SET updated_at = player_profiles.updated_at
+           RETURNING id""",
+        (profile_id, workspace_id, display_name, prefix, discord_user_id),
+    )).fetchone()
+    return str(row[0])
+
+
 async def get_registration_config(tournament_id: str, workspace_id: str) -> dict[str, Any] | None:
     async with dbapi.connect(database.DATABASE_DSN) as db:
         db.row_factory = dbapi.Row
@@ -409,16 +431,28 @@ async def link_discord_member(
                 methods = []
             if "manual_discord_id" not in methods:
                 methods.append("manual_discord_id")
+            profile_id = await _ensure_archive_profile(db, dict(target), workspace_id, value)
             await db.execute(
                 """UPDATE tournament_player_enrollments
-                   SET discord_user_id=?, discord_link_state='linked', discord_member_observed_at=?,
+                   SET player_profile_id=?, discord_user_id=?, discord_link_state='linked', discord_member_observed_at=?,
                        discord_link_updated_by=?, discord_link_updated_at=?, membership_state='matched',
                        verification_methods=?, gamertag_match_state=COALESCE(gamertag_match_state, 'not_checked'),
                        state=CASE WHEN state IN ('awaiting_discord_link','awaiting_identity','needs_review') THEN 'awaiting_identity' ELSE state END,
                        updated_at=?
                    WHERE id=? AND tournament_id=? AND workspace_id=?""",
-                (value, now, actor_id, now, _dump(methods), now, enrollment_id, tournament_id, workspace_id),
+                (profile_id, value, now, actor_id, now, _dump(methods), now, enrollment_id, tournament_id, workspace_id),
             )
+            entrant_id = str(target.get("provider_entrant_id") or "").strip()
+            if entrant_id:
+                await db.execute(
+                    """INSERT INTO tournament_player_links
+                       (tournament_slug, entrant_id, player_discord_id, player_profile_id, workspace_id)
+                       VALUES (?, ?, NULL, ?, ?)
+                       ON CONFLICT(workspace_id, tournament_slug, entrant_id)
+                       DO UPDATE SET player_discord_id=NULL, player_profile_id=excluded.player_profile_id,
+                                     created_at=CURRENT_TIMESTAMP""",
+                    (tournament_id, entrant_id, profile_id, workspace_id),
+                )
             await db.commit()
         except Exception:
             await db.rollback()

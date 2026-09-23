@@ -99,7 +99,7 @@ describe('EntrantPresentationEditor', () => {
     fireEvent.change(charSelect, { target: { value: 'Ryu' } });
 
     // Submit form
-    const saveBtn = screen.getByText('Save Override');
+    const saveBtn = screen.getByText('Save Player Profile');
     fireEvent.click(saveBtn);
 
     await waitFor(() => {

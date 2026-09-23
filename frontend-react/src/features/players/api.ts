@@ -46,6 +46,16 @@ export async function updatePlayerProfile(
   return response.data;
 }
 
+export async function uploadPlayerProfileAvatar(profileId: string, file: File): Promise<PlayerProfile> {
+  const form = new FormData();
+  form.append('avatar', file);
+  const response = await axios.post<{ profile: PlayerProfile }>(
+    `${BASE_URL}/${encodeURIComponent(profileId)}/avatar`,
+    form,
+  );
+  return response.data.profile;
+}
+
 export async function deletePlayerProfile(profileId: string): Promise<{ ok: boolean; message: string }> {
   const response = await axios.delete<{ ok: boolean; message: string }>(
     `${BASE_URL}/${encodeURIComponent(profileId)}`,

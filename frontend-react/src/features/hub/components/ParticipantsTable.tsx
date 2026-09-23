@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useHubStore } from '@/store/useHubStore';
 import axios from 'axios';
-import { countryFlagEmoji } from '@/utils/country';
+import { countryCode, countryFlagUrl } from '@/utils/country';
 import { resolveAvatarUrl } from '../../players/presentation';
 import { EntrantPresentationEditor } from '../../players/EntrantPresentationEditor';
+import { listPlayerProfiles } from '../../players/api';
+import type { PlayerProfile } from '../../players/types';
 
 interface CharacterOption {
   id: string;
@@ -17,10 +19,11 @@ interface ParticipantsTableProps {
   gameName?: string;
 }
 
-function flagForCountry(value: unknown): string {
-  const raw = String(value || '').trim();
-  if (!raw) return '—';
-  return countryFlagEmoji(raw) || raw;
+function CountryFlag({ value }: { value: unknown }) {
+  const code = countryCode(value);
+  const src = countryFlagUrl(value);
+  if (!code || !src) return <span>—</span>;
+  return <img src={src} alt={`${code} flag`} title={code} className="h-4 w-6 rounded-[2px] border border-white/10 object-cover shadow-sm" />;
 }
 
 export function ParticipantsTable({ characters = [], gameName = '' }: ParticipantsTableProps) {
@@ -28,7 +31,7 @@ export function ParticipantsTable({ characters = [], gameName = '' }: Participan
   const [editingEntrant, setEditingEntrant] = useState<any | null>(null);
   const [overrides, setOverrides] = useState<Record<string, any>>({});
   const [links, setLinks] = useState<Record<string, any>>({});
-  const [players, setPlayers] = useState<any[]>([]);
+  const [profiles, setProfiles] = useState<PlayerProfile[]>([]);
   const currentTournament = tournaments.find((t) => t.slug === currentSlug);
   const effectiveEventId = currentEventId || currentTournament?.event_id || '';
 
@@ -44,15 +47,15 @@ export function ParticipantsTable({ characters = [], gameName = '' }: Participan
   useEffect(() => {
     const fetchParticipantData = async () => {
       try {
-        const [overridesResponse, playersResponse, linksResponse] = await Promise.all([
+        const [overridesResponse, profilesResponse, linksResponse] = await Promise.all([
           currentSlug && effectiveEventId
             ? axios.get('/api/players/overrides', { params: { tournament_slug: currentSlug, event_id: effectiveEventId } })
             : axios.get('/api/players/overrides'),
-          axios.get('/api/players'),
-          currentSlug ? axios.get('/api/players/links', { params: { tournament_slug: currentSlug } }) : Promise.resolve({ data: { links: {} } }),
+          listPlayerProfiles(),
+          currentSlug ? axios.get('/api/players/links', { params: { tournament_slug: currentSlug, event_id: effectiveEventId || undefined } }) : Promise.resolve({ data: { links: {} } }),
         ]);
         setOverrides(overridesResponse.data || {});
-        setPlayers(playersResponse.data?.players || []);
+        setProfiles(profilesResponse);
         setLinks(linksResponse.data?.links || {});
       } catch (e) {
         console.error("Failed to fetch participant data", e);
@@ -131,13 +134,13 @@ export function ParticipantsTable({ characters = [], gameName = '' }: Participan
     }
   };
 
-  const handleLink = async (entrantId: string, discordId: string) => {
-    if (!currentSlug || !discordId) return;
+  const handleLink = async (entrantId: string, playerProfileId: string) => {
+    if (!currentSlug || !playerProfileId) return;
     try {
       const response = await axios.put('/api/players/links', {
         tournament_slug: currentSlug,
         entrant_id: String(entrantId),
-        discord_id: discordId,
+        player_profile_id: playerProfileId,
       });
       setLinks(prev => ({ ...prev, [String(entrantId)]: response.data.link }));
     } catch (e: any) {
@@ -187,7 +190,7 @@ export function ParticipantsTable({ characters = [], gameName = '' }: Participan
             <tr>
               <th className="px-2 py-2">Gamertag</th>
               <th className="px-2 py-2 min-w-36">Character</th>
-              <th className="px-2 py-2">aiTOB Player</th>
+              <th className="px-2 py-2">Player Profile</th>
               <th className="px-2 py-2">Avatar</th>
               <th className="px-2 py-2">Display Name</th>
               <th className="px-2 py-2">Prefix</th>
@@ -202,15 +205,10 @@ export function ParticipantsTable({ characters = [], gameName = '' }: Participan
               const link = links[String(e.id)];
               const entrantName = typeof e === 'string' ? e : String(e.gamertag || e.name || '');
               const normalizedName = normalizePlayerName(entrantName);
-              const startggCandidate = e.provider_user_id
-                ? players.filter(player => String(player.startgg_id || '') === String(e.provider_user_id))
-                : [];
               const nameCandidates = normalizedName
-                ? players.filter(player => normalizePlayerName(String(player.gamer_tag || '')) === normalizedName)
+                ? profiles.filter(profile => normalizePlayerName(String(profile.display_name || '')) === normalizedName)
                 : [];
-              const suggestedPlayer = startggCandidate.length === 1
-                ? startggCandidate[0]
-                : nameCandidates.length === 1 ? nameCandidates[0] : null;
+              const suggestedProfile = nameCandidates.length === 1 ? nameCandidates[0] : null;
               return (
                 <tr key={e.id || i} className="border-b border-white/5 hover:bg-white/5">
                   <td className="px-2 py-2 text-textDim">{e.gamertag || e.name || e}</td>
@@ -218,7 +216,7 @@ export function ParticipantsTable({ characters = [], gameName = '' }: Participan
                     {characters.length > 0 ? (
                       <div className="flex items-center gap-2">
                         <select
-                          value={ov.character || ov.character_name || e.character || ''}
+                          value={ov.character || ov.character_name || link?.default_character_name || e.character || ''}
                           onChange={event => handleCharacterChange(String(e.id), characters.find(character => character.name === event.target.value) || null)}
                           className="w-36 bg-appDark border border-white/10 rounded px-2 py-1 text-xs text-white focus:border-accentYellow focus:ring-1 focus:ring-accentYellow"
                           aria-label={`Choose ${gameName || 'game'} character for ${entrantName}`}
@@ -226,8 +224,8 @@ export function ParticipantsTable({ characters = [], gameName = '' }: Participan
                           <option value="">Not selected</option>
                           {characters.map(character => <option key={character.id} value={character.name}>{character.name}</option>)}
                         </select>
-                        {ov.character_image_url && (
-                          <img src={ov.character_image_url} alt={ov.character || ov.character_name || 'Character'} className="h-6 w-6 rounded object-contain border border-white/10" />
+                        {(ov.character_image_url || link?.default_character_image_url) && (
+                          <img src={ov.character_image_url || link?.default_character_image_url} alt={ov.character || ov.character_name || link?.default_character_name || 'Character'} className="h-6 w-6 rounded object-contain border border-white/10" />
                         )}
                       </div>
                     ) : (
@@ -237,7 +235,7 @@ export function ParticipantsTable({ characters = [], gameName = '' }: Participan
                   <td className="px-2 py-2 min-w-48">
                     {link ? (
                       <div className="flex items-center gap-2">
-                        <span className="text-statusGreen text-xs whitespace-nowrap">Linked to: <strong>{link.gamer_tag}</strong></span>
+                        <span className="text-statusGreen text-xs whitespace-nowrap">Linked to: <strong>{link.display_name || link.gamer_tag || 'Player profile'}</strong></span>
                         <button
                           onClick={() => handleUnlink(e.id)}
                           className="text-textDim hover:text-red-400 text-[10px] uppercase font-bold"
@@ -247,25 +245,25 @@ export function ParticipantsTable({ characters = [], gameName = '' }: Participan
                       </div>
                     ) : (
                       <div className="flex flex-col gap-1">
-                        {suggestedPlayer && (
+                        {suggestedProfile && (
                           <button
-                            onClick={() => handleLink(e.id, suggestedPlayer.discord_id)}
+                            onClick={() => handleLink(e.id, suggestedProfile.id)}
                             className="text-left text-[10px] text-accentYellow hover:text-yellow-300"
                             title="Exact safe match. Click to confirm the link."
                           >
-                            Suggested: {suggestedPlayer.gamer_tag || suggestedPlayer.discord_id}
+                            Suggested: {suggestedProfile.display_name}
                           </button>
                         )}
                         <select
                           value=""
                           onChange={event => handleLink(e.id, event.target.value)}
                           className="max-w-44 bg-appDark border border-white/10 rounded px-1 py-1 text-[10px] text-textDim"
-                          aria-label={`Link ${entrantName} to an aiTOB player`}
+                          aria-label={`Link ${entrantName} to a player profile`}
                         >
-                          <option value="">Link to player…</option>
-                          {players.map(player => (
-                            <option key={player.discord_id} value={player.discord_id}>
-                              {player.gamer_tag || player.discord_id}
+                          <option value="">Link profile…</option>
+                          {profiles.map(profile => (
+                            <option key={profile.id} value={profile.id}>
+                              {profile.prefix ? `${profile.prefix} | ` : ''}{profile.display_name}{profile.country ? ` · ${profile.country}` : ''}
                             </option>
                           ))}
                         </select>
@@ -297,7 +295,7 @@ export function ParticipantsTable({ characters = [], gameName = '' }: Participan
                   <>
                       <td className="px-2 py-2 font-medium">{ov.name || ov.display_name || link?.display_name || link?.gamer_tag || e.display_name || e.gamertag || e.name || '—'}</td>
                       <td className="px-2 py-2">{ov.prefix || ov.team || link?.prefix || link?.team || e.prefix || e.team || '—'}</td>
-                      <td className="px-2 py-2 uppercase" title={ov.country || link?.country || e.country || undefined}>{flagForCountry(ov.country || link?.country || e.country)}</td>
+                      <td className="px-2 py-2"><CountryFlag value={ov.country || link?.country || e.country} /></td>
                       <td className="px-2 py-2">{ov.cfn || link?.cfn_id || e.cfn || '—'}</td>
                       <td className="px-2 py-2">
                         <div className="flex gap-2">

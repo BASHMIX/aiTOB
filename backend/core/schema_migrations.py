@@ -7,7 +7,9 @@ This does not repair or reinterpret user data.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import uuid
 
 from backend.core.database_schema import INDEXES, MIGRATIONS, TABLE_SCHEMAS
 def migration_statements():
@@ -36,6 +38,9 @@ async def apply_postgres_schema(db):
         await db.execute(statement)
         await db.execute("INSERT INTO schema_migration_history (migration_id, phase) VALUES (?, ?)", (migration_id, phase))
     await apply_workspace_constraint_migrations(db)
+    await consolidate_legacy_player_links(db)
+    await promote_linked_overrides_to_archive(db)
+    await promote_linked_provider_data_to_archive(db)
     await apply_tournament_setup_constraints(db)
     if os.getenv("AITOB_ENFORCE_WORKSPACE_NOT_NULL", "").strip().lower() in {"1", "true", "yes"}:
         await enforce_postgres_workspace_ownership(db)
@@ -136,6 +141,228 @@ async def apply_workspace_constraint_migrations(db):
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_overlays_workspace_name "
         "ON overlays (workspace_id, name)"
     )
+
+
+async def consolidate_legacy_player_links(db) -> None:
+    """Move historical entrant links onto Player Archive records.
+
+    The old ``players`` table is read only to preserve organizer links created
+    before Player Archive existed. Each link becomes a reference to one
+    workspace-scoped archive profile, then the old Discord column is cleared.
+    Provider, bracket, and active-match state are intentionally untouched.
+    """
+    async with db.execute(
+        """SELECT DISTINCT ON (COALESCE(t.workspace_id, l.workspace_id), p.discord_id)
+                  COALESCE(t.workspace_id, l.workspace_id) AS workspace_id,
+                  p.discord_id, p.gamer_tag, p.team, p.country, p.avatar_path
+             FROM tournament_player_links l
+             INNER JOIN players p ON p.discord_id = l.player_discord_id
+             INNER JOIN tournaments t ON t.slug = l.tournament_slug
+            WHERE l.player_profile_id IS NULL
+              AND p.discord_id IS NOT NULL
+              AND COALESCE(t.workspace_id, l.workspace_id) IS NOT NULL
+            ORDER BY COALESCE(t.workspace_id, l.workspace_id), p.discord_id, l.created_at ASC"""
+    ) as cursor:
+        rows = await cursor.fetchall()
+    for raw_row in rows:
+        row = dict(raw_row)
+        workspace_id = row["workspace_id"]
+        discord_id = row["discord_id"]
+        gamer_tag = row["gamer_tag"]
+        team = row["team"]
+        country = row["country"]
+        avatar_path = row["avatar_path"]
+        await db.execute(
+            """INSERT INTO player_profiles
+                   (id, workspace_id, display_name, prefix, country, avatar_url, discord_id, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+               ON CONFLICT (workspace_id, discord_id) WHERE discord_id IS NOT NULL DO NOTHING""",
+            (
+                str(uuid.uuid4()), workspace_id,
+                str(gamer_tag or discord_id), team, country, avatar_path, discord_id,
+            ),
+        )
+    await db.execute(
+        """UPDATE tournament_player_links l
+               SET player_profile_id = pr.id,
+                   player_discord_id = NULL
+              FROM tournaments t, player_profiles pr
+             WHERE l.player_profile_id IS NULL
+               AND t.slug = l.tournament_slug
+               AND pr.discord_id = l.player_discord_id
+               AND pr.workspace_id = COALESCE(t.workspace_id, l.workspace_id)"""
+    )
+
+
+async def promote_linked_overrides_to_archive(db) -> None:
+    """Fill missing archive facts from existing linked entrant projections.
+
+    Earlier releases saved organizer-provided prefix, country, avatar, and
+    character selection only on a tournament entrant override.  Those facts
+    now belong to Player Archive. Existing non-empty archive fields always win
+    so this backfill cannot overwrite a later organizer profile edit.
+    """
+    await db.execute(
+        """UPDATE player_profiles profile
+               SET display_name = COALESCE(NULLIF(profile.display_name, ''), NULLIF(override.display_name, '')),
+                   prefix = COALESCE(NULLIF(profile.prefix, ''), NULLIF(override.prefix, '')),
+                   country = COALESCE(NULLIF(profile.country, ''), NULLIF(override.country, '')),
+                   avatar_url = COALESCE(NULLIF(profile.avatar_url, ''), NULLIF(override.avatar_url, '')),
+                   updated_at = CASE
+                       WHEN NULLIF(profile.prefix, '') IS NULL AND NULLIF(override.prefix, '') IS NOT NULL
+                         OR NULLIF(profile.country, '') IS NULL AND NULLIF(override.country, '') IS NOT NULL
+                         OR NULLIF(profile.avatar_url, '') IS NULL AND NULLIF(override.avatar_url, '') IS NOT NULL
+                       THEN CURRENT_TIMESTAMP ELSE profile.updated_at END
+              FROM tournament_entrant_overrides override
+              JOIN tournament_player_links link
+                ON link.workspace_id = override.workspace_id
+               AND link.tournament_slug = override.tournament_slug
+               AND link.entrant_id = override.entrant_id
+             WHERE profile.id = link.player_profile_id
+               AND profile.workspace_id = link.workspace_id"""
+    )
+    async with db.execute(
+        """SELECT override.workspace_id, link.player_profile_id, tournament.game,
+                  override.character_id, override.character_name, override.character_image_url,
+                  profile.display_name
+             FROM tournament_entrant_overrides override
+             JOIN tournament_player_links link
+               ON link.workspace_id = override.workspace_id
+              AND link.tournament_slug = override.tournament_slug
+              AND link.entrant_id = override.entrant_id
+             JOIN tournaments tournament ON tournament.slug = override.tournament_slug
+             JOIN player_profiles profile
+               ON profile.id = link.player_profile_id AND profile.workspace_id = link.workspace_id
+            WHERE NULLIF(override.character_id, '') IS NOT NULL
+              AND NULLIF(tournament.game, '') IS NOT NULL"""
+    ) as cursor:
+        character_rows = await cursor.fetchall()
+    for raw_row in character_rows:
+        row = dict(raw_row)
+        workspace_id = row["workspace_id"]
+        profile_id = row["player_profile_id"]
+        game_id = row["game"]
+        character_id = row["character_id"]
+        character_name = row["character_name"]
+        character_image_url = row["character_image_url"]
+        display_name = row["display_name"]
+        game_profile = await (await db.execute(
+            """INSERT INTO player_game_profiles
+                   (id, workspace_id, player_profile_id, game_id, in_game_name, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+               ON CONFLICT (workspace_id, player_profile_id, game_id)
+               DO UPDATE SET updated_at = player_game_profiles.updated_at
+               RETURNING id""",
+            (str(uuid.uuid4()), workspace_id, profile_id, game_id, display_name),
+        )).fetchone()
+        await db.execute(
+            "UPDATE player_character_defaults SET is_primary = FALSE WHERE workspace_id=? AND player_game_profile_id=?",
+            (workspace_id, game_profile[0]),
+        )
+        await db.execute(
+            """INSERT INTO player_character_defaults
+                   (id, workspace_id, player_game_profile_id, character_id, character_name, character_image_url, is_primary, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, TRUE, CURRENT_TIMESTAMP)
+               ON CONFLICT (workspace_id, player_game_profile_id, character_id)
+               DO UPDATE SET character_name=excluded.character_name,
+                             character_image_url=excluded.character_image_url,
+                             is_primary=TRUE""",
+            (str(uuid.uuid4()), workspace_id, game_profile[0], character_id, character_name, character_image_url),
+        )
+
+
+async def promote_linked_provider_data_to_archive(db) -> None:
+    """Fill linked profile defaults from the entrant's actual provider event.
+
+    A tournament may contain several games, so ``tournaments.game`` cannot be
+    used for participant game data. The imported event containing the entrant
+    is the authoritative scope for prefix, country, CFN, and character default.
+    """
+    async with db.execute(
+        """SELECT link.workspace_id, link.tournament_slug, link.entrant_id,
+                  link.player_profile_id, tournament.raw_data,
+                  profile.display_name, profile.prefix, profile.country
+             FROM tournament_player_links link
+             JOIN tournaments tournament ON tournament.slug = link.tournament_slug
+             JOIN player_profiles profile
+               ON profile.id = link.player_profile_id AND profile.workspace_id = link.workspace_id
+            WHERE link.player_profile_id IS NOT NULL"""
+    ) as cursor:
+        linked_rows = await cursor.fetchall()
+    async with db.execute("SELECT id, workspace_id, character_id, character_name, character_image_url FROM player_overrides") as cursor:
+        legacy_overrides = {
+            (str(row["workspace_id"]), str(row["id"])): dict(row)
+            for row in await cursor.fetchall()
+            if row["workspace_id"]
+        }
+
+    for raw_row in linked_rows:
+        row = dict(raw_row)
+        try:
+            raw_data = json.loads(row["raw_data"] or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        events = raw_data.get("events") or (raw_data.get("tournament") or {}).get("events") or []
+        entrant = None
+        event = None
+        for candidate_event in events:
+            nodes = (candidate_event.get("entrants") or {}).get("nodes") or []
+            entrant = next((node for node in nodes if str(node.get("id")) == str(row["entrant_id"])), None)
+            if entrant:
+                event = candidate_event
+                break
+        if not entrant or not event:
+            continue
+
+        prefix = str(entrant.get("prefix") or "").strip() or None
+        country = str(entrant.get("country") or "").strip() or None
+        gamertag = str(entrant.get("gamertag") or entrant.get("name") or row["display_name"] or "").strip() or None
+        cfn = str(entrant.get("cfn") or "").strip() or None
+        videogame = event.get("videogame") if isinstance(event.get("videogame"), dict) else {}
+        game_id = str(videogame.get("name") or "").strip()
+        await db.execute(
+            """UPDATE player_profiles
+                   SET prefix=COALESCE(NULLIF(prefix, ''), ?),
+                       country=COALESCE(NULLIF(country, ''), ?),
+                       updated_at=CASE WHEN (NULLIF(prefix, '') IS NULL AND CAST(? AS TEXT) IS NOT NULL)
+                                           OR (NULLIF(country, '') IS NULL AND CAST(? AS TEXT) IS NOT NULL)
+                                       THEN CURRENT_TIMESTAMP ELSE updated_at END
+                 WHERE id=? AND workspace_id=?""",
+            (prefix, country, prefix, country, row["player_profile_id"], row["workspace_id"]),
+        )
+        if not game_id:
+            continue
+        game_profile = await (await db.execute(
+            """INSERT INTO player_game_profiles
+                   (id, workspace_id, player_profile_id, game_id, in_game_name, in_game_id, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+               ON CONFLICT (workspace_id, player_profile_id, game_id)
+               DO UPDATE SET in_game_name=COALESCE(NULLIF(player_game_profiles.in_game_name, ''), excluded.in_game_name),
+                             in_game_id=COALESCE(NULLIF(player_game_profiles.in_game_id, ''), excluded.in_game_id),
+                             updated_at=player_game_profiles.updated_at
+               RETURNING id""",
+            (str(uuid.uuid4()), row["workspace_id"], row["player_profile_id"], game_id, gamertag, cfn),
+        )).fetchone()
+        legacy = legacy_overrides.get((str(row["workspace_id"]), str(row["entrant_id"])))
+        if not legacy or not legacy.get("character_id"):
+            continue
+        await db.execute(
+            "UPDATE player_character_defaults SET is_primary=FALSE WHERE workspace_id=? AND player_game_profile_id=?",
+            (row["workspace_id"], game_profile[0]),
+        )
+        await db.execute(
+            """INSERT INTO player_character_defaults
+                   (id, workspace_id, player_game_profile_id, character_id, character_name, character_image_url, is_primary, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, TRUE, CURRENT_TIMESTAMP)
+               ON CONFLICT (workspace_id, player_game_profile_id, character_id)
+               DO UPDATE SET character_name=excluded.character_name,
+                             character_image_url=excluded.character_image_url,
+                             is_primary=TRUE""",
+            (
+                str(uuid.uuid4()), row["workspace_id"], game_profile[0],
+                legacy["character_id"], legacy.get("character_name") or legacy["character_id"], legacy.get("character_image_url"),
+            ),
+        )
 
 
 async def _ensure_foreign_key(
@@ -330,6 +557,7 @@ async def apply_tournament_setup_constraints(db):
         ("tournament_registration_configs", "workspace_id", "workspaces", "id"),
         ("tournament_player_enrollments", "tournament_id", "tournaments", "id"),
         ("tournament_player_enrollments", "workspace_id", "workspaces", "id"),
+        ("tournament_player_enrollments", "player_profile_id", "player_profiles", "id"),
         ("tournament_player_enrollments", "player_identity_id", "player_identities", "id"),
         ("tournament_player_enrollments", "provider_identity_link_id", "provider_identity_links", "id"),
         ("tournament_player_enrollments", "roster_snapshot_id", "provider_roster_snapshots", "id"),

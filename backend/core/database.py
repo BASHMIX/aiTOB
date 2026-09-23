@@ -355,22 +355,25 @@ async def is_active_platform_admin(user_id: str) -> bool:
     return bool(row and row[0])
 
 
-async def get_tournament_player_links(tournament_slug: str, workspace_id: str | None = None) -> dict[str, dict]:
+async def get_tournament_player_links(
+    tournament_slug: str,
+    workspace_id: str | None = None,
+    event_id: str | None = None,
+) -> dict[str, dict]:
     """Return the explicitly confirmed player links for one imported bracket."""
     async with dbapi.connect(DATABASE_DSN) as db:
         db.row_factory = dbapi.Row
         async with db.execute(
             """
-            SELECT l.entrant_id, l.player_discord_id, p.gamer_tag, p.avatar_path,
-                   p.team, p.country, p.cfn_id,
+            SELECT l.entrant_id, l.player_profile_id,
                    pr.id AS profile_id, pr.display_name AS profile_name,
                    pr.prefix AS profile_prefix, pr.country AS profile_country,
-                   pr.avatar_url AS profile_avatar_url
+                   pr.avatar_url AS profile_avatar_url, pr.discord_id AS profile_discord_id,
+                   tournament.raw_data AS tournament_raw
             FROM tournament_player_links l
-            LEFT JOIN players p ON p.discord_id = l.player_discord_id
-                                  AND (CAST(? AS TEXT) IS NULL OR p.workspace_id = l.workspace_id)
-            LEFT JOIN player_profiles pr ON pr.discord_id = l.player_discord_id
-                                  AND (CAST(? AS TEXT) IS NULL OR pr.workspace_id = l.workspace_id)
+            INNER JOIN player_profiles pr ON pr.id = l.player_profile_id
+                                  AND pr.workspace_id = l.workspace_id
+            INNER JOIN tournaments tournament ON tournament.slug = l.tournament_slug
             WHERE l.tournament_slug = ?
               AND (CAST(? AS TEXT) IS NULL OR EXISTS (
                     SELECT 1 FROM tournaments t
@@ -379,31 +382,98 @@ async def get_tournament_player_links(tournament_slug: str, workspace_id: str | 
               ))
               AND (CAST(? AS TEXT) IS NULL OR l.workspace_id = ?)
             """,
-            (workspace_id, workspace_id, tournament_slug, workspace_id, workspace_id, workspace_id, workspace_id),
+            (tournament_slug, workspace_id, workspace_id, workspace_id, workspace_id),
         ) as cursor:
             rows = await cursor.fetchall()
-    return {
-        str(row["entrant_id"]): {
-            "discord_id": str(row["player_discord_id"]),
-            "gamer_tag": row["profile_name"] or row["gamer_tag"] or str(row["player_discord_id"]),
-            "display_name": row["profile_name"] or row["gamer_tag"] or str(row["player_discord_id"]),
-            "avatar_path": row["profile_avatar_url"] or row["avatar_path"],
-            "avatar_url": row["profile_avatar_url"] or row["avatar_path"],
-            "team": row["profile_prefix"] or row["team"],
-            "prefix": row["profile_prefix"] or row["team"],
-            "country": row["profile_country"] or row["country"],
-            "cfn_id": row["cfn_id"],
-            "player_profile_id": str(row["profile_id"]) if row["profile_id"] else None,
+    from backend.core import player_profiles
+
+    def event_game_id(raw_data: str | None, entrant_id: str) -> str | None:
+        try:
+            raw = json.loads(raw_data or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+        events = raw.get("events") or (raw.get("tournament") or {}).get("events") or []
+        selected = next((event for event in events if event_id and str(event.get("id")) == str(event_id)), None)
+        if selected is None:
+            selected = next(
+                (event for event in events if any(str(node.get("id")) == entrant_id for node in ((event.get("entrants") or {}).get("nodes") or []))),
+                None,
+            )
+        videogame = selected.get("videogame") if isinstance(selected, dict) and isinstance(selected.get("videogame"), dict) else {}
+        return str(videogame.get("name") or "").strip() or None
+
+    links: dict[str, dict] = {}
+    for raw_row in rows:
+        row = dict(raw_row)
+        profile_id = str(row["profile_id"] or row["player_profile_id"] or "")
+        game_id = event_game_id(row.get("tournament_raw"), str(row["entrant_id"]))
+        game_profile = await player_profiles.get_player_game_profile(workspace_id or str(row.get("workspace_id") or ""), profile_id, game_id) if profile_id and game_id and workspace_id else None
+        defaults = await player_profiles.get_player_character_defaults(workspace_id, game_profile["id"]) if game_profile and workspace_id else []
+        character = next((item for item in defaults if item.get("is_primary")), defaults[0] if defaults else None)
+        links[str(row["entrant_id"])] = {
+            "discord_id": str(row["profile_discord_id"] or ""),
+            "gamer_tag": row["profile_name"] or "Unlinked profile",
+            "display_name": row["profile_name"] or "Unlinked profile",
+            "avatar_path": row["profile_avatar_url"],
+            "avatar_url": row["profile_avatar_url"],
+            "team": row["profile_prefix"],
+            "prefix": row["profile_prefix"],
+            "country": row["profile_country"],
+            "cfn_id": game_profile.get("in_game_id") if game_profile else None,
+            "default_character_id": character.get("character_id") if character else None,
+            "default_character_name": character.get("character_name") if character else None,
+            "default_character_image_url": character.get("character_image_url") if character else None,
+            "player_profile_id": profile_id or None,
         }
-        for row in rows
-    }
+    return links
 
 
-async def link_tournament_entrant(tournament_slug: str, entrant_id: str, discord_id: str, workspace_id: str | None = None) -> dict:
-    """Persist a TO-confirmed entrant → aiTOB player link and apply it to live matches."""
-    player = await get_player(discord_id, workspace_id)
-    if not player:
-        raise ValueError("Selected aiTOB player does not exist")
+async def link_tournament_entrant(
+    tournament_slug: str,
+    entrant_id: str,
+    discord_id: str | None = None,
+    workspace_id: str | None = None,
+    player_profile_id: str | None = None,
+) -> dict:
+    """Persist a TO-confirmed entrant → persistent player profile link.
+
+    A legacy Discord player remains supported, but no longer has to exist for a
+    player-profile link.  This lets the participant review screen link a
+    provider entrant directly to the durable archive.
+    """
+    if not player_profile_id and not discord_id:
+        raise ValueError("Choose a player profile or aiTOB player")
+
+    profile: dict | None = None
+    if player_profile_id:
+        if workspace_id is None:
+            raise ValueError("A workspace is required for player profile links")
+        from backend.core.player_profiles import get_player_profile
+        profile = await get_player_profile(str(player_profile_id), workspace_id)
+        if not profile:
+            raise ValueError("Selected player profile does not exist")
+        discord_id = str(profile.get("discord_id") or "").strip() or None
+
+    # Compatibility cutover for organizer links created before Player Archive:
+    # convert the old record once, then persist only the profile reference.
+    player = None
+    if not profile and discord_id:
+        from backend.core.player_profiles import create_player_profile, get_player_profile_by_discord_id
+        profile = await get_player_profile_by_discord_id(str(discord_id), str(workspace_id or "")) if workspace_id else None
+        if not profile:
+            player = await get_player(str(discord_id), workspace_id)
+            if not player or workspace_id is None:
+                raise ValueError("Selected player profile does not exist")
+            profile = await create_player_profile(
+                workspace_id=workspace_id,
+                display_name=str(player.get("gamer_tag") or discord_id),
+                prefix=player.get("team"), country=player.get("country"),
+                avatar_url=player.get("avatar_path"), discord_id=str(discord_id),
+            )
+        player_profile_id = str(profile["id"])
+    if not profile:
+        raise ValueError("Selected player profile does not exist")
+    presentation = profile
 
     async with dbapi.connect(DATABASE_DSN) as db:
         if workspace_id is not None:
@@ -414,37 +484,27 @@ async def link_tournament_entrant(tournament_slug: str, entrant_id: str, discord
                 raise PermissionError("Tournament belongs to another workspace")
         await db.execute(
             """
-            INSERT INTO tournament_player_links (tournament_slug, entrant_id, player_discord_id, workspace_id)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO tournament_player_links (tournament_slug, entrant_id, player_discord_id, player_profile_id, workspace_id)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(workspace_id, tournament_slug, entrant_id)
             DO UPDATE SET player_discord_id = excluded.player_discord_id,
+                          player_profile_id = excluded.player_profile_id,
                           created_at = CURRENT_TIMESTAMP
             """,
-            (tournament_slug, str(entrant_id), str(discord_id), workspace_id),
+            (tournament_slug, str(entrant_id), None, player_profile_id, workspace_id),
         )
-        # Apply immediately, so the bot and OBS do not need to wait for the next
-        # provider polling cycle. The next sync also preserves this link.
-        for slot in ("p1", "p2"):
-            fields = [f"{slot}_discord = ?", f"{slot}_cfn = ?", f"{slot}_team = ?", f"{slot}_country = ?"]
-            values = [str(discord_id), player.get("cfn_id"), player.get("team"), player.get("country")]
-            if player.get("avatar_path"):
-                fields.append(f"{slot}_avatar = ?")
-                values.append(player["avatar_path"])
-            values.extend([tournament_slug, str(entrant_id)])
-            await db.execute(
-                f"UPDATE active_matches SET {', '.join(fields)} "
-                f"WHERE tournament_slug = ? AND {slot}_entrant_id = ?"
-                + (" AND (workspace_id = ? OR workspace_id IS NULL)" if workspace_id is not None else ""),
-                values + ([workspace_id] if workspace_id is not None else []),
-            )
         await db.commit()
     return {
-        "discord_id": str(discord_id),
-        "gamer_tag": player.get("gamer_tag") or str(discord_id),
-        "avatar_path": player.get("avatar_path"),
-        "team": player.get("team"),
-        "country": player.get("country"),
-        "cfn_id": player.get("cfn_id"),
+        "discord_id": discord_id,
+        "player_profile_id": str(profile.get("id")) if profile else None,
+        "gamer_tag": presentation.get("display_name") or (player or {}).get("gamer_tag") or str(discord_id or "Player profile"),
+        "display_name": presentation.get("display_name") or (player or {}).get("gamer_tag") or str(discord_id or "Player profile"),
+        "avatar_path": presentation.get("avatar_url") or (player or {}).get("avatar_path"),
+        "avatar_url": presentation.get("avatar_url") or (player or {}).get("avatar_path"),
+        "team": presentation.get("prefix") or (player or {}).get("team"),
+        "prefix": presentation.get("prefix") or (player or {}).get("team"),
+        "country": presentation.get("country") or (player or {}).get("country"),
+        "cfn_id": (player or {}).get("cfn_id"),
     }
 
 

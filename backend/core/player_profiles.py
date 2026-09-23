@@ -37,21 +37,35 @@ async def create_player_profile(
     clean_notes = notes.strip() if notes else None
 
     async with dbapi.connect(database.DATABASE_DSN) as db:
-        await db.execute(
-            """INSERT INTO player_profiles (
-                id, workspace_id, display_name, prefix, country, avatar_url, discord_id, notes, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            ON CONFLICT (workspace_id, id) DO UPDATE SET
-                display_name = excluded.display_name,
-                prefix = excluded.prefix,
-                country = excluded.country,
-                avatar_url = excluded.avatar_url,
-                discord_id = excluded.discord_id,
-                notes = excluded.notes,
-                updated_at = CURRENT_TIMESTAMP
-            """,
-            (pid, workspace_id, clean_name, clean_prefix, clean_country, clean_avatar, clean_discord, clean_notes),
-        )
+        if clean_discord and profile_id is None:
+            # Discord is the durable identity received at registration. Reuse
+            # the archive record instead of silently creating a second card.
+            row = await (await db.execute(
+                """INSERT INTO player_profiles (
+                    id, workspace_id, display_name, prefix, country, avatar_url, discord_id, notes, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT (workspace_id, discord_id) WHERE discord_id IS NOT NULL
+                DO UPDATE SET updated_at = player_profiles.updated_at
+                RETURNING id""",
+                (pid, workspace_id, clean_name, clean_prefix, clean_country, clean_avatar, clean_discord, clean_notes),
+            )).fetchone()
+            pid = str(row[0])
+        else:
+            await db.execute(
+                """INSERT INTO player_profiles (
+                    id, workspace_id, display_name, prefix, country, avatar_url, discord_id, notes, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT (workspace_id, id) DO UPDATE SET
+                    display_name = excluded.display_name,
+                    prefix = excluded.prefix,
+                    country = excluded.country,
+                    avatar_url = excluded.avatar_url,
+                    discord_id = excluded.discord_id,
+                    notes = excluded.notes,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (pid, workspace_id, clean_name, clean_prefix, clean_country, clean_avatar, clean_discord, clean_notes),
+            )
         await db.commit()
     return await get_player_profile(pid, workspace_id) or {}
 
@@ -115,6 +129,19 @@ async def update_player_profile(
     if not fields:
         return await get_player_profile(profile_id, workspace_id)
 
+    requested_discord_id = next(
+        (str(value).strip() for key, value in data.items() if key == "discord_id" and value),
+        None,
+    )
+    if requested_discord_id:
+        async with dbapi.connect(database.DATABASE_DSN) as db:
+            row = await (await db.execute(
+                "SELECT id FROM player_profiles WHERE workspace_id=? AND discord_id=?",
+                (workspace_id, requested_discord_id),
+            )).fetchone()
+        if row and str(row[0]) != profile_id:
+            raise ValueError("Discord is already linked to another Player Archive profile")
+
     fields.append("updated_at = CURRENT_TIMESTAMP")
     params.extend([profile_id, workspace_id])
     async with dbapi.connect(database.DATABASE_DSN) as db:
@@ -122,6 +149,36 @@ async def update_player_profile(
             f"UPDATE player_profiles SET {', '.join(fields)} WHERE id = ? AND workspace_id = ?",
             params,
         )
+        # Tournament rows are a scoped presentation projection, not a second
+        # player record. Keep fields edited in Player Archive reflected in the
+        # already-linked entrants that still carry a scoped presentation row.
+        override_fields: list[str] = []
+        override_values: list[Any] = []
+        field_map = {
+            "display_name": "display_name",
+            "prefix": "prefix",
+            "country": "country",
+            "avatar_url": "avatar_url",
+        }
+        for key, column in field_map.items():
+            if key in data:
+                override_fields.append(f"{column} = ?")
+                value = data[key]
+                override_values.append(value.strip() if isinstance(value, str) else value)
+        if override_fields:
+            await db.execute(
+                f"""UPDATE tournament_entrant_overrides o
+                       SET {', '.join(override_fields)}, updated_at = CURRENT_TIMESTAMP
+                     WHERE o.workspace_id = ?
+                       AND EXISTS (
+                           SELECT 1 FROM tournament_player_links l
+                            WHERE l.workspace_id = o.workspace_id
+                              AND l.tournament_slug = o.tournament_slug
+                              AND l.entrant_id = o.entrant_id
+                              AND l.player_profile_id = ?
+                       )""",
+                override_values + [workspace_id, profile_id],
+            )
         await db.commit()
     return await get_player_profile(profile_id, workspace_id)
 
@@ -325,6 +382,27 @@ async def set_player_character_default(
             """,
             (cid, workspace_id, player_game_profile_id, clean_char_id, clean_char_name, clean_char_image, is_primary),
         )
+        # Mirror the saved default to linked tournament projections for the
+        # same game. The profile remains the durable source of the choice.
+        if is_primary:
+            await db.execute(
+                """UPDATE tournament_entrant_overrides o
+                       SET character_id = ?, character_name = ?, character_image_url = ?, updated_at = CURRENT_TIMESTAMP
+                      FROM player_game_profiles gp, tournaments t
+                     WHERE gp.id = ?
+                       AND gp.workspace_id = ?
+                       AND t.slug = o.tournament_slug
+                       AND t.game = gp.game_id
+                       AND o.workspace_id = gp.workspace_id
+                       AND EXISTS (
+                           SELECT 1 FROM tournament_player_links l
+                            WHERE l.workspace_id = o.workspace_id
+                              AND l.tournament_slug = o.tournament_slug
+                              AND l.entrant_id = o.entrant_id
+                              AND l.player_profile_id = gp.player_profile_id
+                       )""",
+                (clean_char_id, clean_char_name, clean_char_image, player_game_profile_id, workspace_id),
+            )
         await db.commit()
 
         async with db.execute(
@@ -483,34 +561,62 @@ async def get_entrant_linked_profile(
 ) -> dict[str, Any] | None:
     """Retrieve the confirmed linked PlayerProfile for an entrant."""
     async with dbapi.connect(database.DATABASE_DSN) as db:
-        # First check tournament_player_links
+        # Tournament links point to the workspace Player Archive.  The legacy
+        # ``players`` table is intentionally not a read fallback here: a
+        # profile is the only reusable player record.
         async with db.execute(
-            """SELECT l.player_discord_id, p.* FROM tournament_player_links l
-               LEFT JOIN player_profiles p ON p.discord_id = l.player_discord_id AND p.workspace_id = l.workspace_id
+            """SELECT p.* FROM tournament_player_links l
+               INNER JOIN player_profiles p ON p.id = l.player_profile_id
+                   AND p.workspace_id = l.workspace_id
                WHERE l.workspace_id = ? AND l.tournament_slug = ? AND l.entrant_id = ?""",
             (workspace_id, tournament_slug.strip(), str(entrant_id).strip()),
         ) as cursor:
             row = await cursor.fetchone()
-            if not row or not row.get("player_discord_id"):
-                return None
-            if row.get("id"):
-                return dict(row)
+            return dict(row) if row else None
 
-            # Fallback: if player_profiles row doesn't exist yet but players row does
-            async with db.execute(
-                "SELECT * FROM players WHERE discord_id = ? AND (workspace_id = ? OR workspace_id IS NULL)",
-                (row["player_discord_id"], workspace_id),
-            ) as p_cursor:
-                player_row = await p_cursor.fetchone()
-                if player_row:
-                    p = dict(player_row)
-                    return {
-                        "id": None,
-                        "workspace_id": workspace_id,
-                        "display_name": p.get("gamer_tag") or p.get("discord_id"),
-                        "prefix": p.get("team"),
-                        "country": p.get("country"),
-                        "avatar_url": p.get("avatar_path"),
-                        "discord_id": p.get("discord_id"),
-                    }
-            return None
+
+async def sync_entrant_presentation_to_profile(
+    workspace_id: str,
+    tournament_slug: str,
+    entrant_id: str,
+    data: dict[str, Any],
+    game_id: str | None,
+) -> dict[str, Any] | None:
+    """Make a linked entrant edit durable on its Player Archive profile.
+
+    A participant can still have a tournament projection for rendering, but
+    it must never become a competing player record. This helper is used by
+    Participants & Overrides after catalog/scope validation has completed.
+    """
+    profile = await get_entrant_linked_profile(workspace_id, tournament_slug, entrant_id)
+    if not profile:
+        return None
+
+    profile_updates: dict[str, Any] = {}
+    if "name" in data or "display_name" in data:
+        profile_updates["display_name"] = data.get("name", data.get("display_name"))
+    for key in ("prefix", "country", "avatar_url"):
+        if key in data:
+            profile_updates[key] = data[key]
+    if profile_updates:
+        await update_player_profile(str(profile["id"]), workspace_id, profile_updates)
+
+    clean_game_id = str(game_id or "").strip()
+    if clean_game_id and (data.get("character_id") or data.get("cfn")):
+        game_profile = await set_player_game_profile(
+            workspace_id=workspace_id,
+            player_profile_id=str(profile["id"]),
+            game_id=clean_game_id,
+            in_game_name=str(profile_updates.get("display_name") or profile.get("display_name") or "").strip() or None,
+            in_game_id=str(data.get("cfn") or "").strip() or None,
+        )
+        if data.get("character_id"):
+            await set_player_character_default(
+                workspace_id=workspace_id,
+                player_game_profile_id=str(game_profile["id"]),
+                character_id=str(data["character_id"]),
+                character_name=str(data.get("character") or data.get("character_name") or ""),
+                character_image_url=str(data.get("character_image_url") or "") or None,
+                is_primary=True,
+            )
+    return await get_player_profile(str(profile["id"]), workspace_id)

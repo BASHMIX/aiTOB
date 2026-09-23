@@ -5,11 +5,11 @@ import {
   Trash2,
   Edit3,
   Plus,
-  Globe,
   Tag,
   Save,
   Shield,
   Layers,
+  Camera,
 } from 'lucide-react';
 import type {
   PlayerProfileDetailResponse,
@@ -23,8 +23,10 @@ import {
   deletePlayerProfile,
   createGameProfile,
   createCharacterDefault,
+  uploadPlayerProfileAvatar,
 } from '../api';
 import { PLACEHOLDER_AVATAR } from '../presentation';
+import { countryCode, countryFlagUrl } from '@/utils/country';
 
 export interface PlayerProfileDetailProps {
   profileId: string;
@@ -45,6 +47,7 @@ export const PlayerProfileDetail: React.FC<PlayerProfileDetailProps> = ({
   const [isEditing, setIsEditing] = useState<boolean>(false);
   const [editForm, setEditForm] = useState<UpdateProfilePayload>({});
   const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [avatarUploadBusy, setAvatarUploadBusy] = useState<boolean>(false);
 
   // New Game Profile dialog state
   const [showAddGame, setShowAddGame] = useState<boolean>(false);
@@ -118,6 +121,21 @@ export const PlayerProfileDetail: React.FC<PlayerProfileDetailProps> = ({
     }
   };
 
+  const handleAvatarUpload = async (file: File | undefined) => {
+    if (!file) return;
+    try {
+      setAvatarUploadBusy(true);
+      setError(null);
+      await uploadPlayerProfileAvatar(profileId, file);
+      await loadDetail();
+      onProfileUpdated?.();
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || 'Failed to upload player photo');
+    } finally {
+      setAvatarUploadBusy(false);
+    }
+  };
+
   const handleAddGameProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newGameForm.game_id.trim()) return;
@@ -175,10 +193,11 @@ export const PlayerProfileDetail: React.FC<PlayerProfileDetailProps> = ({
   return (
     <div className="space-y-6" data-testid="player-profile-detail">
       {/* Header Profile Card */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 shadow-sm">
+      <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-[#182334] via-[#111821] to-[#0d1117] p-5 shadow-xl">
+        <div className="pointer-events-none absolute -right-14 -top-14 h-40 w-40 rounded-full bg-accentYellow/10 blur-3xl" />
         <div className="flex flex-col sm:flex-row items-start justify-between gap-4">
           <div className="flex items-center gap-4">
-            <div className="w-20 h-20 rounded-xl bg-zinc-800 overflow-hidden border border-zinc-700 shrink-0">
+            <div className="relative h-24 w-24 shrink-0 overflow-hidden rounded-2xl border-2 border-accentYellow/45 bg-zinc-800 shadow-[0_0_25px_rgba(251,191,36,.18)]">
               <img
                 src={profile.avatar_url || PLACEHOLDER_AVATAR}
                 alt={profile.display_name}
@@ -187,19 +206,23 @@ export const PlayerProfileDetail: React.FC<PlayerProfileDetailProps> = ({
                   (e.currentTarget as HTMLImageElement).src = PLACEHOLDER_AVATAR;
                 }}
               />
+              <label className="absolute inset-x-0 bottom-0 flex cursor-pointer items-center justify-center gap-1 bg-black/70 py-1.5 text-[10px] font-bold text-white transition hover:bg-black/90">
+                <Camera className="h-3 w-3" /> {avatarUploadBusy ? 'Uploading…' : 'Upload Photo'}
+                <input type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" disabled={avatarUploadBusy} onChange={(event) => void handleAvatarUpload(event.target.files?.[0])} />
+              </label>
             </div>
             <div>
+              <p className="text-[10px] font-black uppercase tracking-[.16em] text-accentYellow">Player profile</p>
               <div className="flex items-center gap-2 flex-wrap">
                 {profile.prefix && (
                   <span className="px-2 py-0.5 rounded text-xs font-semibold bg-zinc-800 text-zinc-300 border border-zinc-700">
                     {profile.prefix}
                   </span>
                 )}
-                <h2 className="text-xl font-bold text-zinc-100">{profile.display_name}</h2>
+                <h2 className="text-2xl font-black tracking-tight text-white">{profile.display_name}</h2>
                 {profile.country && (
-                  <span className="inline-flex items-center gap-1 text-xs text-zinc-400 bg-zinc-800/80 px-2 py-0.5 rounded border border-zinc-700/60">
-                    <Globe className="w-3 h-3 text-zinc-400" />
-                    {profile.country}
+                  <span className="inline-flex items-center gap-1 text-xs text-zinc-200 bg-zinc-800/80 px-2 py-0.5 rounded border border-zinc-700/60">
+                    {countryFlagUrl(profile.country) && countryCode(profile.country) ? <img src={countryFlagUrl(profile.country)!} alt={`${countryCode(profile.country)} flag`} title={countryCode(profile.country)!} className="h-3.5 w-5 rounded-[2px] border border-white/15 object-cover" /> : '🏳️'}
                   </span>
                 )}
               </div>
@@ -217,7 +240,7 @@ export const PlayerProfileDetail: React.FC<PlayerProfileDetailProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-2 self-end sm:self-start">
+          <div className="relative flex items-center gap-2 self-end sm:self-start">
             <button
               type="button"
               onClick={() => setIsEditing(!isEditing)}

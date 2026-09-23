@@ -130,6 +130,7 @@ describe('PlayerArchivePage Component', () => {
       expect(screen.getByText('Daigo Umehara')).toBeInTheDocument();
       expect(screen.getByText('Tokido')).toBeInTheDocument();
     });
+    expect(screen.getAllByAltText('JP flag')[0]).toHaveAttribute('src', '/static/flags/jp.svg');
 
     // First profile detail loaded
     await waitFor(() => {

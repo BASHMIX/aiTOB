@@ -179,7 +179,11 @@ class CreatePlayerRequest(BaseModel):
 class TournamentPlayerLinkRequest(BaseModel):
     tournament_slug: str = Field(min_length=1, description="Locally tracked tournament slug")
     entrant_id: str = Field(min_length=1, description="Provider entrant/participant ID within that tournament")
-    discord_id: str = Field(min_length=1, description="Existing aiTOB player Discord ID")
+    # A confirmed link is now profile-first.  ``discord_id`` remains accepted
+    # for the established Discord-player workflow while old tournament links
+    # are migrated gradually.
+    player_profile_id: Optional[str] = Field(default=None, min_length=1, description="Persistent aiTOB player profile")
+    discord_id: Optional[str] = Field(default=None, min_length=1, description="Existing aiTOB player Discord ID")
 
 
 class SaveOverlayRequest(BaseModel):

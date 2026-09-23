@@ -1,36 +1,29 @@
-import React, { useState, useEffect } from 'react';
-import {
-  Users,
-  Search,
-  Plus,
-  RefreshCw,
-  Globe,
-  User,
-  X,
-  AlertCircle,
-} from 'lucide-react';
-import type { PlayerProfile, CreateProfilePayload } from './types';
+import { useEffect, useState } from 'react';
+import { AlertCircle, ArrowLeft, ChevronRight, Grid2X2, List, Plus, RefreshCw, Search, ShieldCheck, Trophy, Users, X } from 'lucide-react';
+import type { CreateProfilePayload, PlayerProfile } from './types';
 import { listPlayerProfiles, createPlayerProfile } from './api';
 import { PLACEHOLDER_AVATAR } from './presentation';
+import { countryCode, countryFlagUrl } from '@/utils/country';
 import PlayerProfileDetail from './components/PlayerProfileDetail';
+
+type ArchiveView = 'cards' | 'rows';
+const CountryFlag = ({ country, className = '' }: { country?: string | null; className?: string }) => {
+  const code = countryCode(country);
+  const src = countryFlagUrl(country);
+  if (!code || !src) return <span className={className}>—</span>;
+  return <img src={src} alt={`${code} flag`} title={code} className={`h-4 w-6 rounded-[2px] border border-white/15 object-cover shadow-sm ${className}`} />;
+};
 
 export const PlayerArchivePage: React.FC = () => {
   const [profiles, setProfiles] = useState<PlayerProfile[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState<string>('');
-  const [loading, setLoading] = useState<boolean>(true);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [view, setView] = useState<ArchiveView>('cards');
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  // Create Profile Modal
-  const [showCreateModal, setShowCreateModal] = useState<boolean>(false);
-  const [createForm, setCreateForm] = useState<CreateProfilePayload>({
-    display_name: '',
-    prefix: '',
-    country: '',
-    avatar_url: '',
-    discord_id: '',
-  });
-  const [isCreating, setIsCreating] = useState<boolean>(false);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [createForm, setCreateForm] = useState<CreateProfilePayload>({ display_name: '', prefix: '', country: '', avatar_url: '', discord_id: '' });
+  const [isCreating, setIsCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
   const fetchProfiles = async (query = searchQuery) => {
@@ -39,12 +32,7 @@ export const PlayerArchivePage: React.FC = () => {
       setError(null);
       const list = await listPlayerProfiles({ query });
       setProfiles(list);
-      // Auto-select first profile if none selected or previous selection deleted
-      if (list.length > 0 && (!selectedProfileId || !list.some((p) => p.id === selectedProfileId))) {
-        setSelectedProfileId(list[0].id);
-      } else if (list.length === 0) {
-        setSelectedProfileId(null);
-      }
+      setSelectedProfileId((current) => list.some((profile) => profile.id === current) ? current : (list[0]?.id || null));
     } catch (err: any) {
       setError(err?.response?.data?.detail || err?.message || 'Failed to fetch player profiles');
     } finally {
@@ -52,19 +40,11 @@ export const PlayerArchivePage: React.FC = () => {
     }
   };
 
-  useEffect(() => {
-    fetchProfiles();
-  }, []);
+  useEffect(() => { void fetchProfiles(); }, []);
 
-  const handleSearchSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    fetchProfiles(searchQuery);
-  };
-
-  const handleCreateSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleCreateSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
     if (!createForm.display_name.trim()) return;
-
     try {
       setIsCreating(true);
       setCreateError(null);
@@ -80,271 +60,23 @@ export const PlayerArchivePage: React.FC = () => {
     }
   };
 
-  return (
-    <div className="max-w-7xl mx-auto px-4 py-8 space-y-6" data-testid="player-archive-page">
-      {/* Top Header */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-zinc-800 pb-6">
-        <div>
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-indigo-600/10 text-indigo-400 border border-indigo-500/20">
-              <Users className="w-6 h-6" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold text-zinc-100">Player Archive</h1>
-              <p className="text-xs text-zinc-400">
-                Persistent player profiles, character defaults, and game preferences across tournaments.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2 self-stretch sm:self-auto">
-          <button
-            type="button"
-            onClick={() => setShowCreateModal(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold bg-indigo-600 text-white hover:bg-indigo-500 transition shadow-sm"
-            data-testid="create-profile-button"
-          >
-            <Plus className="w-4 h-4" />
-            New Player Profile
-          </button>
-        </div>
+  return <main className="mx-auto max-w-[1500px] space-y-6 px-4 py-6 sm:px-6 lg:px-8" data-testid="player-archive-page">
+    <section className="relative overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br from-[#172235] via-[#101722] to-[#080b10] p-5 shadow-2xl sm:p-7">
+      <div className="pointer-events-none absolute -right-20 -top-24 h-72 w-72 rounded-full bg-accentYellow/10 blur-3xl" />
+      <div className="pointer-events-none absolute -bottom-24 left-1/3 h-56 w-56 rounded-full bg-sky-500/10 blur-3xl" />
+      <div className="relative flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+        <div className="flex items-start gap-4"><div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-accentYellow/35 bg-accentYellow/10 text-accentYellow shadow-[0_0_36px_rgba(251,191,36,.16)]"><Trophy className="h-7 w-7" /></div><div><p className="text-[10px] font-black uppercase tracking-[.24em] text-accentYellow">aiTOB Player Club</p><h1 className="mt-1 text-3xl font-black tracking-tight text-white sm:text-4xl">Player Archive</h1><p className="mt-2 max-w-2xl text-sm leading-relaxed text-textDim">بطاقات لاعب دائمة: الهوية، العلم، الصورة، الألعاب والشخصيات. اربطها مباشرة بمشتركي أي بطولة من الـHub.</p></div></div>
+        <div className="flex flex-wrap gap-2"><a href="/admin/hub" className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-white/15 bg-black/20 px-4 text-xs font-bold text-white transition hover:bg-white/10"><ArrowLeft className="h-4 w-4" /> Back to aiTOB</a><button type="button" onClick={() => setShowCreateModal(true)} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-accentYellow px-4 text-xs font-black text-black transition hover:bg-yellow-300" data-testid="create-profile-button"><Plus className="h-4 w-4" /> New Player Profile</button></div>
       </div>
+      <div className="relative mt-6 grid max-w-xl grid-cols-3 gap-2 sm:gap-3"><div className="rounded-2xl border border-white/10 bg-black/20 px-3 py-3"><p className="text-[10px] font-bold uppercase tracking-wider text-textDim">Profiles</p><p className="mt-1 text-2xl font-black text-white">{profiles.length}</p></div><div className="rounded-2xl border border-white/10 bg-black/20 px-3 py-3"><p className="text-[10px] font-bold uppercase tracking-wider text-textDim">With Discord</p><p className="mt-1 text-2xl font-black text-white">{profiles.filter((p) => p.discord_id).length}</p></div><div className="rounded-2xl border border-white/10 bg-black/20 px-3 py-3"><p className="text-[10px] font-bold uppercase tracking-wider text-textDim">Ready to link</p><p className="mt-1 text-2xl font-black text-statusGreen">{profiles.length}</p></div></div>
+    </section>
 
-      {/* Main Content Layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left Sidebar: Search & List */}
-        <div className="lg:col-span-4 bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-4">
-          <form onSubmit={handleSearchSubmit} className="flex gap-2">
-            <div className="relative flex-1">
-              <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-zinc-400" />
-              <input
-                type="text"
-                placeholder="Search profiles..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-9 pr-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-indigo-500"
-                data-testid="search-profiles-input"
-              />
-            </div>
-            <button
-              type="submit"
-              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-zinc-800 text-zinc-300 hover:bg-zinc-700 transition"
-            >
-              Search
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setSearchQuery('');
-                fetchProfiles('');
-              }}
-              title="Refresh list"
-              className="p-1.5 rounded-lg bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition"
-            >
-              <RefreshCw className="w-4 h-4" />
-            </button>
-          </form>
+    <section className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(400px,.75fr)]"><div className="space-y-4"><div className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-cardDark p-3 shadow-lg sm:flex-row sm:items-center sm:justify-between"><form onSubmit={(event) => { event.preventDefault(); void fetchProfiles(searchQuery); }} className="flex flex-1 gap-2"><label className="relative flex-1"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-textDim" /><input type="search" placeholder="Search player, team, country…" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} className="min-h-10 w-full rounded-xl border border-white/10 bg-appDark pl-9 pr-3 text-sm text-white outline-none focus:border-accentYellow/60" data-testid="search-profiles-input" /></label><button type="submit" className="rounded-xl border border-white/10 px-3 text-xs font-bold text-white hover:bg-white/10">Search</button><button type="button" onClick={() => { setSearchQuery(''); void fetchProfiles(''); }} className="rounded-xl border border-white/10 px-3 text-textDim hover:bg-white/10 hover:text-white" title="Refresh player archive"><RefreshCw className="h-4 w-4" /></button></form><div className="flex rounded-xl border border-white/10 bg-black/20 p-1" aria-label="Archive layout"><button type="button" onClick={() => setView('cards')} className={`rounded-lg p-2 ${view === 'cards' ? 'bg-accentYellow text-black' : 'text-textDim hover:text-white'}`} title="Card view"><Grid2X2 className="h-4 w-4" /></button><button type="button" onClick={() => setView('rows')} className={`rounded-lg p-2 ${view === 'rows' ? 'bg-accentYellow text-black' : 'text-textDim hover:text-white'}`} title="List view"><List className="h-4 w-4" /></button></div></div>
+      {loading ? <div className="rounded-2xl border border-white/10 bg-cardDark p-12 text-center text-sm text-textDim">Loading player archive…</div> : error ? <div className="rounded-2xl border border-statusRed/30 bg-statusRed/10 p-4 text-sm text-statusRed">{error}</div> : profiles.length === 0 ? <div className="rounded-2xl border border-dashed border-white/15 bg-cardDark/60 p-16 text-center"><Users className="mx-auto h-10 w-10 text-textDim" /><h2 className="mt-3 font-bold text-white">No player profiles yet</h2><p className="mt-1 text-sm text-textDim">Create the first profile, then link it to a tournament entrant from Participants & Overrides.</p></div> : <div className={view === 'cards' ? 'grid gap-3 sm:grid-cols-2 2xl:grid-cols-3' : 'space-y-2'} data-testid="profiles-list">{profiles.map((profile) => { const selected = profile.id === selectedProfileId; return <button key={profile.id} type="button" onClick={() => setSelectedProfileId(profile.id)} className={`group w-full overflow-hidden border text-left transition ${view === 'cards' ? 'rounded-2xl' : 'rounded-xl'} ${selected ? 'border-accentYellow/70 bg-accentYellow/[.08] shadow-[0_0_24px_rgba(251,191,36,.1)]' : 'border-white/10 bg-cardDark hover:border-white/25 hover:bg-white/[.035]'}`} data-testid={`profile-item-${profile.id}`}><div className={`flex ${view === 'cards' ? 'min-h-40 flex-col justify-between p-4' : 'items-center gap-3 p-3'}`}><div className={view === 'cards' ? 'flex items-start justify-between' : 'contents'}><img src={profile.avatar_url || PLACEHOLDER_AVATAR} alt={profile.display_name} className={`${view === 'cards' ? 'h-16 w-16 rounded-2xl' : 'h-12 w-12 rounded-xl'} border border-white/15 bg-black/20 object-cover shadow-lg`} onError={(event) => { event.currentTarget.src = PLACEHOLDER_AVATAR; }} /><span className={`flex h-7 min-w-8 items-center justify-center rounded-full border border-white/10 bg-black/20 px-1.5 py-1 text-xs font-bold ${view === 'cards' ? '' : 'ml-auto'}`}><CountryFlag country={profile.country} /></span></div><div className={view === 'cards' ? '' : 'min-w-0 flex-1'}><div className="flex items-center gap-2"><span className="truncate text-base font-black text-white">{profile.display_name}</span>{profile.prefix && <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-bold text-textDim">{profile.prefix}</span>}</div><p className="mt-1 truncate text-[11px] text-textDim">{profile.discord_id ? `Discord linked · ${profile.discord_id}` : 'Profile ready for tournament link'}</p></div>{view === 'cards' && <div className="mt-3 flex items-center justify-between border-t border-white/10 pt-3 text-[10px] font-bold uppercase tracking-wider text-textDim"><span>{profile.country ? 'Country registered' : 'No country'}</span><ChevronRight className="h-4 w-4 text-accentYellow" /></div>}</div></button>; })}</div>}</div>
+      <aside className="xl:sticky xl:top-4">{selectedProfileId ? <PlayerProfileDetail key={selectedProfileId} profileId={selectedProfileId} onProfileUpdated={() => void fetchProfiles()} onProfileDeleted={() => void fetchProfiles()} /> : <div className="rounded-2xl border border-dashed border-white/15 bg-cardDark/60 p-12 text-center text-textDim"><ShieldCheck className="mx-auto h-10 w-10" /><p className="mt-3 text-sm">Select a player card to inspect and edit the profile.</p></div>}</aside></section>
 
-          {/* Profiles List */}
-          {loading ? (
-            <div className="py-8 text-center text-xs text-zinc-500" data-testid="profiles-loading">
-              Loading player archive...
-            </div>
-          ) : error ? (
-            <div className="p-3 bg-red-900/20 border border-red-800 rounded text-xs text-red-300">
-              {error}
-            </div>
-          ) : profiles.length === 0 ? (
-            <div className="py-12 text-center text-xs text-zinc-500 border border-dashed border-zinc-800 rounded-lg">
-              No player profiles found.
-            </div>
-          ) : (
-            <div className="space-y-1.5 max-h-[600px] overflow-y-auto pr-1" data-testid="profiles-list">
-              {profiles.map((p) => {
-                const isSelected = p.id === selectedProfileId;
-                return (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => setSelectedProfileId(p.id)}
-                    className={`w-full flex items-center justify-between p-2.5 rounded-lg text-left transition border ${
-                      isSelected
-                        ? 'bg-indigo-950/40 border-indigo-700/60 text-zinc-100 shadow-sm'
-                        : 'bg-zinc-950/40 border-zinc-800/60 text-zinc-300 hover:bg-zinc-800/50'
-                    }`}
-                    data-testid={`profile-item-${p.id}`}
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-9 h-9 rounded-lg bg-zinc-800 overflow-hidden border border-zinc-700/80 shrink-0">
-                        <img
-                          src={p.avatar_url || PLACEHOLDER_AVATAR}
-                          alt={p.display_name}
-                          className="w-full h-full object-cover"
-                          onError={(e) => {
-                            (e.currentTarget as HTMLImageElement).src = PLACEHOLDER_AVATAR;
-                          }}
-                        />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          {p.prefix && (
-                            <span className="text-[10px] font-semibold px-1 rounded bg-zinc-800 text-zinc-400 border border-zinc-700">
-                              {p.prefix}
-                            </span>
-                          )}
-                          <p className="text-xs font-semibold truncate text-zinc-200">{p.display_name}</p>
-                        </div>
-                        {p.discord_id && (
-                          <p className="text-[10px] text-zinc-500 truncate">{p.discord_id}</p>
-                        )}
-                      </div>
-                    </div>
-
-                    {p.country && (
-                      <span className="inline-flex items-center gap-1 text-[10px] text-zinc-400 bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-800 shrink-0">
-                        <Globe className="w-2.5 h-2.5 text-zinc-400" />
-                        {p.country}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* Right Detail Pane */}
-        <div className="lg:col-span-8">
-          {selectedProfileId ? (
-            <PlayerProfileDetail
-              key={selectedProfileId}
-              profileId={selectedProfileId}
-              onProfileUpdated={() => fetchProfiles()}
-              onProfileDeleted={() => {
-                fetchProfiles();
-              }}
-            />
-          ) : (
-            <div className="flex flex-col items-center justify-center p-16 bg-zinc-900 border border-zinc-800 rounded-xl text-zinc-500 text-center">
-              <User className="w-12 h-12 mb-3 text-zinc-600" />
-              <h3 className="text-base font-semibold text-zinc-300">No Profile Selected</h3>
-              <p className="text-xs text-zinc-500 mt-1 max-w-sm">
-                Choose a profile from the left sidebar or create a new one to manage their details and game preferences.
-              </p>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Create Profile Modal */}
-      {showCreateModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs"
-          data-testid="create-profile-modal"
-        >
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl max-w-md w-full p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
-              <h3 className="text-base font-bold text-zinc-100">Create Player Profile</h3>
-              <button
-                type="button"
-                onClick={() => setShowCreateModal(false)}
-                className="text-zinc-400 hover:text-zinc-200"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {createError && (
-              <div className="p-3 bg-red-900/30 border border-red-800 rounded text-xs text-red-300 flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
-                <span>{createError}</span>
-              </div>
-            )}
-
-            <form onSubmit={handleCreateSubmit} className="space-y-3.5">
-              <div>
-                <label className="block text-xs font-medium text-zinc-300 mb-1">Display Name *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Daigo Umehara"
-                  value={createForm.display_name}
-                  onChange={(e) => setCreateForm({ ...createForm, display_name: e.target.value })}
-                  className="w-full px-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-700 text-xs text-zinc-100 focus:outline-none focus:border-indigo-500"
-                  data-testid="create-profile-name-input"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-zinc-300 mb-1">Prefix / Team</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. BST"
-                    value={createForm.prefix || ''}
-                    onChange={(e) => setCreateForm({ ...createForm, prefix: e.target.value })}
-                    className="w-full px-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-700 text-xs text-zinc-100 focus:outline-none focus:border-indigo-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-zinc-300 mb-1">Country (ISO)</label>
-                  <input
-                    type="text"
-                    maxLength={3}
-                    placeholder="e.g. JP"
-                    value={createForm.country || ''}
-                    onChange={(e) => setCreateForm({ ...createForm, country: e.target.value.toUpperCase() })}
-                    className="w-full px-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-700 text-xs text-zinc-100 focus:outline-none focus:border-indigo-500"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-zinc-300 mb-1">Avatar Image URL</label>
-                <input
-                  type="text"
-                  placeholder="https://..."
-                  value={createForm.avatar_url || ''}
-                  onChange={(e) => setCreateForm({ ...createForm, avatar_url: e.target.value })}
-                  className="w-full px-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-700 text-xs text-zinc-100 focus:outline-none focus:border-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-zinc-300 mb-1">Discord ID</label>
-                <input
-                  type="text"
-                  placeholder="e.g. daigo#0001"
-                  value={createForm.discord_id || ''}
-                  onChange={(e) => setCreateForm({ ...createForm, discord_id: e.target.value })}
-                  className="w-full px-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-700 text-xs text-zinc-100 focus:outline-none focus:border-indigo-500"
-                />
-              </div>
-
-              <div className="flex justify-end gap-2 pt-3 border-t border-zinc-800">
-                <button
-                  type="button"
-                  onClick={() => setShowCreateModal(false)}
-                  className="px-3 py-1.5 rounded-lg text-xs font-medium bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isCreating}
-                  className="px-4 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-50"
-                  data-testid="create-profile-submit"
-                >
-                  {isCreating ? 'Creating...' : 'Create Profile'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+    {showCreateModal && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm" data-testid="create-profile-modal"><div className="w-full max-w-md rounded-3xl border border-white/10 bg-[#111923] p-6 shadow-2xl"><div className="flex items-start justify-between border-b border-white/10 pb-4"><div><p className="text-[10px] font-black uppercase tracking-[.18em] text-accentYellow">Player Club</p><h2 className="mt-1 text-xl font-black text-white">New Player Profile</h2></div><button type="button" onClick={() => setShowCreateModal(false)} className="rounded-lg p-2 text-textDim hover:bg-white/10 hover:text-white"><X className="h-4 w-4" /></button></div>{createError && <p className="mt-4 flex items-center gap-2 rounded-xl border border-statusRed/30 bg-statusRed/10 p-3 text-xs text-statusRed"><AlertCircle className="h-4 w-4" />{createError}</p>}<form onSubmit={handleCreateSubmit} className="mt-5 space-y-4"><label className="block text-xs font-bold text-textDim">Display name *<input required data-testid="create-profile-name-input" value={createForm.display_name} onChange={(event) => setCreateForm({ ...createForm, display_name: event.target.value })} placeholder="e.g. FNC | BASHMIX" className="mt-1.5 min-h-10 w-full rounded-xl border border-white/10 bg-appDark px-3 text-sm text-white outline-none focus:border-accentYellow/60" /></label><div className="grid grid-cols-2 gap-3"><label className="block text-xs font-bold text-textDim">Team / Prefix<input value={createForm.prefix || ''} onChange={(event) => setCreateForm({ ...createForm, prefix: event.target.value })} className="mt-1.5 min-h-10 w-full rounded-xl border border-white/10 bg-appDark px-3 text-sm text-white outline-none focus:border-accentYellow/60" /></label><label className="block text-xs font-bold text-textDim">Country code<input maxLength={3} value={createForm.country || ''} onChange={(event) => setCreateForm({ ...createForm, country: event.target.value.toUpperCase() })} placeholder="JO" className="mt-1.5 min-h-10 w-full rounded-xl border border-white/10 bg-appDark px-3 text-sm text-white outline-none focus:border-accentYellow/60" /></label></div><label className="block text-xs font-bold text-textDim">Discord ID <span className="font-normal">(optional)</span><input value={createForm.discord_id || ''} onChange={(event) => setCreateForm({ ...createForm, discord_id: event.target.value })} className="mt-1.5 min-h-10 w-full rounded-xl border border-white/10 bg-appDark px-3 text-sm text-white outline-none focus:border-accentYellow/60" /></label><p className="rounded-xl border border-sky-300/20 bg-sky-300/5 p-3 text-xs text-sky-100">Save first, then use <strong>Upload Photo</strong> on the player card to add an image.</p><div className="flex justify-end gap-2 border-t border-white/10 pt-4"><button type="button" onClick={() => setShowCreateModal(false)} className="rounded-xl px-4 py-2 text-xs font-bold text-textDim hover:bg-white/10 hover:text-white">Cancel</button><button type="submit" data-testid="create-profile-submit" disabled={isCreating} className="rounded-xl bg-accentYellow px-4 py-2 text-xs font-black text-black disabled:opacity-50">{isCreating ? 'Creating…' : 'Create profile'}</button></div></form></div></div>}
+  </main>;
 };
 
 export default PlayerArchivePage;

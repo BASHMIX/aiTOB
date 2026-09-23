@@ -73,8 +73,10 @@ explicitly disposable provider resources with `AITOB_ALLOW_LIVE_TESTS=true`.
   offer Double-DQ for a Challonge match.
 - `docs/workflows.json` is the executable local match-transition definition.
   Provider state, Hub lifecycle, and broadcast state are separate axes.
-- Player Profiles & Presentation: Reusable player profiles and character defaults
-  are workspace-scoped in PostgreSQL. Entrant overrides are scoped per tournament
+- Player Profiles & Presentation: `Player Archive` is the sole reusable player
+  record, workspace-scoped in PostgreSQL. Tournament registration creates or
+  reuses that record by workspace Discord ID, then stores only a profile reference
+  on the enrollment and entrant link. Entrant overrides remain scoped per tournament
   and event. The v1 presentation hook (`/api/player-profiles/presentation/v1`)
   provides field-level provenance (`entrant_override` → `player_profile` → `provider_snapshot` → `placeholder`).
 - Strict OBS Boundary: Live broadcast overlays (`/obs/*`), `broadcast_projection.py`,

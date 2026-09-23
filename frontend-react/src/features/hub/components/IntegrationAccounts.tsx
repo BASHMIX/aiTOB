@@ -4,6 +4,7 @@ import startGgLogo from '@/assets/Start.gg.svg';
 
 type AccountProviderType = 'discord' | 'challonge' | 'startgg';
 type ProviderType = AccountProviderType;
+type ProviderMeta = { label: string; icon: string; credential: string; identity: string; destination: string };
 type Account = {
   id: string;
   provider_type: AccountProviderType;
@@ -15,11 +16,27 @@ type Account = {
   destinations: { destination_type: string; display_name: string; configured: boolean; status?: string }[];
 };
 
-const providerMeta: Record<ProviderType, { label: string; icon: string; credential: string; identity: string; destination: string }> = {
+const providerMeta: Record<ProviderType, ProviderMeta> = {
   discord: { label: 'Discord', icon: '✦', credential: 'Bot token', identity: 'Application or bot ID', destination: 'No match-call channel configured' },
   challonge: { label: 'Challonge', icon: '⌘', credential: 'API key or account token', identity: 'Challonge account ID', destination: 'Tournament destinations are selected per tournament' },
   startgg: { label: 'Start.gg', icon: '◆', credential: 'API token', identity: 'Shared provider credential', destination: 'Configured above as a shared provider connection' },
 };
+
+// Integration records are durable configuration.  A value written by an
+// older build or a future provider must not be able to take down the entire
+// Connections workspace merely because it lacks a display definition here.
+function getProviderMeta(provider: string | null | undefined): ProviderMeta {
+  const known = providerMeta[provider as ProviderType];
+  if (known) return known;
+  const label = String(provider || 'Unknown provider');
+  return {
+    label,
+    icon: '?',
+    credential: 'credential',
+    identity: 'Account identity',
+    destination: 'No destination details available for this provider',
+  };
+}
 
 function StatusPill({ configured, status }: { configured: boolean; status: string }) {
   const ready = configured && status === 'active';
@@ -98,7 +115,7 @@ export function IntegrationAccounts() {
   const rotate = async (account: Account) => {
     const secret = secrets[account.id] || '';
     if (!secret) {
-      showMessage(`Enter a ${providerMeta[account.provider_type].credential.toLowerCase()} first.`, false);
+      showMessage(`Enter a ${getProviderMeta(account.provider_type).credential.toLowerCase()} first.`, false);
       return;
     }
     setBusy(`credential:${account.id}`);
@@ -254,7 +271,7 @@ export function IntegrationAccounts() {
 
       <div className="space-y-3">
         {filteredAccounts.map((account) => {
-          const meta = providerMeta[account.provider_type];
+          const meta = getProviderMeta(account.provider_type);
           const destination = destinationDrafts[account.id] || { external_id: '', display_name: '' };
           return <section key={account.id} className="rounded-xl border border-white/10 bg-cardDark p-4 shadow-sm sm:p-5">
             <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-4"><div className="flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-lg bg-accentYellow/10 text-sm text-accentYellow">{meta.icon}</div><div><h2 className="text-sm font-bold text-white">{account.display_name}</h2><p className="mt-0.5 text-[11px] text-textDim">{meta.label} · account-scoped</p></div></div><StatusPill configured={account.configured} status={account.status} /></div>

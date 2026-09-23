@@ -75,6 +75,7 @@ REQUIRED_FOREIGN_KEYS = (
     ("tournament_registration_configs", "workspace_id", "workspaces", "id"),
     ("tournament_player_enrollments", "tournament_id", "tournaments", "id"),
     ("tournament_player_enrollments", "workspace_id", "workspaces", "id"),
+    ("tournament_player_enrollments", "player_profile_id", "player_profiles", "id"),
     ("tournament_player_enrollments", "player_identity_id", "player_identities", "id"),
     ("tournament_player_enrollments", "provider_identity_link_id", "provider_identity_links", "id"),
     ("tournament_player_enrollments", "roster_snapshot_id", "provider_roster_snapshots", "id"),

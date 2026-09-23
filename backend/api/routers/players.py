@@ -184,17 +184,27 @@ async def api_create_player(body: CreatePlayerRequest, principal: SessionPrincip
 # regression that surfaced in ParticipantsTable.tsx.
 
 @router.get("/links", summary="List confirmed player links for a tournament")
-async def api_get_tournament_player_links(tournament_slug: str, principal: SessionPrincipal = Depends(require_permission("workspace.read"))):
-    return {"links": await get_tournament_player_links(tournament_slug, principal.workspace_id if principal else None)}
+async def api_get_tournament_player_links(
+    tournament_slug: str,
+    event_id: str | None = None,
+    principal: SessionPrincipal = Depends(require_permission("workspace.read")),
+):
+    return {"links": await get_tournament_player_links(tournament_slug, principal.workspace_id if principal else None, event_id)}
 
 
-@router.put("/links", summary="Link an imported entrant to an aiTOB player")
+@router.put("/links", summary="Link an imported entrant to an aiTOB player profile")
 async def api_link_tournament_entrant(body: TournamentPlayerLinkRequest, principal: SessionPrincipal = Depends(require_permission("tournament.manage"))):
     from backend.core.database import get_tournament
     if not await get_tournament(body.tournament_slug, principal.workspace_id):
         raise HTTPException(status_code=404, detail="Tournament not found")
     try:
-        link = await link_tournament_entrant(body.tournament_slug, body.entrant_id, body.discord_id, principal.workspace_id)
+        link = await link_tournament_entrant(
+            body.tournament_slug,
+            body.entrant_id,
+            discord_id=body.discord_id,
+            player_profile_id=body.player_profile_id,
+            workspace_id=principal.workspace_id,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return {"ok": True, "link": link}
@@ -329,11 +339,19 @@ async def api_patch_override(id: str, request: Request, principal: SessionPrinci
                 entrant_id=id, tournament_slug=t_slug, event_id=ev_id,
                 provider=provider, workspace_id=principal.workspace_id,
             )
-            from backend.core.player_profiles import set_tournament_entrant_override
+            from backend.core.player_profiles import set_tournament_entrant_override, sync_entrant_presentation_to_profile
             await set_tournament_entrant_override(
                 workspace_id=principal.workspace_id, provider=provider,
                 tournament_slug=t_slug, event_id=ev_id, entrant_id=id,
                 data=validated, updated_by=principal.user_id,
+            )
+            tournament = await get_tournament(t_slug, principal.workspace_id)
+            await sync_entrant_presentation_to_profile(
+                workspace_id=principal.workspace_id,
+                tournament_slug=t_slug,
+                entrant_id=id,
+                data=validated,
+                game_id=str((tournament or {}).get("game") or ""),
             )
         else:
             await save_player_override(id, validated, principal.workspace_id)
@@ -432,7 +450,7 @@ async def api_upload_avatar(id: str, request: Request, principal: SessionPrincip
             entrant_id=id, tournament_slug=tournament_slug, event_id=event_id,
             provider=provider, workspace_id=principal.workspace_id,
         )
-        from backend.core.player_profiles import get_tournament_entrant_override, set_tournament_entrant_override
+        from backend.core.player_profiles import get_tournament_entrant_override, set_tournament_entrant_override, sync_entrant_presentation_to_profile
         scoped_before = await get_tournament_entrant_override(
             principal.workspace_id, provider, tournament_slug, event_id, id
         )
@@ -440,6 +458,14 @@ async def api_upload_avatar(id: str, request: Request, principal: SessionPrincip
             workspace_id=principal.workspace_id, provider=provider,
             tournament_slug=tournament_slug, event_id=event_id, entrant_id=id,
             data={"avatar_url": avatar_url}, updated_by=principal.user_id,
+        )
+        tournament = await get_tournament(tournament_slug, principal.workspace_id)
+        await sync_entrant_presentation_to_profile(
+            workspace_id=principal.workspace_id,
+            tournament_slug=tournament_slug,
+            entrant_id=id,
+            data={"avatar_url": avatar_url},
+            game_id=str((tournament or {}).get("game") or ""),
         )
         from backend.core.database import record_media_asset
         await record_media_asset(

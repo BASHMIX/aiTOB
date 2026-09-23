@@ -128,14 +128,17 @@ async def api_create_profile(
     principal: SessionPrincipal = Depends(require_permission("tournament.manage")),
 ):
     """Create a new reusable player profile."""
-    profile = await player_profiles.create_player_profile(
-        workspace_id=principal.workspace_id,
-        display_name=body.display_name,
-        prefix=body.prefix,
-        country=body.country,
-        avatar_url=body.avatar_url,
-        discord_id=body.discord_id,
-    )
+    try:
+        profile = await player_profiles.create_player_profile(
+            workspace_id=principal.workspace_id,
+            display_name=body.display_name,
+            prefix=body.prefix,
+            country=body.country,
+            avatar_url=body.avatar_url,
+            discord_id=body.discord_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return profile
 
 
@@ -184,8 +187,62 @@ async def api_update_profile(
         raise HTTPException(status_code=404, detail="Player profile not found")
 
     data = {k: v for k, v in body.model_dump().items() if v is not None}
-    updated = await player_profiles.update_player_profile(profile_id, principal.workspace_id, data)
+    try:
+        updated = await player_profiles.update_player_profile(profile_id, principal.workspace_id, data)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return updated
+
+
+@router.post(
+    "/{profile_id}/avatar",
+    summary="Upload a persistent player-profile avatar",
+)
+async def api_upload_profile_avatar(
+    profile_id: str,
+    request: Request,
+    principal: SessionPrincipal = Depends(require_permission("tournament.manage")),
+):
+    """Normalize and store an avatar owned by a reusable player profile."""
+    from starlette.datastructures import UploadFile
+
+    profile = await player_profiles.get_player_profile(profile_id, principal.workspace_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Player profile not found")
+
+    form = await request.form()
+    file = form.get("avatar")
+    if not isinstance(file, UploadFile):
+        raise HTTPException(status_code=400, detail="No avatar file uploaded")
+
+    try:
+        from backend.core.image_store import store_avatar
+        from backend.core.image_utils import MAX_AVATAR_BYTES
+        content = await file.read(MAX_AVATAR_BYTES + 1)
+        avatar_url = await store_avatar(content, f"player-profile-{profile_id}", fallback_to_database=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    updated = await player_profiles.update_player_profile(
+        profile_id, principal.workspace_id, {"avatar_url": avatar_url}
+    )
+    from backend.core.database import record_media_asset, retire_media_assets_for_urls
+    await record_media_asset(
+        workspace_id=principal.workspace_id,
+        asset_type="player_profile_avatar",
+        owner_type="player_profile",
+        owner_id=profile_id,
+        storage_url=avatar_url,
+        storage_key=avatar_url.rsplit("/", 1)[-1] if avatar_url else None,
+        mime_type=file.content_type,
+        byte_size=len(content),
+    )
+    old_url = str(profile.get("avatar_url") or "")
+    if old_url and old_url != avatar_url:
+        await retire_media_assets_for_urls([old_url], principal.workspace_id)
+    return {"avatar_url": avatar_url, "profile": updated}
 
 
 @router.delete(
