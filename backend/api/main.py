@@ -28,6 +28,7 @@ from backend.api.routers.auth import router as auth_router
 from backend.api.routers.planned_streams import router as planned_streams_router
 from backend.api.routers.providers import router as providers_router
 from backend.api.routers.challonge_oauth import router as challonge_oauth_router
+from backend.api.routers.discord_oauth import router as discord_oauth_router
 from backend.api.routers.action_proposals import router as action_proposals_router
 from backend.api.routers.organizer_console import router as organizer_console_router
 from backend.api.routers.ai_service import router as ai_service_router
@@ -213,6 +214,7 @@ app.include_router(matches_router,     prefix="/api")
 app.include_router(planned_streams_router, prefix="/api")
 app.include_router(providers_router, prefix="/api/providers")
 app.include_router(challonge_oauth_router, prefix="/api/auth")
+app.include_router(discord_oauth_router, prefix="/api")
 app.include_router(action_proposals_router, prefix="/api")
 app.include_router(organizer_console_router, prefix="/api")
 app.include_router(ai_service_router, prefix="/api")

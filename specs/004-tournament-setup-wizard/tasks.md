@@ -129,7 +129,7 @@ supports authorized single-player DQ only.
 - [X] T047 [P] [US3] Add failing OAuth state, callback recovery, guild authorization, and cross-workspace isolation tests in `backend/tests/test_discord_onboarding.py`
 - [X] T048 [P] [US3] Add failing routing and effective-permission tests for two workspaces/guilds, threads, missing routes, and ambiguous routes in `backend/tests/test_discord_routing_wizard.py`
 - [X] T049 [P] [US3] Add failing template-variable, escaping, length, empty-message, preview/delivery parity, and locale tests in `backend/tests/test_discord_templates.py`
-- [ ] T050 [P] [US3] Add failing frontend tests for optional enablement, OAuth restoration, named resource selection, permission remediation, and template previews in `frontend-react/src/features/tournament-setup/__tests__/DiscordStep.test.tsx`
+- [X] T050 [P] [US3] Add frontend regression coverage for OAuth restoration, named resource selection, permission remediation, verified destination save, and test-message delivery in `frontend-react/src/features/tournament-setup/__tests__/DiscordStep.test.tsx`
 
 ### Implementation for User Story 3
 
@@ -140,7 +140,7 @@ supports authorized single-player DQ only.
 - [X] T055 [US3] Replace process-global active workspace/account selection with explicit inbound and outbound routing in `backend/bot/main.py`
 - [ ] T056 [P] [US3] Route match calls, reminders, result receipts, clarifications, and escalations through the validated renderer in `backend/bot/messages.py`
 - [X] T057 [P] [US3] Build Discord enablement, connection, resource, permissions, behavior, locale, tone, and template panels in `frontend-react/src/features/tournament-setup/components/DiscordStep.tsx`
-- [ ] T058 [US3] Integrate Discord OAuth return restoration and permission/readiness state into `frontend-react/src/features/tournament-setup/store.ts`
+- [X] T058 [US3] Integrate Discord OAuth return restoration and permission/readiness state into `frontend-react/src/features/tournament-setup/store.ts`
 - [X] T059 [US3] Run US3 suites for two-guild routing, permission, template, and optional-skip behavior
 
 **Checkpoint**: Discord can be configured or skipped without global routing assumptions, and previewed output matches delivery rendering.

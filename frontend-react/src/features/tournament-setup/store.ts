@@ -47,6 +47,29 @@ interface SetupStore {
   clearError: () => void;
 }
 
+export type DiscordOAuthReturn = {
+  outcome: 'authorized' | 'cancelled' | 'failed' | 'missing_context' | null;
+  accountId: string | null;
+  notice: string | null;
+};
+
+export function parseDiscordOAuthReturn(search: string): DiscordOAuthReturn {
+  const params = new URLSearchParams(search);
+  const raw = params.get('discord');
+  const outcome = raw === 'authorized' || raw === 'cancelled' || raw === 'failed' || raw === 'missing_context'
+    ? raw
+    : null;
+  const accountId = params.get('account_id');
+  const notice = outcome === 'authorized'
+    ? 'Discord server connected. Recheck permissions and choose the tournament channel.'
+    : outcome === 'cancelled'
+      ? 'Discord installation was cancelled.'
+      : outcome
+        ? 'Discord installation could not be completed. Check the application settings and try again.'
+        : null;
+  return { outcome, accountId, notice };
+}
+
 function updateDraftSection(draft: SetupDraft, section: DraftSection, value: Record<string, unknown>): SetupDraft {
   if (section === 'provider_scope') return { ...draft, provider_scope: value as SetupDraft['provider_scope'] };
   if (section === 'tournament_review') return { ...draft, tournament_review: value };

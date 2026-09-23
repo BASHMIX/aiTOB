@@ -60,6 +60,7 @@ SAFE_ACCOUNT_METADATA_KEYS = frozenset({
     "display_identity", "display_name", "granted_scopes", "scope_names",
     "token_expires_at", "expires_at", "guild_id", "guild_name", "guild_label",
     "capabilities", "capability_hints", "oauth_application_id",
+    "installation_verified", "installed_by_id", "permissions",
 })
 SECRET_METADATA_PARTS = frozenset({
     "token", "secret", "password", "credential", "authorization", "cookie",

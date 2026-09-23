@@ -20,6 +20,7 @@ export interface IntegrationAccount {
   configured: boolean;
   credential_types?: string[];
   destinations?: IntegrationDestination[];
+  metadata?: Record<string, unknown>;
 }
 
 export interface IntegrationDestination {
@@ -94,6 +95,7 @@ export interface DiscordSetupDraft {
   enabled?: boolean;
   guild_id?: string;
   guild_name?: string;
+  discord_account_id?: string;
   destination_external_id?: string;
   destination_name?: string;
   registration?: RegistrationConfig;

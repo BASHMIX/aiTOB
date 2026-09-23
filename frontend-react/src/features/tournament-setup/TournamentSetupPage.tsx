@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import axios from 'axios';
 import { AssistantStep } from './components/AssistantStep';
-import { PlayerRegistrationCard } from './components/PlayerRegistrationCard';
+import { DiscordStep } from './components/DiscordStep';
 import { ProviderStep, type ProviderStepValue } from './components/ProviderStep';
-import { useTournamentSetupStore } from './store';
-import type { AssistantSetupDraft, DiscordSetupDraft, RegistrationConfig, WizardStep } from './types';
+import { parseDiscordOAuthReturn, useTournamentSetupStore } from './store';
+import type { AssistantSetupDraft, DiscordSetupDraft, WizardStep } from './types';
 
 const WIZARD_STEPS: Array<{ id: WizardStep; label: string; description: string }> = [
   { id: 'provider', label: 'Provider & event', description: 'Connect an account and choose the exact event.' },
@@ -21,22 +21,6 @@ function resolveStep(step: string | undefined): WizardStep {
 
 const emptyProvider: ProviderStepValue = { provider_type: 'startgg', provider_account_id: '', locator: '', challonge_subdomain: '', resolution: null };
 
-function asRegistration(value: DiscordSetupDraft['registration']): RegistrationConfig {
-  return {
-    enabled: value?.enabled ?? false,
-    destination_external_id: value?.destination_external_id ?? '',
-    opens_at: value?.opens_at ?? '',
-    closes_at: value?.closes_at ?? '',
-    display_timezone: value?.display_timezone ?? 'UTC',
-    require_provider_registration: value?.require_provider_registration ?? true,
-    gamertag_verification_policy: value?.gamertag_verification_policy ?? 'match_or_set_nickname',
-    startgg_bio_verification_enabled: value?.startgg_bio_verification_enabled ?? false,
-    image_policy: value?.image_policy ?? 'optional',
-    verified_role_external_id: value?.verified_role_external_id ?? '',
-    announcement_policy: value?.announcement_policy,
-  };
-}
-
 export function TournamentSetupPage() {
   const { draftId, step } = useParams<{ draftId?: string; step?: string }>();
   const navigate = useNavigate();
@@ -48,6 +32,7 @@ export function TournamentSetupPage() {
   const [providerForm, setProviderForm] = useState<ProviderStepValue>(emptyProvider);
   const [assistantForm, setAssistantForm] = useState<AssistantSetupDraft>({});
   const [discordForm, setDiscordForm] = useState<DiscordSetupDraft>({});
+  const [discordConnectionNotice, setDiscordConnectionNotice] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState<'materialize' | null>(null);
   const [providerConnectionError, setProviderConnectionError] = useState<string | null>(null);
   const draft = useTournamentSetupStore((state) => state.draft);
@@ -74,6 +59,7 @@ export function TournamentSetupPage() {
     loadedFor.current = routeKey;
     void load(draftId).then((loadedDraft) => {
       const oauthParams = new URLSearchParams(window.location.search);
+      const discordOAuth = parseDiscordOAuthReturn(window.location.search);
       const oauthAccountId = oauthParams.get('account_id') || '';
       const oauthOutcome = oauthParams.get('provider_oauth');
       if (oauthOutcome === 'failed') setProviderConnectionError('Provider sign-in failed. Check the provider application settings and try again.');
@@ -86,6 +72,8 @@ export function TournamentSetupPage() {
       });
       setAssistantForm(loadedDraft.assistant_setup || {});
       setDiscordForm(loadedDraft.discord_setup || {});
+      setDiscordConnectionNotice(discordOAuth.notice);
+      if (discordOAuth.outcome) window.history.replaceState({}, '', window.location.pathname);
       if (!draftId) navigate(`/admin/tournaments/setup/${loadedDraft.id}/provider`, { replace: true });
     }).catch(() => undefined);
   }, [draftId, load, navigate]);
@@ -167,7 +155,7 @@ export function TournamentSetupPage() {
           <p className="mb-3 text-xs font-mono uppercase tracking-[0.18em] text-accentYellow">Step {currentIndex + 1} of {WIZARD_STEPS.length}</p>
           {currentStep === 'provider' && <ProviderStep value={providerForm} accounts={accounts} resolving={resolving} error={providerConnectionError || error} onChange={setProviderForm} onResolve={async ({ providerAccountId, locator, subdomain }) => { const updated = await resolveProvider(providerAccountId, locator, subdomain); if (updated) setProviderForm((current) => ({ ...current, resolution: updated.provider_scope || null })); }} onSelectScope={async (scopeId) => { const updated = await selectScope(scopeId); if (updated) setProviderForm((current) => ({ ...current, resolution: updated.provider_scope || current.resolution, selected_scope_id: scopeId })); }} onConnect={handleProviderConnect} />}
           {currentStep === 'tournament' && <div className="space-y-6"><div><h2 id="setup-step-title" className="text-2xl font-semibold">Review tournament</h2><p className="mt-2 text-sm text-textDim">Provider facts remain read-only. Add local branding and operating defaults as overrides.</p></div><div className="grid gap-4 sm:grid-cols-2"><Info label="Tournament" value={displayFact(draft.provider_scope?.tournament?.name) || 'Choose an Event in the provider step'} /><Info label="Game" value={displayFact(selectedScope?.game) || displayFact(draft.provider_scope?.tournament?.game) || '—'} /><Info label="Provider state" value={displayFact(selectedScope?.state) || displayFact(draft.provider_scope?.tournament?.state) || '—'} /><Info label="Exact scope" value={displayFact(selectedScope?.name) || selectedScope?.canonical_slug || selectedScope?.external_id || 'Not selected'} /></div><label className="block text-xs font-medium text-textDim" htmlFor="local-tournament-name">Local display name<input id="local-tournament-name" value={String(draft.tournament_review.display_name || displayFact(draft.provider_scope?.tournament?.name) || '')} onChange={(event) => setDraft({ ...draft, tournament_review: { ...draft.tournament_review, display_name: event.target.value } })} className="mt-1 w-full rounded-lg border border-white/10 bg-appDark px-3 py-2.5 text-sm text-white" /></label>{providerType === 'startgg' && <label className="block text-xs font-medium text-textDim" htmlFor="provider-dq-timer">Start.gg match DQ timer (minutes)<input id="provider-dq-timer" type="number" min={1} max={120} value={Math.max(1, Math.round(Number(draft.tournament_review.provider_dq_timer_seconds ?? 600) / 60))} onChange={(event) => setDraft({ ...draft, tournament_review: { ...draft.tournament_review, provider_dq_timer_seconds: Math.max(60, Math.min(7200, Number(event.target.value || 1) * 60)) } })} className="mt-1 w-full rounded-lg border border-white/10 bg-appDark px-3 py-2.5 text-sm text-white" /><span className="mt-1 block text-[11px] leading-relaxed text-textDim">Mirror the DQ Timer configured for this Start.gg round. The public API does not expose or change that setting.</span></label>}<p className="rounded-lg border border-amber-300/20 bg-amber-300/5 px-3 py-2 text-xs text-amber-100">Start-in-wave monitoring and remote provider start require a fresh, explicit provider scope before activation.</p></div>}
-          {currentStep === 'discord' && <div className="space-y-5"><div><h2 id="setup-step-title" className="text-2xl font-semibold">Discord and registration</h2><p className="mt-2 text-sm text-textDim">Discord is optional. If enabled, every route is scoped to this tournament and selected guild.</p></div><div className="grid gap-4 sm:grid-cols-2"><label className="text-xs font-medium text-textDim" htmlFor="discord-guild-id">Discord server ID<input id="discord-guild-id" value={discordForm.guild_id || ''} onChange={(event) => setDiscordForm({ ...discordForm, enabled: true, guild_id: event.target.value })} className="mt-1 w-full rounded-lg border border-white/10 bg-appDark px-3 py-2.5 text-sm text-white" placeholder="Guild ID" /></label><label className="text-xs font-medium text-textDim" htmlFor="discord-call-channel">Match call channel ID<input id="discord-call-channel" value={discordForm.destination_external_id || ''} onChange={(event) => setDiscordForm({ ...discordForm, enabled: true, destination_external_id: event.target.value })} className="mt-1 w-full rounded-lg border border-white/10 bg-appDark px-3 py-2.5 text-sm text-white" placeholder="Channel ID" /></label></div><PlayerRegistrationCard providerType={providerType} value={asRegistration(discordForm.registration)} onChange={(registration) => setDiscordForm({ ...discordForm, enabled: true, registration })} /></div>}
+          {currentStep === 'discord' && <DiscordStep draftId={draft.id} providerType={providerType} accounts={accounts} value={discordForm} onChange={setDiscordForm} connectionNotice={discordConnectionNotice} />}
           {currentStep === 'assistant' && <AssistantStep value={assistantForm} aiConfig={aiConfig} onChange={setAssistantForm} onSaveKey={async (provider, key) => { await saveAIKey(provider, key); }} onSaveSettings={async (settings) => { await saveAISettings(settings); }} onTest={async (provider, model) => { await testAI(provider, model); }} busy={saving} error={error} />}
           {currentStep === 'review' && <div className="space-y-6"><div><h2 id="setup-step-title" className="text-2xl font-semibold">Review and add to Hub</h2><p className="mt-2 text-sm text-textDim">Confirm the setup and add a ready tournament card to the Hub. Provider bracket start remains a separate action on that card.</p></div>{error && <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-300/30 bg-red-300/10 px-3 py-2 text-sm text-red-100"><span>{error}</span>{error.toLowerCase().includes('stale') && <button type="button" onClick={() => goTo('provider')} className="min-h-9 rounded-md border border-red-200/30 px-3 py-1 text-xs font-bold text-red-50 hover:bg-red-200/10">Recheck provider</button>}</div>}<div className="grid gap-3 sm:grid-cols-2"><ReviewCard title="Provider" status={selectedScope ? 'Ready' : 'Required'} detail={selectedScope ? `${providerType === 'startgg' ? 'Start.gg' : 'Challonge'} · ${displayFact(selectedScope.name) || selectedScope.external_id}` : 'Select an exact Event or bracket'} onEdit={() => goTo('provider')} /><ReviewCard title="Tournament" status={draft.tournament_review.display_name ? 'Ready' : 'Review'} detail={String(draft.tournament_review.display_name || displayFact(draft.provider_scope?.tournament?.name) || 'Local name is optional until review')} onEdit={() => goTo('tournament')} /><ReviewCard title="Discord registration" status={discordForm.registration?.enabled ? 'Enabled' : 'Skipped'} detail={discordForm.registration?.enabled ? 'Window and identity policy configured' : 'Optional'} onEdit={() => goTo('discord')} /><ReviewCard title="Workspace assistant" status={aiConfig?.connections?.[assistantForm.provider_type || aiConfig?.provider_type || 'gemini']?.configured ? 'Connected' : 'Optional'} detail={assistantForm.provider_type || aiConfig?.provider_type || 'gemini'} onEdit={() => goTo('assistant')} /></div><div className="flex flex-wrap gap-3"><button type="button" onClick={() => void saveSection('navigation', { action: 'save' }, 'review')} className="min-h-11 rounded-lg border border-white/15 px-4 py-2 text-xs font-bold text-white">Save draft</button><button type="button" disabled={!selectedScope || actionBusy !== null} onClick={() => void handleMaterialize()} className="min-h-11 rounded-lg bg-accentYellow px-4 py-2 text-xs font-bold text-black disabled:cursor-not-allowed disabled:opacity-40">{actionBusy === 'materialize' ? 'Adding…' : 'Add tournament to Hub'}</button><p className="self-center text-xs text-textDim">This does not start the provider bracket or dispatcher.</p></div></div>}
           {currentStep !== 'review' && <div className="mt-8 flex flex-wrap justify-between gap-3 border-t border-white/10 pt-5"><button type="button" onClick={() => goTo(WIZARD_STEPS[Math.max(0, currentIndex - 1)].id)} disabled={currentIndex === 0} className="min-h-11 rounded-lg border border-white/15 px-4 py-2 text-xs font-bold text-white disabled:opacity-30">Back</button><button type="button" onClick={() => goTo(WIZARD_STEPS[Math.min(WIZARD_STEPS.length - 1, currentIndex + 1)].id)} className="min-h-11 rounded-lg bg-accentYellow px-4 py-2 text-xs font-bold text-black">Continue</button></div>}
