@@ -252,3 +252,98 @@ async def test_scoped_override_catalog_validation(postgres_repository_database, 
         assert await database.get_player_override("entrant-cat-1", workspace_id) is None
         assert scoped["character_name"] == "Luke"
         assert scoped["character_image_url"] == "https://cdn.example/luke.png"
+
+
+@pytest.mark.asyncio
+async def test_linked_profile_character_uses_selected_event_game(postgres_repository_database, monkeypatch):
+    """A multi-game tournament must persist character data under the selected Event's game."""
+    workspace_id = "ws-multi-event-profile"
+    tournament_slug = "multi-game-tourney"
+    profile_id = "profile-multi-event"
+    raw_tourney = json.dumps({
+        "events": [
+            {
+                "id": "event-tekken",
+                "name": "Tekken Bracket",
+                "videogame": {"name": "TEKKEN 8"},
+                "entrants": {"nodes": []},
+            },
+            {
+                "id": "event-sf6",
+                "name": "Street Fighter 6 Bracket",
+                "videogame": {"name": "Street Fighter 6"},
+                "entrants": {"nodes": [{"id": "entrant-sf6", "name": "EventPlayer"}]},
+            },
+        ]
+    })
+
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute(
+            "INSERT INTO workspaces (id, slug, name) VALUES (?, ?, ?)",
+            (workspace_id, "multi-event-profile", "Multi Event Profile"),
+        )
+        await db.execute(
+            """INSERT INTO tournaments (
+                   slug, name, event_name, event_id, game, raw_data, provider_type, workspace_id
+               ) VALUES (?, ?, ?, ?, ?, ?, 'startgg', ?)""",
+            (
+                tournament_slug,
+                "Multi Game Cup",
+                "Tekken Bracket",
+                "event-tekken",
+                "TEKKEN 8",
+                raw_tourney,
+                workspace_id,
+            ),
+        )
+        await db.execute(
+            """INSERT INTO player_profiles (id, workspace_id, display_name, discord_id)
+               VALUES (?, ?, ?, ?)""",
+            (profile_id, workspace_id, "EventPlayer", "123456789012345678"),
+        )
+        await db.execute(
+            """INSERT INTO tournament_player_links (
+                   tournament_slug, entrant_id, player_profile_id, workspace_id
+               ) VALUES (?, ?, ?, ?)""",
+            (tournament_slug, "entrant-sf6", profile_id, workspace_id),
+        )
+        await db.commit()
+
+    await database.set_tournament_game_metadata(
+        slug=tournament_slug,
+        event_id="event-sf6",
+        metadata={
+            "event_id": "event-sf6",
+            "game_name": "Street Fighter 6",
+            "characters": [
+                {"id": "sf6-luke", "name": "Luke", "image_url": "https://cdn.example/luke.png"},
+            ],
+        },
+        workspace_id=workspace_id,
+    )
+
+    principal = _make_principal(workspace_id)
+    monkeypatch.setattr("backend.api.auth.get_session_principal", AsyncMock(return_value=principal))
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        client.cookies.set("aitob_session", "valid-token")
+        response = await client.patch("/api/players/overrides/entrant-sf6", json={
+            "character_id": "sf6-luke",
+            "character": "Luke",
+            "tournament_slug": tournament_slug,
+            "event_id": "event-sf6",
+        })
+
+    assert response.status_code == 200, response.text
+    sf6_profile = await player_profiles.get_player_game_profile(
+        workspace_id, profile_id, "Street Fighter 6"
+    )
+    tekken_profile = await player_profiles.get_player_game_profile(
+        workspace_id, profile_id, "TEKKEN 8"
+    )
+    assert sf6_profile is not None
+    assert tekken_profile is None
+    defaults = await player_profiles.get_player_character_defaults(workspace_id, sf6_profile["id"])
+    assert [(item["character_id"], item["character_name"]) for item in defaults] == [
+        ("sf6-luke", "Luke")
+    ]

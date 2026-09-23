@@ -82,13 +82,17 @@ async def test_deterministic_backfill_and_ambiguous_legacy_review(postgres_repos
         workspace_id=ws,
     )
 
-    # 2. Link entrant-det-1 to this player
-    await database.link_tournament_entrant(
-        tournament_slug="tourney-mig-1",
-        entrant_id="entrant-det-1",
-        discord_id="discord-mig-1",
-        workspace_id=ws,
-    )
+    # 2. Seed the pre-Player-Archive link shape directly. The current link API
+    # creates/reuses a profile immediately, which would no longer exercise this
+    # legacy backfill path.
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute(
+            """INSERT INTO tournament_player_links (
+                   tournament_slug, entrant_id, player_discord_id, workspace_id
+               ) VALUES (?, ?, ?, ?)""",
+            ("tourney-mig-1", "entrant-det-1", "discord-mig-1", ws),
+        )
+        await db.commit()
 
     # 3. Save deterministically attributable legacy override
     await database.save_player_override(

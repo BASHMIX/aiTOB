@@ -107,8 +107,8 @@ async def _validate_tournament_override_scope(
     event_id: str,
     provider: str,
     workspace_id: str,
-) -> None:
-    """Ensure an entrant override is attached to a real event in this workspace."""
+) -> str:
+    """Validate the event scope and return that Event's canonical game name."""
     tournament = await get_tournament(tournament_slug, workspace_id)
     if not tournament:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tournament not found.")
@@ -126,6 +126,19 @@ async def _validate_tournament_override_scope(
     entrant_nodes = ((selected_event.get("entrants") or {}).get("nodes") or [])
     if entrant_id and entrant_nodes and not any(str(entrant.get("id")) == str(entrant_id) for entrant in entrant_nodes):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Player does not belong to the selected Event.")
+    videogame = selected_event.get("videogame") if isinstance(selected_event.get("videogame"), dict) else {}
+    event_game = str(
+        videogame.get("name")
+        or videogame.get("displayName")
+        or selected_event.get("game")
+        or ""
+    ).strip()
+    if not event_game:
+        metadata = await get_tournament_game_metadata(tournament_slug, event_id, workspace_id)
+        event_game = str((metadata or {}).get("game_name") or "").strip()
+    if not event_game and str(tournament.get("event_id") or "") == str(event_id):
+        event_game = str(tournament.get("game") or "").strip()
+    return event_game
 
 
 def _scoped_override_response(override: dict[str, Any]) -> dict[str, Any]:
@@ -335,7 +348,7 @@ async def api_patch_override(id: str, request: Request, principal: SessionPrinci
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tournament and Event are required together.")
     try:
         if t_slug:
-            await _validate_tournament_override_scope(
+            event_game = await _validate_tournament_override_scope(
                 entrant_id=id, tournament_slug=t_slug, event_id=ev_id,
                 provider=provider, workspace_id=principal.workspace_id,
             )
@@ -345,13 +358,12 @@ async def api_patch_override(id: str, request: Request, principal: SessionPrinci
                 tournament_slug=t_slug, event_id=ev_id, entrant_id=id,
                 data=validated, updated_by=principal.user_id,
             )
-            tournament = await get_tournament(t_slug, principal.workspace_id)
             await sync_entrant_presentation_to_profile(
                 workspace_id=principal.workspace_id,
                 tournament_slug=t_slug,
                 entrant_id=id,
                 data=validated,
-                game_id=str((tournament or {}).get("game") or ""),
+                game_id=event_game,
             )
         else:
             await save_player_override(id, validated, principal.workspace_id)
@@ -446,7 +458,7 @@ async def api_upload_avatar(id: str, request: Request, principal: SessionPrincip
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     if tournament_slug:
-        await _validate_tournament_override_scope(
+        event_game = await _validate_tournament_override_scope(
             entrant_id=id, tournament_slug=tournament_slug, event_id=event_id,
             provider=provider, workspace_id=principal.workspace_id,
         )
@@ -459,13 +471,12 @@ async def api_upload_avatar(id: str, request: Request, principal: SessionPrincip
             tournament_slug=tournament_slug, event_id=event_id, entrant_id=id,
             data={"avatar_url": avatar_url}, updated_by=principal.user_id,
         )
-        tournament = await get_tournament(tournament_slug, principal.workspace_id)
         await sync_entrant_presentation_to_profile(
             workspace_id=principal.workspace_id,
             tournament_slug=tournament_slug,
             entrant_id=id,
             data={"avatar_url": avatar_url},
-            game_id=str((tournament or {}).get("game") or ""),
+            game_id=event_game,
         )
         from backend.core.database import record_media_asset
         await record_media_asset(
