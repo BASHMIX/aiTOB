@@ -24,7 +24,9 @@ def test_prepare_removes_legacy_values_and_generates_distinct_keys(tmp_path):
             "POSTGRES_PASSWORD=not-a-placeholder",
             "DISCORD_BOT_TOKEN=bot-token",
             "DISCORD_CLIENT_ID=client-id",
+            "DISCORD_CLIENT_ID=",
             "DISCORD_CLIENT_SECRET=client-secret",
+            "DISCORD_CLIENT_SECRET=",
         ]) + "\n",
         encoding="utf-8",
     )
@@ -37,6 +39,10 @@ def test_prepare_removes_legacy_values_and_generates_distinct_keys(tmp_path):
     assert "DB_PATH=" not in text and "AITOB_DISCORD_WORKSPACE_ID=" not in text
     assert values["APP_PUBLIC_URL"] == values["FRONTEND_BASE_URL"] == "https://aitob.example"
     assert values["DISCORD_OAUTH_REDIRECT_URI"].endswith("/api/integrations/discord/callback")
+    assert values["DISCORD_CLIENT_ID"] == "client-id"
+    assert values["DISCORD_CLIENT_SECRET"] == "client-secret"
+    assert text.count("DISCORD_CLIENT_ID=") == 1
+    assert text.count("DISCORD_CLIENT_SECRET=") == 1
     assert values["AITOB_SESSION_COOKIE_SECURE"] == "true"
     assert len({values[key] for key in module.GENERATED_KEYS}) == len(module.GENERATED_KEYS)
     assert module.validate(env_file) == []

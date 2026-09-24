@@ -37,6 +37,14 @@ REQUIRED_KEYS = (
     "FRONTEND_BASE_URL",
     *GENERATED_KEYS,
 )
+PRESERVE_NONEMPTY_KEYS = set(GENERATED_KEYS) | {
+    "DISCORD_BOT_TOKEN",
+    "DISCORD_CLIENT_ID",
+    "DISCORD_CLIENT_SECRET",
+    "DISCORD_OAUTH_REDIRECT_URI",
+    "APP_PUBLIC_URL",
+    "FRONTEND_BASE_URL",
+}
 
 
 def _assignment(line: str) -> tuple[str, str] | None:
@@ -68,6 +76,16 @@ def prepare(path: Path) -> dict[str, list[str]]:
         if item:
             last_index[item[0]] = index
             values[item[0]] = item[1]
+    # Operators commonly fill the documented entry while an older blank
+    # placeholder remains later in the file. Never let that blank duplicate
+    # erase a real secret or public OAuth value during normalization.
+    for key in PRESERVE_NONEMPTY_KEYS:
+        for index in range(len(original) - 1, -1, -1):
+            item = _assignment(original[index])
+            if item and item[0] == key and not _is_placeholder(item[1]):
+                last_index[key] = index
+                values[key] = item[1]
+                break
 
     removed = sorted(key for key in RETIRED_KEYS if key in values)
     generated: list[str] = []
