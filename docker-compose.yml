@@ -70,6 +70,9 @@ services:
       - .env.production
     environment:
       DATABASE_URL: postgresql://aitob:${POSTGRES_PASSWORD}@postgres:5432/${AITOB_POSTGRES_DB:-aitob}
+      # Bot-to-Hub traffic stays on the private Compose network. Public URLs
+      # are for browser/OAuth callbacks and may not be live in local staging.
+      API_BASE_URL: http://api:8000
       AITOB_INTEGRATION_MASTER_KEY: ${AITOB_INTEGRATION_MASTER_KEY:?Set AITOB_INTEGRATION_MASTER_KEY}
       AITOB_AI_SERVICE_MASTER_KEY: ${AITOB_AI_SERVICE_MASTER_KEY:?Set AITOB_AI_SERVICE_MASTER_KEY}
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:?Set the platform Discord bot token}

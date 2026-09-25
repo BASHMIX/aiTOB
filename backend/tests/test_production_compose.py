@@ -8,5 +8,6 @@ def test_compose_keeps_frontend_dist_image_owned_and_persists_only_avatars():
     assert "static_data:/app/backend/api/static" not in compose
     assert "overlay_configs:" not in compose
     assert "AITOB_POSTGRES_DB" in compose
+    assert "API_BASE_URL: http://api:8000" in compose
     assert "urllib.request.urlopen('http://localhost:8000/readiness'" in compose
     assert '["CMD", "curl"' not in compose
