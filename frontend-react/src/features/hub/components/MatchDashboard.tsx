@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useHubStore } from '@/store/useHubStore';
+import { sessionCan } from '@/hooks/usePermission';
 import { useHubSocket } from '@/hooks/useHubSocket';
 import axios from 'axios';
 import { MatchesList } from './MatchesList';
@@ -56,7 +57,8 @@ function sortTBDLast(rows: MatchData[]): MatchData[] {
 
 // ── Main Component ─────────────────────────────────────────────────────
 export function MatchDashboard() {
-  const { matches, currentSlug, currentEventId, setCurrentEventId, events, tournaments, stations, setMatches, plannedStreamIds, setPlannedStreamIds, streamGate, setStreamGate } = useHubStore();
+  const { matches, currentSlug, currentEventId, setCurrentEventId, events, tournaments, stations, setMatches, plannedStreamIds, setPlannedStreamIds, streamGate, setStreamGate, session } = useHubStore();
+  const can = useCallback((permission: string) => sessionCan(session, permission), [session]);
   const [sets, setSets] = useState<any[]>([]);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
 
@@ -575,6 +577,7 @@ export function MatchDashboard() {
           onToggleStream={handleToggleStream}
           stations={stations ?? []}
           streamUnlinked={!!streamGate && !streamGate.ok}
+          can={can}
         />
       </div>
 

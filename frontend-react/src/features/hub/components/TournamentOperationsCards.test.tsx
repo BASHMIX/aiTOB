@@ -33,8 +33,18 @@ describe('TournamentOperationsCards edit action', () => {
       currentEventId: null,
       events: [],
       matches: [],
+      session: { user_id: 'u', email: 'u@example.com', display_name: 'Owner', workspace_id: 'w', workspace_name: 'W', workspace_slug: 'w', role: 'owner', permissions: ['tournament.manage'] },
     }));
     mockedReopen.mockResolvedValue({ id: 'draft-123' } as never);
+  });
+
+  it('hides tournament mutations from viewers', () => {
+    act(() => useHubStore.setState({
+      session: { user_id: 'v', email: 'v@example.com', display_name: 'Viewer', workspace_id: 'w', workspace_name: 'W', workspace_slug: 'w', role: 'viewer', permissions: ['workspace.read'] },
+    }));
+    render(<TournamentOperationsCards />);
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+    expect(screen.queryByTitle('Start provider bracket')).not.toBeInTheDocument();
   });
 
   it('reopens the linked draft and navigates without triggering card selection', async () => {

@@ -9,18 +9,21 @@ import { MatchOperationsSettings } from './MatchSettingsModal';
 import { ActionProposalReview } from './ActionProposalReview';
 import { AISettings } from './AISettings';
 import { AccountSettings } from './AccountSettings';
+import { RolesPermissions } from './RolesPermissions';
+import { usePermission } from '@/hooks/usePermission';
 
-type SettingsSection = 'overview' | 'account' | 'connections' | 'tournament' | 'match_operations' | 'bot' | 'ai_automation' | 'system';
+type SettingsSection = 'overview' | 'account' | 'roles' | 'connections' | 'tournament' | 'match_operations' | 'bot' | 'ai_automation' | 'system';
 
-const sections: Array<{ id: SettingsSection; icon: string; label: string; hint: string }> = [
+const sections: Array<{ id: SettingsSection; icon: string; label: string; hint: string; permission?: string }> = [
   { id: 'overview', icon: '◉', label: 'Overview', hint: 'Health & attention' },
   { id: 'account', icon: '●', label: 'Account', hint: 'Workspace, security & members' },
-  { id: 'connections', icon: '⌁', label: 'Connections', hint: 'Accounts & destinations' },
-  { id: 'tournament', icon: '⌘', label: 'Tournament', hint: 'Provider, sync & policy' },
-  { id: 'match_operations', icon: '◈', label: 'Match operations', hint: 'Check-in, dispatch & timing' },
-  { id: 'bot', icon: '✦', label: 'Bot experience', hint: 'Messages & instructions' },
-  { id: 'ai_automation', icon: '◌', label: 'AI & Automation', hint: 'Assistant provider & safety' },
-  { id: 'system', icon: '⚙', label: 'System', hint: 'Service configuration' },
+  { id: 'roles', icon: '♙', label: 'Roles & Permissions', hint: 'Workspace access matrix' },
+  { id: 'connections', icon: '⌁', label: 'Connections', hint: 'Accounts & destinations', permission: 'integrations.manage' },
+  { id: 'tournament', icon: '⌘', label: 'Tournament', hint: 'Provider, sync & policy', permission: 'tournament.manage' },
+  { id: 'match_operations', icon: '◈', label: 'Match operations', hint: 'Check-in, dispatch & timing', permission: 'tournament.manage' },
+  { id: 'bot', icon: '✦', label: 'Bot experience', hint: 'Messages & instructions', permission: 'settings.manage' },
+  { id: 'ai_automation', icon: '◌', label: 'AI & Automation', hint: 'Assistant provider & safety', permission: 'assistant.use' },
+  { id: 'system', icon: '⚙', label: 'System', hint: 'Service configuration', permission: 'settings.manage' },
 ];
 
 function HealthCard({ label, detail, healthy }: { label: string; detail: string; healthy: boolean }) {
@@ -131,7 +134,18 @@ function TournamentWorkflowSettings() {
 
 export function SettingsWorkspace() {
   const [section, setSection] = useState<SettingsSection>('overview');
-  const selected = sections.find((item) => item.id === section) || sections[0];
+  const canIntegrations = usePermission('integrations.manage');
+  const canTournament = usePermission('tournament.manage');
+  const canSettings = usePermission('settings.manage');
+  const canAssistant = usePermission('assistant.use');
+  const allowed = sections.filter((item) => !item.permission || ({
+    'integrations.manage': canIntegrations,
+    'tournament.manage': canTournament,
+    'settings.manage': canSettings,
+    'assistant.use': canAssistant,
+  } as Record<string, boolean>)[item.permission]);
+  const selected = allowed.find((item) => item.id === section) || allowed[0];
+  const activeSection = selected.id;
 
   return (
     <section className="min-h-0 animate-fadeIn lg:grid lg:grid-cols-[220px_minmax(0,1fr)] lg:gap-5">
@@ -144,16 +158,16 @@ export function SettingsWorkspace() {
           </div>
         </div>
         <nav className="flex gap-1 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible" aria-label="Settings sections">
-          {sections.map((item) => (
+          {allowed.map((item) => (
             <button
               key={item.id}
               type="button"
               onClick={() => setSection(item.id)}
-              className={`min-w-max rounded-lg px-3 py-2.5 text-left transition-colors lg:min-w-0 ${section === item.id ? 'bg-accentYellow text-black shadow-sm' : 'text-textDim hover:bg-white/5 hover:text-white'}`}
+              className={`min-w-max rounded-lg px-3 py-2.5 text-left transition-colors lg:min-w-0 ${activeSection === item.id ? 'bg-accentYellow text-black shadow-sm' : 'text-textDim hover:bg-white/5 hover:text-white'}`}
             >
               <span className="mr-2 inline-block w-4 text-center">{item.icon}</span>
               <span className="text-xs font-bold">{item.label}</span>
-              <span className={`mt-0.5 block pl-6 text-[10px] ${section === item.id ? 'text-black/65' : 'text-textDim/75'}`}>{item.hint}</span>
+              <span className={`mt-0.5 block pl-6 text-[10px] ${activeSection === item.id ? 'text-black/65' : 'text-textDim/75'}`}>{item.hint}</span>
             </button>
           ))}
         </nav>
@@ -165,19 +179,20 @@ export function SettingsWorkspace() {
           <h1 className="mt-1 text-xl font-bold text-white">{selected.label}</h1>
           <p className="mt-1 text-xs text-textDim">{selected.hint}</p>
         </header>
-        {section === 'overview' && <SettingsOverview />}
-        {section === 'account' && <AccountSettings />}
-        {section === 'connections' && (
+        {activeSection === 'overview' && <SettingsOverview />}
+        {activeSection === 'account' && <AccountSettings />}
+        {activeSection === 'roles' && <RolesPermissions />}
+        {activeSection === 'connections' && (
           <div className="space-y-5">
             <IntegrationAccounts />
             <GeneralSettings section="connections" embedded />
           </div>
         )}
-        {section === 'tournament' && <TournamentSettings />}
-        {section === 'match_operations' && <TournamentWorkflowSettings />}
-        {section === 'bot' && <GeneralSettings section="bot" embedded />}
-        {section === 'ai_automation' && <AISettings />}
-        {section === 'system' && <GeneralSettings section="system" embedded />}
+        {activeSection === 'tournament' && <TournamentSettings />}
+        {activeSection === 'match_operations' && <TournamentWorkflowSettings />}
+        {activeSection === 'bot' && <GeneralSettings section="bot" embedded />}
+        {activeSection === 'ai_automation' && <AISettings />}
+        {activeSection === 'system' && <GeneralSettings section="system" embedded />}
       </div>
     </section>
   );

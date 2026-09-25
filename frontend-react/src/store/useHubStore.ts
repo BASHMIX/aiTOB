@@ -170,7 +170,7 @@ interface HubState {
   plannedStreamIds: string[];
   streamGate: StreamGate | null;
   providerProfile: ProviderCapabilityProfile | null;
-  session: { user_id: string; email: string; display_name: string; workspace_id: string; workspace_name: string; workspace_slug: string; role: string } | null;
+  session: { user_id: string; email: string; display_name: string; workspace_id: string; workspace_name: string; workspace_slug: string; role: string; permissions?: string[] } | null;
   setTournaments: (tournaments: Tournament[]) => void;
   setCurrentSlug: (slug: string | null) => void;
   removePinnedTournament: (slug: string) => void;

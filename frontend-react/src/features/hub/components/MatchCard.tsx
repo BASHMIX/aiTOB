@@ -229,6 +229,7 @@ interface MatchCardProps {
   // stream. Warn-but-allow: we badge the button, we do NOT disable it (local
   // overlays/routing/green-room still work; only the public 📺 won't render).
   streamUnlinked?: boolean;
+  can?: (permission: string) => boolean;
 }
 
 // Compact amber chip shown beside the "For Stream" button when the start.gg
@@ -333,7 +334,7 @@ function StationMenu({ match, stations, onAction, onOpenChange }: { match: Match
   );
 }
 
-export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onToggleStream, stations, streamUnlinked }: MatchCardProps) {
+export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onToggleStream, stations, streamUnlinked, can = () => true }: MatchCardProps) {
   const meta = STATUS_META[match.status];
   const showTimer = match.status === "live" || match.status === "called";
   // Legacy Start.gg rows do not carry an action projection. New provider rows
@@ -426,7 +427,7 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
 
   return (
     <div
-      draggable={!isDropdownOpen}
+      draggable={can('station.manage') && !isDropdownOpen}
       onDragStart={(e) => {
         const setId = String(match.raw?.set_id || match.raw?.id || match.id || "");
         e.dataTransfer.setData("text/plain", setId);
@@ -440,7 +441,7 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
         }));
         e.dataTransfer.effectAllowed = "copyMove";
       }}
-      title="Drag and drop onto a station card to assign or queue"
+      title={can('station.manage') ? "Drag and drop onto a station card to assign or queue" : undefined}
       className={`flex flex-col rounded-lg border transition-all duration-200 cursor-grab active:cursor-grabbing
       ${isDropdownOpen 
         ? "z-50 relative shadow-[0_0_20px_rgba(255,200,0,0.15)] border-accentYellow/40 bg-black/40 scale-[1.01] overflow-visible" 
@@ -452,7 +453,7 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
       <div className="flex items-stretch w-full">
         <PlayersBlock 
           players={match.players}
-          onMarkPresent={match.status === 'called' && match.providerType === 'startgg'
+          onMarkPresent={can('match.ready') && match.status === 'called' && match.providerType === 'startgg'
             ? (player) => onAction('attendancePresent', match, player)
             : undefined}
         />
@@ -551,7 +552,7 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
                 Awaiting bracket
               </span>
               {streamUnlinked && !match.isStreamMatch && <StreamUnlinkedBadge />}
-              <button
+              {can('stream.manage') && <button
                 type="button"
                 onClick={() => onToggleStream(rawSetId, !!match.isStreamMatch)}
                 aria-label="Plan for stream"
@@ -563,7 +564,7 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
                 }`}
               >
                 <IconPlay />
-              </button>
+              </button>}
             </>
           ) : (
             <>
@@ -571,15 +572,15 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
                 <>
                   {!match.isLocal && (
                     <>
-                      <ActionButton tone="activate" label="Call Match" icon={<IconCall />} onClick={() => onAction("callMatch", match)} />
-                      <ActionButton tone="neutral" label="Activate Match" icon={<IconActivate />} onClick={() => onAction("activate", match)} />
+                      {can('match.call') && <ActionButton tone="activate" label="Call Match" icon={<IconCall />} onClick={() => onAction("callMatch", match)} />}
+                      {can('match.operate') && <ActionButton tone="neutral" label="Activate Match" icon={<IconActivate />} onClick={() => onAction("activate", match)} />}
                     </>
                   )}
                   {match.isLocal && (
-                    <ActionButton tone="activate" label="Call Match" icon={<IconCall />} onClick={() => onAction("callMatch", match)} />
+                    can('match.call') && <ActionButton tone="activate" label="Call Match" icon={<IconCall />} onClick={() => onAction("callMatch", match)} />
                   )}
                   {streamUnlinked && !match.isStreamMatch && <StreamUnlinkedBadge />}
-                  <button
+                  {can('stream.manage') && <button
                     type="button"
                     onClick={() => onToggleStream(rawSetId, !!match.isStreamMatch)}
                     aria-label="Toggle Stream Q"
@@ -591,19 +592,19 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
                     }`}
                   >
                     <IconPlay />
-                  </button>
+                  </button>}
                 </>
               )}
 
-              {match.isLocal && match.status !== "done" && match.status !== "dq" && (
+              {can('station.manage') && match.isLocal && match.status !== "done" && match.status !== "dq" && (
                 <StationMenu match={match} stations={stations || []} onAction={onAction} onOpenChange={setStationMenuOpen} />
               )}
 
-              {match.isLocal && match.status === "live" && actionEnabled('report_score') && (
+              {can('result.report') && match.isLocal && match.status === "live" && actionEnabled('report_score') && (
                 <ActionButton tone="send" label="Send Score" icon={<IconSend />} onClick={() => onAction("sendScore", match)} />
               )}
 
-              {match.isLocal && (match.status === "waiting" || match.status === "called" || match.status === "live") && actionEnabled('dq') && (
+              {can('dq.manual') && match.isLocal && (match.status === "waiting" || match.status === "called" || match.status === "live") && actionEnabled('dq') && (
                 <DQPlayerMenu
                   players={match.players}
                   onSelect={(player) => onAction("dq", match, player)}
@@ -612,7 +613,7 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
                 />
               )}
 
-              {match.isLocal && (
+              {can('match.operate') && match.isLocal && (
                 <>
                   {actionEnabled('reset') && <ActionButton tone="reset" label="Reset Match" icon={<IconReset />} onClick={() => onAction("resetMatch", match)} />}
                   <ActionButton tone="dq" label="Remove Match" icon={<IconRemove />} onClick={() => onAction("removeMatch", match)} />
@@ -620,7 +621,7 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
               )}
 
               {/* Force to In-Progress button for called matches */}
-              {match.isLocal && match.status === "called" && (
+              {can('match.start') && match.isLocal && match.status === "called" && (
                 <ActionButton tone="send" label="Force to In-Progress" icon={<IconPlay />} onClick={() => onAction("forceToInProgress", match)} />
               )}
             </>

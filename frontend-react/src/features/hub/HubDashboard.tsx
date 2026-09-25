@@ -14,10 +14,13 @@ import { ConnectionLines } from './components/ConnectionLines';
 import { useHubStore } from '@/store/useHubStore';
 import { useHubSocket } from '@/hooks/useHubSocket';
 import axios from 'axios';
+import { usePermission } from '@/hooks/usePermission';
 
 const PREFERRED_SLUG = 'FNC1stStartGG';
 
 export function HubDashboard() {
+  const canManageWorkspace = usePermission('workspace.manage');
+  const canManageTournaments = usePermission('tournament.manage');
   const {
     setTournaments,
     status,
@@ -120,7 +123,7 @@ export function HubDashboard() {
             refreshSignal={notificationRefreshSignal}
             onOpenNotification={(target) => setConsoleOpenRequest({ ...target, requestId: `${Date.now()}-${target.focusKey || target.tab}` })}
           />
-          <DispatcherMasterSwitch />
+          {canManageWorkspace && <DispatcherMasterSwitch />}
         </div>
       </header>
 
@@ -212,12 +215,14 @@ export function HubDashboard() {
                     <p className="text-sm font-semibold text-white">Tournament registration</p>
                     <p className="mt-1 text-xs text-textDim">Create a tournament with the guided provider, Discord, registration, and AI setup.</p>
                   </div>
-                  <a
-                    href="/admin/tournaments/new"
-                    className="inline-flex min-h-11 items-center rounded-lg bg-accentYellow px-4 py-2.5 text-xs font-bold text-black transition hover:brightness-110"
-                  >
-                    + NEW TOURNAMENT WIZARD
-                  </a>
+                  {canManageTournaments && (
+                    <a
+                      href="/admin/tournaments/new"
+                      className="inline-flex min-h-11 items-center rounded-lg bg-accentYellow px-4 py-2.5 text-xs font-bold text-black transition hover:brightness-110"
+                    >
+                      + NEW TOURNAMENT WIZARD
+                    </a>
+                  )}
                 </div>
                 <TournamentSettings />
               </div>

@@ -5,7 +5,7 @@ import { StationMiniQueue } from './StationMiniQueue';
 import { useHubStore } from '@/store/useHubStore';
 import { tournamentAccent, withAccentAlpha } from './tournamentAccent';
 
-export function StationCard({ station, onReload }: { station: any, onReload: () => void }) {
+export function StationCard({ station, onReload, canManageStations = true, canManageOverlays = true }: { station: any, onReload: () => void, canManageStations?: boolean, canManageOverlays?: boolean }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
@@ -183,6 +183,7 @@ export function StationCard({ station, onReload }: { station: any, onReload: () 
       id={`station-${station.id}`}
       style={accent ? { borderColor: withAccentAlpha(accent, 0.55) } : undefined}
       onDragOver={(e) => {
+        if (!canManageStations) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = 'copy';
         if (!isDraggingOver) setIsDraggingOver(true);
@@ -192,7 +193,7 @@ export function StationCard({ station, onReload }: { station: any, onReload: () 
           setIsDraggingOver(false);
         }
       }}
-      onDrop={handleDrop}
+      onDrop={canManageStations ? handleDrop : undefined}
       className={`border rounded-lg p-3 bg-appDark transition-all duration-200 ${
         isDraggingOver
           ? 'border-[#00ffcc] shadow-[0_0_15px_rgba(0,255,204,0.3)] bg-[#00ffcc]/5 scale-[1.01]'
@@ -210,14 +211,15 @@ export function StationCard({ station, onReload }: { station: any, onReload: () 
           <h3 
             style={accent ? { color: accent } : undefined}
             className="font-bold text-white focus:outline-none focus:border-b" 
-            contentEditable 
+            contentEditable={canManageStations}
             suppressContentEditableWarning
             onBlur={(e) => renameStation(e.currentTarget.textContent || '')}
           >
             {station.name}
           </h3>
         </div>
-        <div className="flex gap-2 text-textDim">
+        {(canManageStations || canManageOverlays) && <div className="flex gap-2 text-textDim">
+          {canManageStations && (
           <button
             onClick={() => setSettingsOpen(true)}
             title="Station settings (stream, bot, overlay)"
@@ -228,9 +230,10 @@ export function StationCard({ station, onReload }: { station: any, onReload: () 
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
             </svg>
           </button>
-          <button onClick={() => window.open(`/admin/editor?station_id=${station.id}`)} className="hover:text-white">Edit</button>
-          <button onClick={removeStation} className="hover:text-statusRed">🗑</button>
-        </div>
+          )}
+          {canManageOverlays && <button onClick={() => window.open(`/admin/editor?station_id=${station.id}`)} className="hover:text-white">Edit</button>}
+          {canManageStations && <button onClick={removeStation} className="hover:text-statusRed">🗑</button>}
+        </div>}
       </div>
       <div className="text-xs text-center text-textDim mb-2">Stream Overlays</div>
       <ul className="flex flex-col gap-2 text-sm text-white">
@@ -238,7 +241,8 @@ export function StationCard({ station, onReload }: { station: any, onReload: () 
           const isActive = station.active_overlay === o.overlay_name;
           return (
             <li key={o.overlay_name} className="flex justify-between items-center group border-t border-white/5 pt-2">
-              <button 
+              <button
+                disabled={!canManageOverlays}
                 onClick={() => activateOverlay(o.overlay_name)}
                 className={`font-semibold transition-colors flex items-center gap-1.5 ${
                   isActive ? 'text-[#00ffcc] hover:text-[#00d4aa]' : 'text-textDim hover:text-white'
@@ -248,7 +252,7 @@ export function StationCard({ station, onReload }: { station: any, onReload: () 
                 <span>{isActive ? '🟢' : '⚫'}</span>
                 <span>{o.overlay_name}</span>
               </button>
-              <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+              {canManageOverlays && <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button onClick={() => removeOverlay(o.overlay_name)} className="text-statusRed hover:text-red-400">✖</button>
                 <button
                   onClick={() => copyLink(o.overlay_name)}
@@ -256,12 +260,12 @@ export function StationCard({ station, onReload }: { station: any, onReload: () 
                   title="Copy a link fixed to this overlay slide"
                 >📋</button>
                 <button onClick={() => window.open(`/admin/editor?station_id=${station.id}`)} className="text-textDim hover:text-white">✏️</button>
-              </div>
+              </div>}
             </li>
           );
         })}
       </ul>
-      <div className="flex gap-2 mt-3">
+      {canManageOverlays && <div className="flex gap-2 mt-3">
         <button
           onClick={addOverlay}
           className="flex-1 py-1.5 text-xs text-textDim hover:text-white border border-dashed border-white/20 rounded flex justify-center items-center gap-1 transition-colors"
@@ -275,14 +279,14 @@ export function StationCard({ station, onReload }: { station: any, onReload: () 
         >
           <span>📂 Load</span>
         </button>
-      </div>
+      </div>}
 
       {/* Station Mini-Queue */}
-      <StationMiniQueue
+      {canManageStations && <StationMiniQueue
         stationId={station.id}
         onReload={onReload}
         accent={accent}
-      />
+      />}
 
       {settingsOpen && (
         <StationSettingsModal

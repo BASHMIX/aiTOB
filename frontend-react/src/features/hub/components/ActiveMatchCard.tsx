@@ -3,6 +3,7 @@ import { useHubStore } from '@/store/useHubStore';
 import axios from 'axios';
 import { DQPlayerMenu } from './DQPlayerMenu';
 import { tournamentAccent, withAccentAlpha } from './tournamentAccent';
+import { usePermission } from '@/hooks/usePermission';
 
 // ── Icons ──────────────────────────────────────────────────────────────
 const IconBot = () => (
@@ -29,6 +30,10 @@ const IconDQ = () => (
 );
 
 export function ActiveMatchCard({ match }: { match: any }) {
+  const canOperate = usePermission('match.operate');
+  const canManageStations = usePermission('station.manage');
+  const canReportResult = usePermission('result.report');
+  const canManualDq = usePermission('dq.manual');
   const { stations, matches, setMatches, tournaments, currentSlug } = useHubStore();
   const [dqOpen, setDqOpen] = useState(false);
   const [sending, setSending] = useState(false);
@@ -65,8 +70,8 @@ export function ActiveMatchCard({ match }: { match: any }) {
     const projected = match.actions?.[action] ?? dashboardMatch?.actions?.[action];
     return projected ? projected.enabled : providerType !== 'challonge';
   };
-  const canSendScore = actionEnabled('report_score');
-  const canDq = actionEnabled('dq');
+  const canSendScore = canReportResult && actionEnabled('report_score');
+  const canDq = canManualDq && actionEnabled('dq');
 
   // ── Close / remove from active tracking ────────────────────────────
   const closeMatch = async () => {
@@ -290,7 +295,7 @@ export function ActiveMatchCard({ match }: { match: any }) {
             {isLive ? 'LIVE ON' : 'NOT LIVE'}
           </span>
           {/* Custom Station Dropdown */}
-          <div className="relative" ref={stationRef}>
+          {canManageStations && <div className="relative" ref={stationRef}>
             <button
               onClick={() => setStationOpen(!stationOpen)}
               className={`ml-1 px-2 py-0.5 rounded border text-[10px] font-bold transition-all flex items-center gap-1
@@ -347,9 +352,9 @@ export function ActiveMatchCard({ match }: { match: any }) {
                 })}
               </div>
             )}
-          </div>
+          </div>}
           {/* × Close button */}
-          <button
+          {canOperate && <button
             onClick={closeMatch}
             className="ml-1 w-5 h-5 flex items-center justify-center rounded text-textDim hover:text-red-400 hover:bg-red-900/20 transition-colors"
             title="Remove from On-Stream panel"
@@ -357,7 +362,7 @@ export function ActiveMatchCard({ match }: { match: any }) {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-3.5 h-3.5">
               <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
             </svg>
-          </button>
+          </button>}
         </div>
       </div>
 
@@ -413,12 +418,12 @@ export function ActiveMatchCard({ match }: { match: any }) {
               <div className="text-black font-black text-xl w-11 text-center py-0.5 select-none">
                 {player.score ?? 0}
               </div>
-              <div className="flex flex-col border-l border-gray-300 bg-gray-100">
+              {canOperate && <div className="flex flex-col border-l border-gray-300 bg-gray-100">
                 <button onClick={() => changeScore(player.key, 1)}
                   className="text-gray-600 hover:text-black hover:bg-gray-300 transition-colors px-2 py-0.5 text-[10px] leading-none border-b border-gray-300">▲</button>
                 <button onClick={() => changeScore(player.key, -1)}
                   className="text-gray-600 hover:text-black hover:bg-gray-300 transition-colors px-2 py-0.5 text-[10px] leading-none">▼</button>
-              </div>
+              </div>}
             </div>
           </div>
         ))}
@@ -445,21 +450,21 @@ export function ActiveMatchCard({ match }: { match: any }) {
         </div>}
         {canDq && <div className="w-px h-8 bg-white/10" />}
         {/* Bot toggle */}
-          <button onClick={toggleBot}
+        {canOperate && <button onClick={toggleBot}
             title={botEnabled ? 'Disable Bot for this match' : 'Enable Bot for this match'}
             aria-pressed={botEnabled}
             className={`flex-1 flex flex-col items-center gap-0.5 py-2 px-1 transition-colors
             ${botEnabled ? 'text-accentYellow hover:bg-yellow-900/20' : 'text-gray-600 hover:bg-white/5'}`}>
           <IconBot /><span className="text-[9px] font-bold">Bot</span>
-        </button>
-        <div className="w-px h-8 bg-white/10" />
+        </button>}
+        {canOperate && <div className="w-px h-8 bg-white/10" />}
         {/* Swap */}
-        <button onClick={toggleSwap}
+        {canOperate && <button onClick={toggleSwap}
           title="Swap player display positions in OBS overlay"
           className={`flex-1 flex flex-col items-center gap-0.5 py-2 px-1 transition-colors
             ${isSwapped ? 'text-blue-300 bg-blue-900/20' : 'text-textDim hover:bg-white/5'}`}>
           <IconSwap /><span className="text-[9px] font-bold">Swap</span>
-        </button>
+        </button>}
         {canSendScore && <div className="w-px h-8 bg-white/10" />}
         {/* Send */}
         {canSendScore && <button onClick={sendScore} disabled={sending}

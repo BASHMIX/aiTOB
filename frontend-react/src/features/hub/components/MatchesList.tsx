@@ -10,6 +10,7 @@ export interface MatchesListProps {
   // True when the stream preflight failed (no local stream station resolves to a
   // live start.gg stream). Surfaces a per-card badge; does NOT disable the button.
   streamUnlinked?: boolean;
+  can?: (permission: string) => boolean;
 }
 
 const GROUPS: { status: MatchStatus | "complete"; label: string; dot: string; titleCls: string }[] = [
@@ -25,7 +26,7 @@ function groupMatches(matches: MatchData[], key: MatchStatus | "complete") {
   return matches.filter((m) => m.status === key);
 }
 
-export function MatchesList({ matches, dqTimerSeconds, autoDqEnabled, onAction, onToggleStream, stations, streamUnlinked }: MatchesListProps) {
+export function MatchesList({ matches, dqTimerSeconds, autoDqEnabled, onAction, onToggleStream, stations, streamUnlinked, can }: MatchesListProps) {
   return (
     <div className="flex flex-col gap-6">
       {GROUPS.map((group) => {
@@ -51,6 +52,7 @@ export function MatchesList({ matches, dqTimerSeconds, autoDqEnabled, onAction, 
                     onToggleStream={onToggleStream}
                     stations={stations}
                     streamUnlinked={streamUnlinked}
+                    can={can}
                   />
                 ))
               )}

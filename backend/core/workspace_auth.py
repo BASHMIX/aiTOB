@@ -1052,7 +1052,7 @@ async def session_public_profile(principal: SessionPrincipal) -> dict[str, objec
     # or making the UI depend on a second source of truth.
     from backend.core.entitlements import get_workspace_entitlement
     entitlement = await get_workspace_entitlement(principal.workspace_id)
-    return {"user_id": principal.user_id, "email": str(row["email"]), "display_name": str(row["display_name"]), "workspace_id": principal.workspace_id, "workspace_name": str(row["workspace_name"]), "workspace_slug": str(row["workspace_slug"]), "role": principal.role, "email_verified": row["email_verified_at"] is not None, "mfa_enabled": bool(row["mfa_enabled"]), "plan_key": entitlement["plan_key"], "billing_state": entitlement["billing_state"], "limits_json": json.dumps(entitlement["limits"], separators=(",", ":"))}
+    return {"user_id": principal.user_id, "email": str(row["email"]), "display_name": str(row["display_name"]), "workspace_id": principal.workspace_id, "workspace_name": str(row["workspace_name"]), "workspace_slug": str(row["workspace_slug"]), "role": principal.role, "permissions": sorted(ROLE_PERMISSIONS.get(principal.role, frozenset())), "email_verified": row["email_verified_at"] is not None, "mfa_enabled": bool(row["mfa_enabled"]), "plan_key": entitlement["plan_key"], "billing_state": entitlement["billing_state"], "limits_json": json.dumps(entitlement["limits"], separators=(",", ":"))}
 
 
 async def legacy_owner_principal() -> SessionPrincipal | None:

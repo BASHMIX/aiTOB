@@ -7,6 +7,7 @@ import challongeLogo from '@/assets/challonge-logo.svg';
 import { tournamentAccent, withAccentAlpha } from './tournamentAccent';
 import { removeTournamentFromHub, tournamentRemovalConfirmation } from '../tournamentRemoval';
 import { getApiErrorMessage, reopenTournamentSetup } from '@/features/tournament-setup/api';
+import { usePermission } from '@/hooks/usePermission';
 
 // PostgreSQL TIMESTAMP values are serialized without an offset. They are
 // stored as UTC by the API, so make that explicit before comparing with the
@@ -28,6 +29,7 @@ function freshnessLabel(lastSyncedAt?: string | null, syncStatus?: string) {
 const actionButtonClass = 'min-h-8 min-w-[4.5rem] rounded-md border px-3 py-1.5 text-xs font-bold transition-colors disabled:cursor-wait disabled:opacity-50';
 
 export function TournamentOperationsCards() {
+  const canManageTournaments = usePermission('tournament.manage');
   const navigate = useNavigate();
   const {
     tournaments, matches, pinnedTournamentSlugs, currentSlug, currentEventId,
@@ -177,7 +179,7 @@ export function TournamentOperationsCards() {
                 </div>
                 <p className="mt-1 text-xs text-textDim">{scopeLabel} · {freshnessLabel(tournament.provider_last_synced_at, tournament.provider_sync_status)}</p>
               </div>
-              <div className="flex shrink-0 items-center gap-2">
+              {canManageTournaments && <div className="flex shrink-0 items-center gap-2">
                 <input
                   type="color"
                   value={accent}
@@ -200,7 +202,7 @@ export function TournamentOperationsCards() {
                 >
                   ×
                 </button>
-              </div>
+              </div>}
             </div>
             <div className="mt-3 grid grid-cols-4 gap-2 text-center">
               {[['Called', called, 'text-blue-200'], ['Ready', ready, 'text-statusGreen'], ['Live', live, ''], ['Conflicts', conflicts, conflicts ? 'text-statusRed' : 'text-textLight']].map(([label, value, color]) => (
@@ -210,7 +212,7 @@ export function TournamentOperationsCards() {
                 </div>
               ))}
             </div>
-            <div className="mt-3 grid grid-cols-4 gap-2">
+            {canManageTournaments && <div className="mt-3 grid grid-cols-4 gap-2">
               <button type="button" onClick={(event) => {
                 event.stopPropagation();
                 void runLifecycle(tournament.slug, tournament.name, 'start');
@@ -227,7 +229,7 @@ export function TournamentOperationsCards() {
                 event.stopPropagation();
                 void editTournament(tournament.slug);
               }} disabled={isBusy} title="Edit tournament setup" className={`${actionButtonClass} w-full border-accentYellow/40 text-accentYellow hover:bg-accentYellow/10`}>Edit</button>
-            </div>
+            </div>}
           </article>
         );
       })}

@@ -59,6 +59,7 @@ describe('HubDashboard Integration', () => {
         matches: [],
         stations: [],
         status: { startgg_api: false, websockets: false, discord_bot: false, token_scope: null },
+        session: { user_id: 'u', email: 'u@example.com', display_name: 'Owner', workspace_id: 'w', workspace_name: 'W', workspace_slug: 'w', role: 'owner', permissions: ['workspace.manage', 'settings.manage', 'integrations.manage', 'tournament.manage', 'assistant.use'] },
       });
     });
 

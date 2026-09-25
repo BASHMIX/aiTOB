@@ -48,7 +48,16 @@ def test_owner_http_session_lifecycle_and_workspace_claim_is_postgres():
     assert login.status_code == 200
     profile = login.json()
     assert profile["role"] == "owner"
+    assert "workspace.manage" in profile["permissions"]
     assert profile["workspace_name"] == "PG Acceptance Workspace"
+    roles = client.get("/api/workspace/roles")
+    assert roles.status_code == 200
+    projection = roles.json()
+    assert projection["current_role"] == "owner"
+    assert [role["key"] for role in projection["roles"]] == [
+        "owner", "tournament_organizer", "stream_operator", "moderator", "viewer",
+    ]
+    assert "dq.manual" not in next(role for role in projection["roles"] if role["key"] == "moderator")["permissions"]
     assert client.get("/api/session?workspace_id=foreign-workspace").json()["workspace_id"] == profile["workspace_id"]
     assert client.post("/api/session/logout").status_code == 204
     assert client.get("/api/session").status_code == 401

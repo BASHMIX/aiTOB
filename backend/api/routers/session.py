@@ -21,6 +21,7 @@ from backend.core.workspace_auth import (
     list_workspace_members, list_workspace_invitations, cancel_workspace_invitation,
     update_account_profile,
     enforce_auth_rate_limit, enforce_public_registration_rate_limit,
+    ROLE_PERMISSIONS,
 )
 from backend.core.entitlements import EntitlementLimitExceeded, require_workspace_capacity
 from backend.core.email_delivery import send_email
@@ -239,6 +240,32 @@ async def remove_member(user_id: str, principal: SessionPrincipal = Depends(requ
 @router.get("/workspace/members")
 async def members(principal: SessionPrincipal = Depends(require_permission("workspace.manage"))):
     return {"members": await list_workspace_members(principal)}
+
+
+@router.get("/workspace/roles")
+async def workspace_roles(
+    principal: SessionPrincipal = Depends(require_permission("workspace.read")),
+):
+    labels = {
+        "owner": "Owner",
+        "tournament_organizer": "Tournament Organizer",
+        "stream_operator": "Stream Operator",
+        "moderator": "Moderator",
+        "viewer": "Viewer",
+    }
+    roles = [
+        {
+            "key": key,
+            "label": label,
+            "permissions": sorted(ROLE_PERMISSIONS[key]),
+        }
+        for key, label in labels.items()
+    ]
+    return {
+        "current_role": principal.role,
+        "current_permissions": sorted(ROLE_PERMISSIONS.get(principal.role, frozenset())),
+        "roles": roles,
+    }
 
 
 @router.get("/workspace/invitations")
