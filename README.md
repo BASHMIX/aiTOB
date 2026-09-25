@@ -31,8 +31,9 @@ Stop the three local processes with:
 python stop.py
 ```
 
-For containers, populate `.env.production`, including `POSTGRES_PASSWORD` and
-the Discord application credentials, then normalize and validate it without
+For containers, populate `.env.production`, including the explicit
+`AITOB_POSTGRES_DB`, `POSTGRES_PASSWORD`, and the Discord application
+credentials, then normalize and validate it without
 printing generated encryption keys:
 
 ```powershell

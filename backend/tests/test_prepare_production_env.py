@@ -20,7 +20,8 @@ def test_prepare_removes_legacy_values_and_generates_distinct_keys(tmp_path):
             "AITOB_DISCORD_WORKSPACE_ID=workspace-1",
             "API_BASE_URL=https://aitob.example",
             "APP_PUBLIC_URL=http://127.0.0.1:5173",
-            "DATABASE_URL=postgresql://example",
+            "DATABASE_URL=postgresql://user:pass@example/legacy",
+            "AITOB_RUNTIME_DATABASE_NAME=approved_staging",
             "POSTGRES_PASSWORD=not-a-placeholder",
             "DISCORD_BOT_TOKEN=bot-token",
             "DISCORD_CLIENT_ID=client-id",
@@ -35,8 +36,11 @@ def test_prepare_removes_legacy_values_and_generates_distinct_keys(tmp_path):
     text = env_file.read_text(encoding="utf-8")
     values = dict(module._assignment(line) for line in text.splitlines() if module._assignment(line))
 
-    assert set(result["removed"]) == {"DB_PATH", "AITOB_DISCORD_WORKSPACE_ID"}
+    assert set(result["removed"]) == {"DB_PATH", "AITOB_DISCORD_WORKSPACE_ID", "AITOB_RUNTIME_DATABASE_NAME"}
     assert "DB_PATH=" not in text and "AITOB_DISCORD_WORKSPACE_ID=" not in text
+    assert "AITOB_RUNTIME_DATABASE_NAME=" not in text
+    assert values["AITOB_POSTGRES_DB"] == "approved_staging"
+    assert values["DATABASE_URL"].endswith("/approved_staging")
     assert values["APP_PUBLIC_URL"] == values["FRONTEND_BASE_URL"] == "https://aitob.example"
     assert values["DISCORD_OAUTH_REDIRECT_URI"].endswith("/api/integrations/discord/callback")
     assert values["DISCORD_CLIENT_ID"] == "client-id"
@@ -52,9 +56,20 @@ def test_validation_fails_closed_for_missing_external_discord_credentials(tmp_pa
     module = _module()
     env_file = tmp_path / ".env.production"
     env_file.write_text(
-        "DATABASE_URL=postgresql://example\nPOSTGRES_PASSWORD=value\n",
+        "DATABASE_URL=postgresql://example/aitob\nAITOB_POSTGRES_DB=aitob\nPOSTGRES_PASSWORD=value\n",
         encoding="utf-8",
     )
     errors = module.validate(env_file)
     assert "DISCORD_CLIENT_ID is missing" in errors
     assert "DISCORD_CLIENT_SECRET is missing" in errors
+
+
+def test_validation_rejects_database_name_drift(tmp_path):
+    module = _module()
+    env_file = tmp_path / ".env.production"
+    env_file.write_text(
+        "DATABASE_URL=postgresql://example/old\nAITOB_POSTGRES_DB=approved\n",
+        encoding="utf-8",
+    )
+
+    assert "DATABASE_URL database must match AITOB_POSTGRES_DB" in module.validate(env_file)

@@ -18,6 +18,7 @@ RETIRED_KEYS = {
     "DB_PATH",
     "DISCORD_GUILD_ID",
     "AITOB_DISCORD_WORKSPACE_ID",
+    "AITOB_RUNTIME_DATABASE_NAME",
     "PROVIDER_V2_CONTRACTS_ENABLED",
     "PROVIDER_COORDINATOR_ENABLED",
 }
@@ -28,6 +29,7 @@ GENERATED_KEYS = (
 )
 REQUIRED_KEYS = (
     "DATABASE_URL",
+    "AITOB_POSTGRES_DB",
     "POSTGRES_PASSWORD",
     "DISCORD_BOT_TOKEN",
     "DISCORD_CLIENT_ID",
@@ -87,6 +89,22 @@ def prepare(path: Path) -> dict[str, list[str]]:
                 values[key] = item[1]
                 break
 
+    # AITOB_POSTGRES_DB is the single database-name selector used by local
+    # startup and Compose. Migrate the earlier desktop-only selector without
+    # deleting or renaming either PostgreSQL database.
+    legacy_runtime_database = values.get("AITOB_RUNTIME_DATABASE_NAME", "").strip()
+    configured_database = values.get("AITOB_POSTGRES_DB", "").strip()
+    parsed_database = urlparse(values.get("DATABASE_URL", ""))
+    database_name = (
+        configured_database
+        or legacy_runtime_database
+        or parsed_database.path.lstrip("/")
+    )
+    if database_name:
+        values["AITOB_POSTGRES_DB"] = database_name
+        if parsed_database.scheme in {"postgresql", "postgres"} and parsed_database.netloc:
+            values["DATABASE_URL"] = parsed_database._replace(path=f"/{database_name}").geturl()
+
     removed = sorted(key for key in RETIRED_KEYS if key in values)
     generated: list[str] = []
     for key in GENERATED_KEYS:
@@ -112,6 +130,7 @@ def prepare(path: Path) -> dict[str, list[str]]:
     values.setdefault("DISCORD_CLIENT_SECRET", "")
 
     managed = set(GENERATED_KEYS) | {
+        "DATABASE_URL", "AITOB_POSTGRES_DB",
         "APP_PUBLIC_URL", "FRONTEND_BASE_URL", "DISCORD_OAUTH_REDIRECT_URI",
         "DISCORD_CLIENT_ID", "DISCORD_CLIENT_SECRET", "AITOB_SESSION_COOKIE_SECURE",
         "AITOB_LEGACY_HUB_PASSWORD_COMPAT", "ALLOW_PUBLIC_REGISTRATION", "DEBUG",
@@ -153,6 +172,10 @@ def validate(path: Path) -> list[str]:
             errors.append(f"{key} is retired")
     if not values.get("DATABASE_URL", "").startswith(("postgresql://", "postgres://")):
         errors.append("DATABASE_URL must use PostgreSQL")
+    parsed_database = urlparse(values.get("DATABASE_URL", ""))
+    configured_database = values.get("AITOB_POSTGRES_DB", "").strip()
+    if configured_database and parsed_database.path.lstrip("/") != configured_database:
+        errors.append("DATABASE_URL database must match AITOB_POSTGRES_DB")
     for key in ("APP_PUBLIC_URL", "FRONTEND_BASE_URL", "DISCORD_OAUTH_REDIRECT_URI"):
         parsed = urlparse(values.get(key, ""))
         if parsed.scheme != "https" or not parsed.netloc:

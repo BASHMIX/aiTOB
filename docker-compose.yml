@@ -46,8 +46,9 @@ services:
       # Cutover/recovery can pause all API-owned workers before resuming them.
       AITOB_DISABLE_BACKGROUND_WORKERS: ${AITOB_DISABLE_BACKGROUND_WORKERS:-false}
     volumes:
-      # Persist player avatars and static uploads using a named volume
-      - static_data:/app/backend/api/static
+      # Persist only mutable avatar uploads. The React dist directory remains
+      # image-owned so every deployment serves the newly built frontend.
+      - avatars_data:/app/backend/api/static/avatars
       # Persist overlay configs per slot using a named volume
       - overlay_configs:/app/backend/api/overlay_configs
     restart: always
@@ -76,9 +77,9 @@ services:
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:?Set the platform Discord bot token}
       AITOB_DISABLE_BACKGROUND_WORKERS: ${AITOB_DISABLE_BACKGROUND_WORKERS:-false}
     volumes:
-      # Share only filesystem assets with the API. Runtime state is PostgreSQL;
-      # no file-backed database volume is mounted into a service container.
-      - static_data:/app/backend/api/static
+      # Share only mutable avatars with the API. Runtime state is PostgreSQL
+      # and frontend assets remain immutable inside the API image.
+      - avatars_data:/app/backend/api/static/avatars
     restart: always
     depends_on:
       api:
@@ -96,5 +97,5 @@ services:
 
 volumes:
   postgres_data:
-  static_data:
+  avatars_data:
   overlay_configs:

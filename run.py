@@ -22,7 +22,7 @@ if os.getenv("AITOB_SKIP_ENV_FILES", "").strip() != "1":
     load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
     load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env.production"), override=True)
 
-runtime_database_name = os.getenv("AITOB_RUNTIME_DATABASE_NAME", "").strip()
+runtime_database_name = os.getenv("AITOB_POSTGRES_DB", "").strip()
 database_url = os.getenv("DATABASE_URL", "").strip()
 if runtime_database_name and database_url.lower().startswith(("postgres://", "postgresql://")):
     parsed_database_url = urlsplit(database_url)
