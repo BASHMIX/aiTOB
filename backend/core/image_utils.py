@@ -1,7 +1,8 @@
 from PIL import Image
 from io import BytesIO
 import os
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 # Broadcast avatars must be high enough resolution to render cleanly on stream
 # overlays. 500x500 is the minimum we accept (start.gg profile pics are often
@@ -58,21 +59,22 @@ async def validate_avatar_safety(image_bytes: bytes) -> tuple[bool, str]:
     if not api_key:
         return True, "Safety check skipped (no API key)"
         
-    genai.configure(api_key=api_key)
     # 'gemini-1.5-flash' 404s on the current v1beta API. Default to the model the
     # rest of the codebase uses (gemini-2.5-flash); override via GEMINI_VISION_MODEL.
     model_name = os.getenv("GEMINI_VISION_MODEL", "gemini-2.5-flash")
-    model = genai.GenerativeModel(model_name)
-    
+    client = genai.Client(api_key=api_key)
+
     try:
         prompt = "Analyze this image for a tournament profile. Is it offensive, inappropriate, or harmful? Respond with 'SAFE' or a short reason why it is not safe."
-        
-        # Note: genai library might need specific data structures for images
-        response = await model.generate_content_async([
-            prompt,
-            {"mime_type": "image/jpeg", "data": image_bytes}
-        ])
-        
+
+        response = await client.aio.models.generate_content(
+            model=model_name,
+            contents=[
+                prompt,
+                types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
+            ],
+        )
+
         result = response.text.strip().upper()
         if "SAFE" in result:
             return True, "OK"

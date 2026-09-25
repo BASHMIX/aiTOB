@@ -27,28 +27,28 @@ async def test_remove_stream_query_is_undefined():
 
 # ── B3: avatar safety uses a current vision model (env-overridable) ───────
 @pytest.mark.asyncio
-@patch("backend.core.image_utils.genai.GenerativeModel")
-@patch("backend.core.image_utils.genai.configure")
-async def test_safety_defaults_to_gemini_25_flash(mock_configure, mock_model, monkeypatch):
+@patch("backend.core.image_utils.genai.Client")
+async def test_safety_defaults_to_gemini_25_flash(mock_client, monkeypatch):
     monkeypatch.setenv("GOOGLE_API_KEY", "k")
     monkeypatch.delenv("GEMINI_VISION_MODEL", raising=False)
-    inst = MagicMock()
-    inst.generate_content_async = AsyncMock(return_value=MagicMock(text="SAFE"))
-    mock_model.return_value = inst
+    client = MagicMock()
+    client.aio.models.generate_content = AsyncMock(return_value=MagicMock(text="SAFE"))
+    mock_client.return_value = client
 
     await validate_avatar_safety(b"img")
-    mock_model.assert_called_once_with("gemini-2.5-flash")
+    mock_client.assert_called_once_with(api_key="k")
+    assert client.aio.models.generate_content.await_args.kwargs["model"] == "gemini-2.5-flash"
 
 
 @pytest.mark.asyncio
-@patch("backend.core.image_utils.genai.GenerativeModel")
-@patch("backend.core.image_utils.genai.configure")
-async def test_safety_respects_env_override(mock_configure, mock_model, monkeypatch):
+@patch("backend.core.image_utils.genai.Client")
+async def test_safety_respects_env_override(mock_client, monkeypatch):
     monkeypatch.setenv("GOOGLE_API_KEY", "k")
     monkeypatch.setenv("GEMINI_VISION_MODEL", "gemini-2.0-flash")
-    inst = MagicMock()
-    inst.generate_content_async = AsyncMock(return_value=MagicMock(text="SAFE"))
-    mock_model.return_value = inst
+    client = MagicMock()
+    client.aio.models.generate_content = AsyncMock(return_value=MagicMock(text="SAFE"))
+    mock_client.return_value = client
 
     await validate_avatar_safety(b"img")
-    mock_model.assert_called_once_with("gemini-2.0-flash")
+    mock_client.assert_called_once_with(api_key="k")
+    assert client.aio.models.generate_content.await_args.kwargs["model"] == "gemini-2.0-flash"
