@@ -6,4 +6,5 @@ def test_compose_keeps_frontend_dist_image_owned_and_persists_only_avatars():
 
     assert "avatars_data:/app/backend/api/static/avatars" in compose
     assert "static_data:/app/backend/api/static" not in compose
+    assert "overlay_configs:" not in compose
     assert "AITOB_POSTGRES_DB" in compose

@@ -26,7 +26,7 @@ COPY backend/ ./backend/
 COPY --from=frontend-builder /app/frontend-react/dist ./backend/api/static/dist
 
 # Create persistent directories
-RUN mkdir -p backend/core backend/api/static/avatars backend/api/overlay_configs
+RUN mkdir -p backend/core backend/api/static/avatars
 
 # ── API image ─────────────────────────────────────────────────────────
 FROM base AS api

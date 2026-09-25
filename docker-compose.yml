@@ -49,8 +49,6 @@ services:
       # Persist only mutable avatar uploads. The React dist directory remains
       # image-owned so every deployment serves the newly built frontend.
       - avatars_data:/app/backend/api/static/avatars
-      # Persist overlay configs per slot using a named volume
-      - overlay_configs:/app/backend/api/overlay_configs
     restart: always
     depends_on:
       postgres:
@@ -98,4 +96,3 @@ services:
 volumes:
   postgres_data:
   avatars_data:
-  overlay_configs:
