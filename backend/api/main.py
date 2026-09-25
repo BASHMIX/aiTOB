@@ -37,6 +37,7 @@ from backend.api.routers.entitlements import router as entitlements_router
 from backend.api.routers.player_profiles import router as player_profiles_router
 from backend.api.routers.provider_oauth import router as provider_oauth_router
 from backend.api.routers.tournament_setup import router as tournament_setup_router
+from backend.api.routers.player_registration import router as player_registration_router
 
 load_dotenv()
 logger = logging.getLogger("aitob.api")
@@ -201,6 +202,7 @@ async def general_exception_handler(request: Request, exc: Exception):
     )
 
 # Routers — prefixes must match what the frontend calls
+app.include_router(player_registration_router, prefix="/api")
 app.include_router(tournaments_router, prefix="/api/tournaments")
 app.include_router(players_router,     prefix="/api/players")
 app.include_router(stations_router,    prefix="/api/stations")

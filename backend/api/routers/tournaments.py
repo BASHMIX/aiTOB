@@ -22,6 +22,7 @@ from backend.core.database import persist_challonge_identity
 from backend.core.entitlements import EntitlementLimitExceeded, require_workspace_capacity
 from backend.api.ws_manager import manager as hub_mgr
 from backend.api.auth import verify_hub_password, require_permission
+from backend.api.rollout import require_tournament_setup_wizard_enabled
 from backend.core.workspace_auth import SessionPrincipal
 from backend.api.schemas import (
     AddTournamentRequest, PatchTournamentSettingsRequest, MessageResponse, ErrorResponse, TournamentsResponse,
@@ -225,6 +226,7 @@ async def api_dispatcher_status(slug: str, principal: SessionPrincipal = Depends
 
 @router.post(
     "",
+    dependencies=[Depends(require_tournament_setup_wizard_enabled)],
     summary="Add a new tournament",
     status_code=status.HTTP_201_CREATED,
     response_model=MessageResponse,

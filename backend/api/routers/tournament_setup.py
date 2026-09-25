@@ -4,6 +4,11 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, UploadFile, File
 
 from backend.api.auth import require_permission
+from backend.api.rollout import (
+    require_provider_start_enabled,
+    require_tournament_activation_enabled,
+    require_tournament_setup_wizard_enabled,
+)
 from backend.api.schemas import (
     SetupDraftResponse, SetupDraftSectionPatch, ProviderScopeResolveRequest,
     ProviderScopeSelectRequest,
@@ -32,7 +37,10 @@ from backend.core import database
 from backend.core.providers.registry import get_provider_for_tournament
 from backend.api.routers.tournaments import provider_reference, serialize_tournament_for_frontend
 
-router = APIRouter(tags=["tournament-setup"])
+router = APIRouter(
+    tags=["tournament-setup"],
+    dependencies=[Depends(require_tournament_setup_wizard_enabled)],
+)
 
 
 def _response(draft: dict) -> SetupDraftResponse:
@@ -228,7 +236,10 @@ async def setup_readiness(
         raise HTTPException(404, "Draft not found") from exc
 
 
-@router.post("/drafts/{draft_id}/provider-start")
+@router.post(
+    "/drafts/{draft_id}/provider-start",
+    dependencies=[Depends(require_provider_start_enabled)],
+)
 async def guarded_provider_start(
     draft_id: str,
     body: dict[str, object] | None = None,
@@ -294,7 +305,10 @@ async def confirm_wave_monitoring(draft_id: str, body: dict[str, object], princi
     return await _patch_section(draft_id, "operating_profile", {"revision": revision, "value": value}, principal)
 
 
-@router.post("/drafts/{draft_id}/materialize")
+@router.post(
+    "/drafts/{draft_id}/materialize",
+    dependencies=[Depends(require_tournament_activation_enabled)],
+)
 async def materialize_setup_draft(draft_id: str, body: dict[str, object], principal: SessionPrincipal = Depends(require_permission("tournament.manage"))):
     try:
         materialized = await materialize_draft(
@@ -367,7 +381,10 @@ async def materialize_setup_draft(draft_id: str, body: dict[str, object], princi
         raise HTTPException(404, "Draft not found") from exc
 
 
-@router.post("/tournaments/{tournament_id}/activate")
+@router.post(
+    "/tournaments/{tournament_id}/activate",
+    dependencies=[Depends(require_tournament_activation_enabled)],
+)
 async def activate_setup_tournament(tournament_id: str, body: dict[str, object] | None = None, principal: SessionPrincipal = Depends(require_permission("tournament.manage"))):
     try:
         return await activate_tournament(principal.workspace_id, tournament_id, principal.user_id, idempotency_key=str((body or {}).get("idempotency_key") or "1"))
@@ -375,7 +392,10 @@ async def activate_setup_tournament(tournament_id: str, body: dict[str, object] 
         raise HTTPException(404 if str(exc) == "tournament_not_found" else 409, {"code": str(exc), "retryable": False}) from exc
 
 
-@router.post("/drafts/{draft_id}/activate")
+@router.post(
+    "/drafts/{draft_id}/activate",
+    dependencies=[Depends(require_tournament_activation_enabled)],
+)
 async def activate_setup_draft(draft_id: str, body: dict[str, object], principal: SessionPrincipal = Depends(require_permission("tournament.manage"))):
     try:
         materialized = await materialize_draft(draft_id, principal.workspace_id, principal.user_id, expected_revision=int(body.get("revision") or 0))

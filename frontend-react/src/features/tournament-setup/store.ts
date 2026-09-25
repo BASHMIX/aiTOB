@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import {
   createSetupDraft,
   getAIConfig,
+  getProviderOAuthAvailability,
   getApiErrorMessage,
   getSetupDraft,
   listIntegrationAccounts,
@@ -20,6 +21,7 @@ import type {
   DraftSection,
   IntegrationAccount,
   ProviderResolution,
+  ProviderOAuthAvailability,
   SetupDraft,
   WizardStep,
 } from './types';
@@ -27,6 +29,7 @@ import type {
 interface SetupStore {
   draft: SetupDraft | null;
   accounts: IntegrationAccount[];
+  providerOAuthAvailability: ProviderOAuthAvailability;
   aiConfig: AIConfig | null;
   loading: boolean;
   saving: boolean;
@@ -82,6 +85,7 @@ function updateDraftSection(draft: SetupDraft, section: DraftSection, value: Rec
 export const useTournamentSetupStore = create<SetupStore>((set, get) => ({
   draft: null,
   accounts: [],
+  providerOAuthAvailability: { startgg: false, challonge: false },
   aiConfig: null,
   loading: false,
   saving: false,
@@ -91,12 +95,13 @@ export const useTournamentSetupStore = create<SetupStore>((set, get) => ({
   load: async (draftId) => {
     set({ loading: true, error: null });
     try {
-      const [draft, accounts, aiConfig] = await Promise.all([
+      const [draft, accounts, aiConfig, providerOAuthAvailability] = await Promise.all([
         draftId ? getSetupDraft(draftId) : createSetupDraft(),
         listIntegrationAccounts(),
         getAIConfig(),
+        getProviderOAuthAvailability(),
       ]);
-      set({ draft, accounts, aiConfig, loading: false, saveState: 'saved' });
+      set({ draft, accounts, aiConfig, providerOAuthAvailability, loading: false, saveState: 'saved' });
       return draft;
     } catch (error) {
       const message = getApiErrorMessage(error, 'Could not load tournament setup.');

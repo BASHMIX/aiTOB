@@ -44,6 +44,28 @@ async def _callback_url(provider: str) -> str:
     return f"{base.rstrip('/')}/api/auth/providers/{provider}/callback"
 
 
+async def _oauth_available(provider: str) -> bool:
+    prefix = "STARTGG" if provider == "startgg" else "CHALLONGE_OAUTH"
+    client_id = await _secret(f"{prefix}_CLIENT_ID")
+    client_secret = await _secret(f"{prefix}_CLIENT_SECRET")
+    callback = await _callback_url(provider)
+    return bool(client_id and client_secret and callback.startswith("https://"))
+
+
+@router.get("/providers/capabilities")
+async def provider_oauth_capabilities(
+    _principal: SessionPrincipal = Depends(require_permission("workspace.read")),
+):
+    """Expose only safe OAuth availability booleans to the organizer UI."""
+
+    return {
+        "oauth": {
+            provider: await _oauth_available(provider)
+            for provider in ("startgg", "challonge")
+        }
+    }
+
+
 async def _save_state(state: str, provider: str, workspace_id: str, draft_id: str | None, return_step: str) -> None:
     expires = int(time.time()) + _STATE_TTL_SECONDS
     async with dbapi.connect(database.DATABASE_DSN) as db:

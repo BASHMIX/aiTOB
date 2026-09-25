@@ -4,6 +4,7 @@ import type {
   AIProvider,
   DraftSection,
   IntegrationAccount,
+  ProviderOAuthAvailability,
   ProblemDetail,
   SetupDraft,
   WizardStep,
@@ -14,6 +15,14 @@ const setupApi = axios.create({ headers: { 'Content-Type': 'application/json' } 
 export async function listIntegrationAccounts(): Promise<IntegrationAccount[]> {
   const response = await setupApi.get<{ accounts?: IntegrationAccount[] }>('/api/integrations');
   return response.data.accounts ?? [];
+}
+
+export async function getProviderOAuthAvailability(): Promise<ProviderOAuthAvailability> {
+  const response = await setupApi.get<{ oauth?: Partial<ProviderOAuthAvailability> }>('/api/auth/providers/capabilities');
+  return {
+    startgg: Boolean(response.data.oauth?.startgg),
+    challonge: Boolean(response.data.oauth?.challonge),
+  };
 }
 
 export async function createSetupDraft(): Promise<SetupDraft> {

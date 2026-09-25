@@ -11,6 +11,8 @@ export type DraftSection =
   | 'assistant_setup'
   | 'navigation';
 
+export type ProviderOAuthAvailability = Record<ProviderType, boolean>;
+
 export interface IntegrationAccount {
   id: string;
   provider_type: string;

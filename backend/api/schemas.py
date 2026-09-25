@@ -39,6 +39,35 @@ class SetupDraftSectionPatch(BaseModel):
     current_step: Optional[Literal["provider", "tournament", "discord", "assistant", "review"]] = None
 
 
+class RegistrationConfigRequest(BaseModel):
+    """Safe organizer-controlled tournament registration policy."""
+
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = False
+    destination_external_id: Optional[str] = Field(default=None, max_length=100)
+    opens_at: Optional[str] = Field(default=None, max_length=64)
+    closes_at: Optional[str] = Field(default=None, max_length=64)
+    display_timezone: str = Field(default="UTC", min_length=1, max_length=100)
+    require_provider_registration: bool = True
+    gamertag_verification_policy: Literal[
+        "exact_discord_name", "set_server_nickname", "match_or_set_nickname",
+    ] = "match_or_set_nickname"
+    startgg_bio_verification_enabled: bool = False
+    image_policy: Literal["disabled", "optional", "required"] = "optional"
+    verified_role_external_id: Optional[str] = Field(default=None, max_length=100)
+    announcement_policy: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ManualDiscordLinkRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    discord_user_id: str = Field(pattern=r"^[0-9]{17,20}$")
+
+
+class RegistrationStateActionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: Optional[str] = Field(default=None, max_length=500)
+
+
 class ProviderScopeResolveRequest(BaseModel):
     revision: int = Field(ge=0)
     provider_account_id: str = Field(min_length=1, max_length=100)

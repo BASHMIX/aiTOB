@@ -1,6 +1,6 @@
 import pytest
 from backend.core import database
-from backend.core.tournament_setup import create_draft, patch_draft
+from backend.core.tournament_setup import create_draft, patch_draft, reopen_draft_for_tournament
 from backend.core.tournament_activation import ActivationError, materialize_draft, activate_tournament
 
 
@@ -128,3 +128,53 @@ async def test_materialization_rejects_unverified_discord_installation_and_chann
 
     with pytest.raises(ActivationError, match="permission check"):
         await materialize_draft(draft["id"], "w", "u", expected_revision=draft["revision"])
+
+
+@pytest.mark.asyncio
+async def test_reopened_draft_updates_existing_tournament_without_duplicate(
+    postgres_repository_database,
+):
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute("INSERT INTO workspaces(id,slug,name) VALUES ('w','w','W')")
+        await db.execute("INSERT INTO users(id,email,display_name,password_hash) VALUES ('u','u@example.com','U','x')")
+        await db.execute(
+            """INSERT INTO integration_accounts
+               (id, owner_id, workspace_id, provider_type, external_account_id, display_name)
+               VALUES ('a', 'w', 'w', 'startgg', 'remote-a', 'Start.gg')"""
+        )
+        await db.commit()
+
+    draft = await create_draft("w", "u")
+    draft = await patch_draft(
+        draft["id"], "w", "u", section="provider_scope",
+        value={
+            "provider": "startgg", "account_id": "a",
+            "selected_scope": {"external_id": "e", "name": "Event"},
+            "tournament": {"external_id": "t", "canonical_slug": "original", "name": "Original"},
+        },
+        expected_revision=draft["revision"], current_step="provider",
+    )
+    materialized = await materialize_draft(draft["id"], "w", "u", expected_revision=draft["revision"])
+    reopened = await reopen_draft_for_tournament(materialized["tournament_id"], "w", "u")
+    changed = await patch_draft(
+        reopened["id"], "w", "u", section="provider_scope",
+        value={
+            "provider": "startgg", "account_id": "a",
+            "selected_scope": {"external_id": "e2", "name": "Changed Event"},
+            "tournament": {"external_id": "t", "canonical_slug": "changed", "name": "Changed"},
+        },
+        expected_revision=reopened["revision"], current_step="provider",
+    )
+    changed = await patch_draft(
+        changed["id"], "w", "u", section="tournament_review",
+        value={"display_name": "Changed Name"},
+        expected_revision=changed["revision"], current_step="tournament",
+    )
+    saved = await materialize_draft(changed["id"], "w", "u", expected_revision=changed["revision"])
+
+    assert saved["tournament_id"] == materialized["tournament_id"] == "original"
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
+        rows = await (await db.execute(
+            "SELECT slug, name FROM tournaments WHERE workspace_id='w' ORDER BY slug"
+        )).fetchall()
+    assert [(row[0], row[1]) for row in rows] == [("original", "Changed Name")]

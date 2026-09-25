@@ -11,6 +11,7 @@ from backend.core.tournament_readiness import compute_readiness
 from backend.core.tournament_setup import DraftError, DraftRevisionConflict, get_draft
 from backend.core.workflow_outbox import build_initial_sync_event
 from backend.core.tournament_operating_profile import validate_operating_profile
+from backend.core.provider_feature_flags import get_provider_feature_flags
 
 
 class ActivationError(RuntimeError):
@@ -214,6 +215,9 @@ async def materialize_draft(draft_id: str, workspace_id: str, actor_id: str, *, 
         raise DraftRevisionConflict(draft)
     if draft["status"] == "materialized" and draft.get("materialized_tournament_id"):
         return {"tournament_id": draft["materialized_tournament_id"], "status": "materialized", "replayed": True}
+    registration = (draft.get("discord_setup") or {}).get("registration") or {}
+    if registration.get("enabled") and not get_provider_feature_flags().tournament_registration_enabled:
+        raise ActivationError("tournament_registration_disabled")
     readiness = await compute_readiness(draft_id, workspace_id, purpose="materialize")
     if readiness["state"] == "blocked":
         raise ActivationError("readiness_blocked")
@@ -221,7 +225,16 @@ async def materialize_draft(draft_id: str, workspace_id: str, actor_id: str, *, 
     selected = provider.get("selected_scope") or {}
     tournament_facts = provider.get("tournament") or {}
     review = draft.get("tournament_review") or {}
-    slug = str(review.get("slug") or tournament_facts.get("canonical_slug") or f"aitob-{draft_id[:12]}").strip().lower()
+    # An explicitly reopened draft owns an existing Hub tournament.  Its
+    # identity must remain stable even if the provider locator/canonical slug
+    # changes while the organizer edits the setup; otherwise saving the edit
+    # could create a second tournament card.
+    existing_tournament_id = str(draft.get("materialized_tournament_id") or "").strip()
+    slug = existing_tournament_id or str(
+        review.get("slug")
+        or tournament_facts.get("canonical_slug")
+        or f"aitob-{draft_id[:12]}"
+    ).strip().lower()
     # Local slugs are workspace scoped by the migration target; keep collisions
     # deterministic during the current compatibility period.
     tournament_id = slug

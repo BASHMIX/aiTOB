@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import type { IntegrationAccount, ProviderResolution, ProviderScope, ProviderType } from '../types';
+import type { IntegrationAccount, ProviderOAuthAvailability, ProviderResolution, ProviderScope, ProviderType } from '../types';
 
 export interface ProviderStepValue {
   provider_type?: ProviderType;
@@ -13,6 +13,7 @@ export interface ProviderStepValue {
 interface ProviderStepProps {
   value: ProviderStepValue;
   accounts: IntegrationAccount[];
+  oauthAvailability?: ProviderOAuthAvailability;
   onChange: (value: ProviderStepValue) => void;
   onResolve?: (value: { providerAccountId: string; locator: string; subdomain?: string }) => void | Promise<void>;
   onSelectScope?: (externalScopeId: string) => void | Promise<void>;
@@ -40,6 +41,7 @@ function scopeTitle(scope: ProviderScope): string {
 export function ProviderStep({
   value,
   accounts,
+  oauthAvailability = { startgg: false, challonge: false },
   onChange,
   onResolve,
   onSelectScope,
@@ -113,9 +115,9 @@ export function ProviderStep({
             <h3 className="text-sm font-semibold text-white">{providerLabels[provider]} connection</h3>
             <p className="mt-1 text-xs text-textDim">Credentials are managed once in Workspace integrations and are never copied into this draft.</p>
           </div>
-          <button type="button" onClick={() => void onConnect?.(provider)} className="min-h-11 rounded-lg border border-accentYellow/40 px-3 py-2 text-xs font-bold text-accentYellow hover:bg-accentYellow/10">
+          {oauthAvailability[provider] ? <button type="button" onClick={() => void onConnect?.(provider)} className="min-h-11 rounded-lg border border-accentYellow/40 px-3 py-2 text-xs font-bold text-accentYellow hover:bg-accentYellow/10">
             {providerAccounts.length ? `Sign in another ${providerLabels[provider]} account` : `Sign in with ${providerLabels[provider]}`}
-          </button>
+          </button> : <span className="max-w-xs text-right text-[11px] leading-relaxed text-textDim">OAuth is not enabled for this staging deployment. Add an account below and store its encrypted access token.</span>}
         </div>
 
         <label className="mt-4 block text-xs font-medium text-textDim" htmlFor="provider-account">Account</label>

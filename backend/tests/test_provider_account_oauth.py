@@ -85,3 +85,25 @@ async def test_global_environment_rejects_retired_startgg_credentials():
         ))
 
     assert caught.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_provider_oauth_availability_requires_complete_https_configuration(monkeypatch):
+    for key in (
+        "STARTGG_CLIENT_ID", "STARTGG_CLIENT_SECRET", "STARTGG_OAUTH_REDIRECT_URI",
+        "CHALLONGE_OAUTH_CLIENT_ID", "CHALLONGE_OAUTH_CLIENT_SECRET", "CHALLONGE_OAUTH_REDIRECT_URI",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    assert await provider_oauth._oauth_available("startgg") is False
+    assert await provider_oauth._oauth_available("challonge") is False
+
+    monkeypatch.setenv("STARTGG_CLIENT_ID", "startgg-client")
+    monkeypatch.setenv("STARTGG_CLIENT_SECRET", "startgg-secret")
+    monkeypatch.setenv("STARTGG_OAUTH_REDIRECT_URI", "https://staging.example/api/auth/providers/startgg/callback")
+    assert await provider_oauth._oauth_available("startgg") is True
+
+    monkeypatch.setenv("CHALLONGE_OAUTH_CLIENT_ID", "challonge-client")
+    monkeypatch.setenv("CHALLONGE_OAUTH_CLIENT_SECRET", "challonge-secret")
+    monkeypatch.setenv("CHALLONGE_OAUTH_REDIRECT_URI", "http://insecure.example/callback")
+    assert await provider_oauth._oauth_available("challonge") is False

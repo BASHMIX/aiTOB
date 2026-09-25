@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
 
 from backend.api.auth import require_permission
+from backend.api.rollout import require_tournament_registration_enabled
 from backend.api.schemas import ManualDiscordLinkRequest, RegistrationConfigRequest, RegistrationStateActionRequest
 from backend.core import database
 from backend.core.player_registration import (
@@ -16,7 +17,10 @@ from backend.core.player_registration import (
 from backend.core.registration_sync import recheck_provider_roster
 from backend.core.workspace_auth import SessionPrincipal
 
-router = APIRouter(tags=["player-registration"])
+router = APIRouter(
+    tags=["player-registration"],
+    dependencies=[Depends(require_tournament_registration_enabled)],
+)
 
 
 def _require_idempotency(key: str | None) -> str:
