@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
 
-type Profile = { email: string; display_name: string; role: string; workspace_id: string; workspace_name: string; email_verified?: boolean; mfa_enabled?: boolean };
+type Profile = { email: string; display_name: string; role: string; workspace_id: string; workspace_name: string; platform_admin?: boolean; email_verified?: boolean; mfa_enabled?: boolean };
 type Subscription = { plan_key: string; status: string; billing_state: string; expires_at?: string | null };
 type Member = { id: string; email: string; display_name: string; role: string; status: string };
 type Invitation = { id: string; email: string; role: string; expires_at: string; accepted_at?: string | null; cancelled_at?: string | null };
+type CompanyInvitation = { id: string; email: string; workspace_name: string; expires_at: string; accepted_at?: string | null; cancelled_at?: string | null };
 
 export function AccountSettings() {
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -25,6 +26,10 @@ export function AccountSettings() {
   const [inviteRole, setInviteRole] = useState('viewer');
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [subscriptionBusy, setSubscriptionBusy] = useState(false);
+  const [companyInvitations, setCompanyInvitations] = useState<CompanyInvitation[]>([]);
+  const [companyEmail, setCompanyEmail] = useState('');
+  const [companyWorkspace, setCompanyWorkspace] = useState('');
+  const [companyInviteLink, setCompanyInviteLink] = useState('');
 
   useEffect(() => {
     let alive = true;
@@ -39,6 +44,11 @@ export function AccountSettings() {
       setWorkspaceName(session.data.workspace_name || '');
       setMembers(memberResponse.data.members || []);
       setInvitations(invitationResponse.data.invitations || []);
+      if (session.data.platform_admin) {
+        axios.get('/api/platform/workspace-invitations')
+          .then((response) => alive && setCompanyInvitations(response.data.invitations || []))
+          .catch(() => alive && setNotice('Company invitations could not be loaded.'));
+      }
       axios.get(`/api/platform/workspaces/${encodeURIComponent(session.data.workspace_id)}/subscription`)
         .then((response) => alive && setSubscription(response.data))
         .catch(() => { /* only platform administrators can see this panel */ });
@@ -123,6 +133,32 @@ export function AccountSettings() {
       setNotice(axios.isAxiosError(error) ? (error.response?.data?.detail || 'Invitation could not be cancelled.') : 'Invitation could not be cancelled.');
     }
   };
+  const inviteCompany = async () => {
+    try {
+      const response = await axios.post('/api/platform/workspace-invitations', {
+        email: companyEmail,
+        workspace_name: companyWorkspace,
+      });
+      const token = response.data.acceptance_token;
+      setCompanyInviteLink(`${window.location.origin}/accept-company-invitation?token=${encodeURIComponent(token)}`);
+      const refreshed = await axios.get('/api/platform/workspace-invitations');
+      setCompanyInvitations(refreshed.data.invitations || []);
+      setCompanyEmail(''); setCompanyWorkspace('');
+      setNotice('Private company invitation created. Copy the one-time link now or use the configured email delivery.');
+    } catch (error) {
+      setNotice(axios.isAxiosError(error) ? (error.response?.data?.detail || 'Company invitation could not be created.') : 'Company invitation could not be created.');
+    }
+  };
+  const cancelCompanyInvitation = async (invitation: CompanyInvitation) => {
+    if (!window.confirm(`Cancel the staging invitation for ${invitation.email}?`)) return;
+    try {
+      await axios.delete(`/api/platform/workspace-invitations/${encodeURIComponent(invitation.id)}`);
+      setCompanyInvitations((current) => current.map((item) => item.id === invitation.id ? { ...item, cancelled_at: new Date().toISOString() } : item));
+      setNotice(`Company invitation cancelled for ${invitation.email}.`);
+    } catch (error) {
+      setNotice(axios.isAxiosError(error) ? (error.response?.data?.detail || 'Company invitation could not be cancelled.') : 'Company invitation could not be cancelled.');
+    }
+  };
   const changeMemberRole = async (member: Member, role: string) => {
     if (role === member.role) return;
     try {
@@ -177,6 +213,13 @@ export function AccountSettings() {
           <div><dt className="text-textDim">Two-factor authentication</dt><dd className="mt-1 font-semibold text-white">{profile.mfa_enabled ? 'Enabled' : 'Not enabled'}</dd></div>
         </dl>
       </section>
+      {profile.platform_admin && <section className="rounded-xl border border-accentYellow/25 bg-cardDark p-5">
+        <h2 className="text-base font-bold text-white">Closed staging invitations</h2>
+        <p className="mt-1 text-xs text-textDim">Creates a separate company workspace and Owner account. Public registration stays disabled.</p>
+        <div className="mt-4 grid gap-2 sm:grid-cols-[1fr_1fr_auto]"><input type="email" value={companyEmail} onChange={(event) => setCompanyEmail(event.target.value)} placeholder="Company owner email" className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white" /><input value={companyWorkspace} onChange={(event) => setCompanyWorkspace(event.target.value)} maxLength={120} placeholder="Company workspace name" className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white" /><button type="button" onClick={inviteCompany} disabled={!companyEmail.includes('@') || !companyWorkspace.trim()} className="rounded-lg bg-accentYellow px-4 py-2 text-xs font-bold text-black disabled:opacity-40">Invite company</button></div>
+        {companyInviteLink && <div className="mt-3 rounded-lg border border-statusOrange/30 bg-black/20 p-3"><p className="text-xs font-bold text-statusOrange">One-time acceptance link</p><div className="mt-2 flex gap-2"><input readOnly value={companyInviteLink} className="min-w-0 flex-1 rounded border border-white/10 bg-black/30 px-2 py-1 font-mono text-xs text-white" /><button type="button" onClick={() => navigator.clipboard.writeText(companyInviteLink)} className="rounded border border-accentYellow/50 px-3 py-1 text-xs font-bold text-accentYellow">Copy</button></div></div>}
+        <div className="mt-4 space-y-2">{companyInvitations.filter((invitation) => !invitation.accepted_at && !invitation.cancelled_at).map((invitation) => <div key={invitation.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-white/5 px-3 py-2 text-xs"><span className="text-white">{invitation.workspace_name} · {invitation.email}<span className="ml-2 text-textDim">expires {new Date(invitation.expires_at).toLocaleDateString()}</span></span><button type="button" onClick={() => cancelCompanyInvitation(invitation)} className="rounded border border-statusRed/40 px-2 py-1 text-statusRed">Cancel</button></div>)}{companyInvitations.filter((invitation) => !invitation.accepted_at && !invitation.cancelled_at).length === 0 && <p className="text-xs text-textDim">No pending company invitations.</p>}</div>
+      </section>}
       {subscription && <section className="rounded-xl border border-white/10 bg-cardDark p-5">
         <h2 className="text-base font-bold text-white">Manual workspace activation</h2>
         <p className="mt-1 text-xs text-textDim">Platform-admin control only · no payment or checkout is performed.</p>

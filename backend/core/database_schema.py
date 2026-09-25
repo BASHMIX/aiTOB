@@ -121,6 +121,19 @@ TABLE_SCHEMAS = [
     )
     ''',
     '''
+    CREATE TABLE IF NOT EXISTS workspace_owner_invitations (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL,
+        workspace_name TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        expires_at TIMESTAMP NOT NULL,
+        accepted_at TIMESTAMP,
+        cancelled_at TIMESTAMP,
+        created_by TEXT NOT NULL REFERENCES users(id),
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    ''',
+    '''
     CREATE TABLE IF NOT EXISTS workspace_entitlements (
         workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id),
         plan_key TEXT NOT NULL DEFAULT 'free',
@@ -1181,6 +1194,7 @@ INDEXES = [
     ,"CREATE INDEX IF NOT EXISTS idx_user_sessions_lookup ON user_sessions(token_hash, expires_at)"
     ,"CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id, revoked_at)"
     ,"CREATE INDEX IF NOT EXISTS idx_auth_rate_limits_window ON auth_rate_limits(window_started_at)"
+    ,"CREATE INDEX IF NOT EXISTS idx_workspace_owner_invites_email ON workspace_owner_invitations(email, created_at)"
     ,"CREATE INDEX IF NOT EXISTS idx_workspace_entitlements_expiry ON workspace_entitlements(expires_at, suspended_at)"
     ,"CREATE INDEX IF NOT EXISTS idx_error_events_created ON error_events(created_at)"
     ,"CREATE UNIQUE INDEX IF NOT EXISTS uq_active_discord_guild_owner ON integration_accounts(external_account_id) WHERE provider_type='discord' AND status='active'"

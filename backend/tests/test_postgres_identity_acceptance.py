@@ -48,6 +48,7 @@ def test_owner_http_session_lifecycle_and_workspace_claim_is_postgres():
     assert login.status_code == 200
     profile = login.json()
     assert profile["role"] == "owner"
+    assert profile["platform_admin"] is True
     assert "workspace.manage" in profile["permissions"]
     assert profile["workspace_name"] == "PG Acceptance Workspace"
     roles = client.get("/api/workspace/roles")
@@ -70,6 +71,79 @@ def test_owner_http_session_lifecycle_and_workspace_claim_is_postgres():
     # The cookie is not involved in this assertion: revocation is checked from
     # PostgreSQL by a fresh session lookup.
     assert __import__("asyncio").run(get_session_principal(token)) is None
+
+
+def test_closed_staging_company_invitation_creates_isolated_owner_workspace():
+    """A platform invite creates a second tenant without opening registration."""
+    from backend.core.storage import dbapi
+
+    admin = TestClient(app)
+    login = admin.post(
+        "/api/session/login",
+        json={"email": "pg-owner@example.test", "password": "pg-owner-password"},
+    )
+    assert login.status_code == 200
+    admin_workspace = login.json()["workspace_id"]
+    assert admin.get("/api/session/registration-status").json() == {"enabled": False}
+
+    created = admin.post(
+        "/api/platform/workspace-invitations",
+        json={"email": "second-company@example.test", "workspace_name": "Second Company"},
+    )
+    assert created.status_code == 201
+    payload = created.json()
+    token = payload["acceptance_token"]
+    assert token
+    assert "token_hash" not in payload["invitation"]
+
+    listed = admin.get("/api/platform/workspace-invitations")
+    assert listed.status_code == 200
+    assert listed.json()["invitations"][0]["workspace_name"] == "Second Company"
+    assert "token_hash" not in listed.json()["invitations"][0]
+
+    async def stored_token_is_hashed():
+        async with dbapi.connect(database.DATABASE_DSN) as db:
+            row = await (await db.execute(
+                "SELECT token_hash FROM workspace_owner_invitations WHERE id=?",
+                (payload["invitation"]["id"],),
+            )).fetchone()
+        assert row and row[0] != token
+
+    __import__("asyncio").run(stored_token_is_hashed())
+
+    invited = TestClient(app)
+    accepted = invited.post(
+        "/api/platform/workspace-invitations/accept",
+        json={
+            "token": token,
+            "password": "second-company-password",
+            "display_name": "Second Owner",
+        },
+    )
+    assert accepted.status_code == 200
+    second_login = invited.post(
+        "/api/session/login",
+        json={"email": "second-company@example.test", "password": "second-company-password"},
+    )
+    assert second_login.status_code == 200
+    second_profile = second_login.json()
+    assert second_profile["role"] == "owner"
+    assert second_profile["platform_admin"] is False
+    assert second_profile["workspace_name"] == "Second Company"
+    assert second_profile["workspace_id"] != admin_workspace
+    assert invited.post(
+        "/api/platform/workspace-invitations",
+        json={"email": "forbidden@example.test", "workspace_name": "Forbidden"},
+    ).status_code == 403
+    assert invited.post(
+        "/api/platform/workspace-invitations/accept",
+        json={
+            "token": token,
+            "password": "another-password",
+            "display_name": "Replay",
+        },
+    ).status_code == 422
+    assert admin.get("/api/session/registration-status").json() == {"enabled": False}
 
 
 def test_invitation_acceptance_role_change_cancellation_and_last_owner_are_http():

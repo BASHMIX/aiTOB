@@ -3,7 +3,7 @@ import type { FormEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 
-type ActionKind = 'verify' | 'reset' | 'invite';
+type ActionKind = 'verify' | 'reset' | 'invite' | 'companyInvite';
 
 const copy: Record<ActionKind, { title: string; intro: string; success: string }> = {
   verify: {
@@ -20,6 +20,11 @@ const copy: Record<ActionKind, { title: string; intro: string; success: string }
     title: 'Join an aiTOB workspace',
     intro: 'Create the account that will receive the invited workspace role.',
     success: 'Invitation accepted successfully. You can now sign in.',
+  },
+  companyInvite: {
+    title: 'Create your aiTOB workspace',
+    intro: 'Accept this private staging invitation to create your company workspace and Owner account.',
+    success: 'Workspace created successfully. You can now sign in.',
   },
 };
 
@@ -55,6 +60,10 @@ export function AccountActionPage({ kind }: { kind: ActionKind }) {
     try {
       if (kind === 'reset') {
         await axios.post('/api/session/password/reset', { token, new_password: password });
+      } else if (kind === 'companyInvite') {
+        await axios.post('/api/platform/workspace-invitations/accept', {
+          token, password, display_name: displayName,
+        });
       } else {
         await axios.post('/api/workspace/invitations/accept', {
           token, password, display_name: displayName,
@@ -78,18 +87,18 @@ export function AccountActionPage({ kind }: { kind: ActionKind }) {
         <p className="mt-2 text-sm text-textDim">{copy[kind].intro}</p>
         {needsForm && (
           <form className="mt-6 space-y-4" onSubmit={submit}>
-            {kind === 'invite' && (
+            {(kind === 'invite' || kind === 'companyInvite') && (
               <label className="block text-sm text-textDim">
                 Display name
                 <input required minLength={1} maxLength={120} value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="mt-1 w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-white" />
               </label>
             )}
             <label className="block text-sm text-textDim">
-              {kind === 'invite' ? 'Account password' : 'New password'}
+              {kind === 'invite' || kind === 'companyInvite' ? 'Account password' : 'New password'}
               <input required minLength={10} type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="mt-1 w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-white" />
             </label>
             <button disabled={busy} type="submit" className="w-full rounded-lg bg-accentYellow px-4 py-2 text-sm font-bold text-black disabled:opacity-50">
-              {busy ? 'Working…' : kind === 'invite' ? 'Accept invitation' : 'Reset password'}
+              {busy ? 'Working…' : kind === 'invite' || kind === 'companyInvite' ? 'Accept invitation' : 'Reset password'}
             </button>
           </form>
         )}

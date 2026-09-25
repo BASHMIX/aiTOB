@@ -49,6 +49,16 @@ The platform owns `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, and
 docker compose --env-file .env.production up --build
 ```
 
+### Closed staging onboarding
+
+Keep `ALLOW_PUBLIC_REGISTRATION=false`. A platform administrator opens
+**Settings → Account → Closed staging invitations**, enters the company Owner
+email and workspace name, then sends the generated one-time link. Accepting the
+link creates a separate workspace, Owner membership, and free entitlement in a
+single PostgreSQL transaction. It does not add the company to the administrator's
+workspace. After sign-in, the company Owner connects its Discord server from
+**Connections** and may invite its own staff from **Workspace members**.
+
 ## Tests
 
 Repository tests create and destroy isolated PostgreSQL databases. Point

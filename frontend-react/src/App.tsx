@@ -18,6 +18,7 @@ function App() {
         <Route path="/verify-email" element={<AccountActionPage kind="verify" />} />
         <Route path="/reset-password" element={<AccountActionPage kind="reset" />} />
         <Route path="/accept-invitation" element={<AccountActionPage kind="invite" />} />
+        <Route path="/accept-company-invitation" element={<AccountActionPage kind="companyInvite" />} />
         <Route path="/admin/hub" element={<AuthGuard><HubDashboard /></AuthGuard>} />
         <Route path="/admin/editor" element={<AuthGuard><EditorDashboard /></AuthGuard>} />
         <Route path="/admin/players" element={<AuthGuard><PlayerArchivePage /></AuthGuard>} />

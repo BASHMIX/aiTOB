@@ -8,7 +8,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field, field_validator
 
-from backend.api.auth import current_session_principal, require_permission
+from backend.api.auth import current_session_principal, require_permission, require_platform_admin
 from backend.core import database
 from backend.core.storage import dbapi
 from backend.core.workspace_auth import (
@@ -19,6 +19,8 @@ from backend.core.workspace_auth import (
     change_password, create_password_reset, consume_password_reset,
     create_email_verification, consume_email_verification,
     list_workspace_members, list_workspace_invitations, cancel_workspace_invitation,
+    accept_workspace_owner_invitation, cancel_workspace_owner_invitation,
+    create_workspace_owner_invitation, list_workspace_owner_invitations,
     update_account_profile,
     enforce_auth_rate_limit, enforce_public_registration_rate_limit,
     ROLE_PERMISSIONS,
@@ -72,6 +74,11 @@ class InvitationAcceptanceRequest(BaseModel):
     password: str = Field(min_length=10, max_length=1024)
     display_name: str = Field(min_length=1, max_length=120)
     totp_code: str | None = Field(default=None, max_length=128)
+
+
+class WorkspaceOwnerInvitationRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    workspace_name: str = Field(min_length=1, max_length=120)
 
 
 class MemberRoleRequest(BaseModel):
@@ -215,6 +222,58 @@ async def accept_invitation(body: InvitationAcceptanceRequest, response: Respons
         # token or raw password is persisted by this route.
         # The invitation email is intentionally not projected before acceptance.
         # A user signs in normally after acceptance.
+    except (PermissionError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@router.post("/platform/workspace-invitations", status_code=status.HTTP_201_CREATED)
+async def create_company_invitation(
+    body: WorkspaceOwnerInvitationRequest,
+    principal: SessionPrincipal = Depends(require_platform_admin),
+):
+    try:
+        invite, token = await create_workspace_owner_invitation(
+            principal, body.email, body.workspace_name,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    await _deliver_account_email(
+        recipient=invite["email"],
+        subject="Your aiTOB staging workspace invitation",
+        text=(f"You are invited to create the {invite['workspace_name']} workspace in aiTOB.\n"
+              f"Use this one-time acceptance token: {token}\n"
+              f"Acceptance link: {_public_url('/accept-company-invitation', token)}"),
+    )
+    return {"invitation": invite, "acceptance_token": token}
+
+
+@router.get("/platform/workspace-invitations")
+async def company_invitations(
+    principal: SessionPrincipal = Depends(require_platform_admin),
+):
+    return {"invitations": await list_workspace_owner_invitations(principal)}
+
+
+@router.delete("/platform/workspace-invitations/{invitation_id}", status_code=204)
+async def cancel_company_invitation(
+    invitation_id: str,
+    principal: SessionPrincipal = Depends(require_platform_admin),
+):
+    try:
+        await cancel_workspace_owner_invitation(principal, invitation_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+
+@router.post("/platform/workspace-invitations/accept")
+async def accept_company_invitation(body: InvitationAcceptanceRequest):
+    try:
+        await accept_workspace_owner_invitation(body.token, body.password, body.display_name)
     except (PermissionError, ValueError) as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     return {"ok": True}

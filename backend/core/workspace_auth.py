@@ -505,6 +505,175 @@ async def create_workspace_invitation(
     return {"id": invite_id, "email": normalized_email, "role": role, "expires_at": expires_at.isoformat()}, token
 
 
+async def create_workspace_owner_invitation(
+    principal: SessionPrincipal,
+    email: str,
+    workspace_name: str,
+    *,
+    now: dt.datetime | None = None,
+) -> tuple[dict[str, str], str]:
+    """Issue a one-use invitation for a new company and its first Owner.
+
+    This is the closed-staging onboarding path. It deliberately does not reuse
+    member invitations: accepting it creates a separate workspace, membership,
+    and entitlement atomically while public registration remains disabled.
+    """
+    normalized_email = email.strip().lower()
+    clean_workspace_name = workspace_name.strip()
+    if "@" not in normalized_email or not clean_workspace_name:
+        raise ValueError("Valid company owner and workspace details are required.")
+    issued = now or _utcnow()
+    token, token_hash = _invite_token()
+    invite_id = str(uuid.uuid4())
+    expires_at = issued + dt.timedelta(days=7)
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute("BEGIN")
+        try:
+            admin = await (await db.execute(
+                "SELECT 1 FROM users WHERE id=? AND status='active' AND is_platform_admin=TRUE",
+                (principal.user_id,),
+            )).fetchone()
+            if not admin:
+                raise PermissionError("Platform administrator permission required")
+            if await (await db.execute("SELECT 1 FROM users WHERE email=?", (normalized_email,))).fetchone():
+                raise ValueError("Email is already registered.")
+            await db.execute(
+                "UPDATE workspace_owner_invitations SET cancelled_at=? "
+                "WHERE email=? AND accepted_at IS NULL AND cancelled_at IS NULL",
+                (issued.isoformat(), normalized_email),
+            )
+            await db.execute(
+                """INSERT INTO workspace_owner_invitations
+                       (id, email, workspace_name, token_hash, expires_at, created_by)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    invite_id,
+                    normalized_email,
+                    clean_workspace_name[:120],
+                    token_hash,
+                    expires_at.isoformat(),
+                    principal.user_id,
+                ),
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+    return {
+        "id": invite_id,
+        "email": normalized_email,
+        "workspace_name": clean_workspace_name[:120],
+        "expires_at": expires_at.isoformat(),
+    }, token
+
+
+async def list_workspace_owner_invitations(principal: SessionPrincipal) -> list[dict]:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        admin = await (await db.execute(
+            "SELECT 1 FROM users WHERE id=? AND status='active' AND is_platform_admin=TRUE",
+            (principal.user_id,),
+        )).fetchone()
+        if not admin:
+            raise PermissionError("Platform administrator permission required")
+        db.row_factory = dbapi.Row
+        rows = await (await db.execute(
+            """SELECT id,email,workspace_name,expires_at,accepted_at,cancelled_at,created_at
+               FROM workspace_owner_invitations ORDER BY created_at DESC"""
+        )).fetchall()
+    return [dict(row) for row in rows]
+
+
+async def cancel_workspace_owner_invitation(
+    principal: SessionPrincipal,
+    invitation_id: str,
+) -> None:
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute("BEGIN")
+        try:
+            admin = await (await db.execute(
+                "SELECT 1 FROM users WHERE id=? AND status='active' AND is_platform_admin=TRUE",
+                (principal.user_id,),
+            )).fetchone()
+            if not admin:
+                raise PermissionError("Platform administrator permission required")
+            result = await db.execute(
+                """UPDATE workspace_owner_invitations SET cancelled_at=CURRENT_TIMESTAMP
+                   WHERE id=? AND accepted_at IS NULL AND cancelled_at IS NULL""",
+                (invitation_id,),
+            )
+            if result.rowcount != 1:
+                raise ValueError("Pending company invitation was not found.")
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+
+
+async def accept_workspace_owner_invitation(
+    token: str,
+    password: str,
+    display_name: str,
+    *,
+    now: dt.datetime | None = None,
+) -> SessionPrincipal:
+    """Create a new tenant from a platform-issued invitation only."""
+    if not token or not display_name.strip():
+        raise ValueError("Invitation and display name are required.")
+    password_hash = hash_password(password)
+    issued = now or _utcnow()
+    async with dbapi.connect(database.DATABASE_DSN) as db:
+        db.row_factory = dbapi.Row
+        await db.execute("BEGIN")
+        try:
+            lock = " FOR UPDATE" if is_postgres() else ""
+            invite = await (await db.execute(
+                "SELECT * FROM workspace_owner_invitations "
+                "WHERE token_hash=? AND accepted_at IS NULL AND cancelled_at IS NULL" + lock,
+                (_token_hash(token),),
+            )).fetchone()
+            if not invite or _parse_timestamp(invite["expires_at"]) <= issued:
+                raise PermissionError("Company invitation is invalid or expired.")
+            if await (await db.execute("SELECT 1 FROM users WHERE email=?", (invite["email"],))).fetchone():
+                raise ValueError("Email is already registered.")
+            claimed = await db.execute(
+                "UPDATE workspace_owner_invitations SET accepted_at=? "
+                "WHERE id=? AND accepted_at IS NULL AND cancelled_at IS NULL",
+                (issued.isoformat(), invite["id"]),
+            )
+            if claimed.rowcount != 1:
+                raise PermissionError("Company invitation is invalid or expired.")
+            user_id, workspace_id = str(uuid.uuid4()), str(uuid.uuid4())
+            slug = f"{_safe_slug(str(invite['workspace_name']))[:54]}-{str(invite['id'])[:8]}"
+            await db.execute(
+                "INSERT INTO users (id, email, display_name, password_hash) VALUES (?, ?, ?, ?)",
+                (user_id, invite["email"], display_name.strip()[:120], password_hash),
+            )
+            await db.execute(
+                "INSERT INTO workspaces (id, slug, name) VALUES (?, ?, ?)",
+                (workspace_id, slug, str(invite["workspace_name"])[:120]),
+            )
+            await db.execute(
+                "INSERT INTO workspace_memberships (workspace_id, user_id, role) VALUES (?, ?, 'owner')",
+                (workspace_id, user_id),
+            )
+            await db.execute(
+                "INSERT INTO workspace_entitlements (workspace_id, plan_key, billing_state) "
+                "VALUES (?, 'free', 'non_billed')",
+                (workspace_id,),
+            )
+            await db.execute(
+                """INSERT INTO audit_events
+                       (id, workspace_id, actor_id, action, target_type, target_id, outcome, detail_json)
+                   VALUES (?, ?, ?, 'workspace.invitation.accept', 'workspace', ?, 'accepted', '{}')""",
+                (str(uuid.uuid4()), workspace_id, user_id, workspace_id),
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+    return SessionPrincipal(user_id, workspace_id, "owner", None)
+
+
 async def list_workspace_members(principal: SessionPrincipal) -> list[dict]:
     async with dbapi.connect(database.DATABASE_DSN) as db:
         await _require_current_owner(db, principal)
@@ -1035,7 +1204,7 @@ async def consume_email_verification(token: str, *, now=None) -> None:
 async def session_public_profile(principal: SessionPrincipal) -> dict[str, object]:
     async with dbapi.connect(database.DATABASE_DSN) as db:
         db.row_factory = dbapi.Row
-        async with db.execute("""SELECT u.email, u.display_name, u.email_verified_at,
+        async with db.execute("""SELECT u.email, u.display_name, u.email_verified_at, u.is_platform_admin,
                                         CASE WHEN mf.user_id IS NULL THEN FALSE ELSE TRUE END AS mfa_enabled,
                                         w.name workspace_name, w.slug workspace_slug,
                                         COALESCE(e.plan_key, 'free') AS plan_key,
@@ -1052,7 +1221,7 @@ async def session_public_profile(principal: SessionPrincipal) -> dict[str, objec
     # or making the UI depend on a second source of truth.
     from backend.core.entitlements import get_workspace_entitlement
     entitlement = await get_workspace_entitlement(principal.workspace_id)
-    return {"user_id": principal.user_id, "email": str(row["email"]), "display_name": str(row["display_name"]), "workspace_id": principal.workspace_id, "workspace_name": str(row["workspace_name"]), "workspace_slug": str(row["workspace_slug"]), "role": principal.role, "permissions": sorted(ROLE_PERMISSIONS.get(principal.role, frozenset())), "email_verified": row["email_verified_at"] is not None, "mfa_enabled": bool(row["mfa_enabled"]), "plan_key": entitlement["plan_key"], "billing_state": entitlement["billing_state"], "limits_json": json.dumps(entitlement["limits"], separators=(",", ":"))}
+    return {"user_id": principal.user_id, "email": str(row["email"]), "display_name": str(row["display_name"]), "workspace_id": principal.workspace_id, "workspace_name": str(row["workspace_name"]), "workspace_slug": str(row["workspace_slug"]), "role": principal.role, "permissions": sorted(ROLE_PERMISSIONS.get(principal.role, frozenset())), "platform_admin": bool(row["is_platform_admin"]), "email_verified": row["email_verified_at"] is not None, "mfa_enabled": bool(row["mfa_enabled"]), "plan_key": entitlement["plan_key"], "billing_state": entitlement["billing_state"], "limits_json": json.dumps(entitlement["limits"], separators=(",", ":"))}
 
 
 async def legacy_owner_principal() -> SessionPrincipal | None:
