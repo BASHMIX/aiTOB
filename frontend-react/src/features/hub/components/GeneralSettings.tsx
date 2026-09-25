@@ -9,9 +9,6 @@ export function GeneralSettings({ section = 'all', embedded = false }: { section
   const [settings, setSettings] = useState<any>({});
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null);
-  const [challongeOAuth, setChallongeOAuth] = useState<{ client_configured: boolean; redirect_configured: boolean; connected: boolean; callback_url: string | null } | null>(null);
-  const [oauthError, setOauthError] = useState<string | null>(null);
-  const [oauthBusy, setOauthBusy] = useState(false);
   const [emailStatus, setEmailStatus] = useState<{ provider: string; configured: boolean; from_configured: boolean; reason: string } | null>(null);
   const [emailRecipient, setEmailRecipient] = useState('');
   const [emailTestBusy, setEmailTestBusy] = useState(false);
@@ -39,39 +36,6 @@ export function GeneralSettings({ section = 'all', embedded = false }: { section
       // Non-platform admins cannot inspect service-scoped email settings.
       setEmailStatus(null);
     }
-    // OAuth status is helpful UI state, but a temporary status failure must
-    // never hide already-saved connection settings from the administrator.
-    try {
-      const challongeOAuthRes = await axios.get('/api/auth/challonge/status');
-      setChallongeOAuth(challongeOAuthRes.data);
-    } catch (e) {
-      console.error('Failed to load Challonge OAuth status', e);
-      setChallongeOAuth(null);
-    }
-  };
-
-  const loadChallongeOAuthStatus = async () => {
-    try {
-      const res = await axios.get('/api/auth/challonge/status');
-      setChallongeOAuth(res.data);
-      return res.data;
-    } catch (e) {
-      setChallongeOAuth(null);
-      return null;
-    }
-  };
-
-  const oauthConnectionPayload = () => {
-    const payload: Record<string, string> = {};
-    for (const key of [
-      'CHALLONGE_OAUTH_CLIENT_ID',
-      'CHALLONGE_OAUTH_CLIENT_SECRET',
-      'CHALLONGE_OAUTH_REDIRECT_URI',
-    ]) {
-      const value = env[key];
-      if (value && value !== 'configured') payload[key] = value;
-    }
-    return payload;
   };
 
   const showMsg = (text: string, ok = true) => {
@@ -82,11 +46,12 @@ export function GeneralSettings({ section = 'all', embedded = false }: { section
   const saveEnv = async () => {
     setIsSaving(true);
     try {
-      // We only send back the values that are editable
-      const res = await axios.patch('/api/env', env);
+      // Provider and Discord credentials are owned by Integration Accounts.
+      // Never echo the full GET /env projection back into this legacy-safe
+      // service setting endpoint: it contains configured markers for secrets.
+      const res = await axios.patch('/api/env', { API_BASE_URL: env.API_BASE_URL || '' });
       const envRes = await axios.get('/api/env');
       setEnv(envRes.data);
-      await loadChallongeOAuthStatus();
       showMsg(res.data.message || 'Connections saved.');
     } catch (e: any) {
       showMsg(e.response?.data?.message || 'Failed to update connections. Check the Hub password and API connection.', false);
@@ -140,52 +105,6 @@ export function GeneralSettings({ section = 'all', embedded = false }: { section
     } finally { setEmailTestBusy(false); }
   };
 
-  const connectChallongeOAuth = async () => {
-    setOauthError(null);
-    const callback = String(env.CHALLONGE_OAUTH_REDIRECT_URI || challongeOAuth?.callback_url || '').trim();
-    const clientId = String(env.CHALLONGE_OAUTH_CLIENT_ID || '').trim();
-    const clientSecret = String(env.CHALLONGE_OAUTH_CLIENT_SECRET || '');
-    if (!callback.startsWith('https://')) {
-      setOauthError('Enter the exact HTTPS callback URL from Challonge Connect.');
-      return;
-    }
-    if (!clientId && !challongeOAuth?.client_configured) {
-      setOauthError('Enter the Challonge Client ID first.');
-      return;
-    }
-    if (clientId && !clientSecret && !challongeOAuth?.client_configured) {
-      setOauthError('Enter the Client Secret first. It is saved server-side and is never shown again.');
-      return;
-    }
-    setOauthBusy(true);
-    try {
-      // A Connect click is explicit intent to save the OAuth form. This avoids
-      // forcing the organizer through a separate Save → refresh → Connect loop.
-      const payload = oauthConnectionPayload();
-      if (Object.keys(payload).length) {
-        await axios.patch('/api/env', payload);
-        const envRes = await axios.get('/api/env');
-        setEnv(envRes.data);
-      }
-      // The backend owns validation because it has the authoritative stored
-      // connection values. Do not block a valid Connect action on a stale or
-      // transient status request in the browser.
-      await loadChallongeOAuthStatus();
-      const res = await axios.post('/api/auth/challonge/connect');
-      window.location.assign(res.data.authorization_url);
-    } catch (e: any) {
-      setOauthError(e.response?.data?.message || 'Could not start the Challonge connection. Your settings were not lost.');
-    } finally {
-      setOauthBusy(false);
-    }
-  };
-
-  const oauthDraftReady = Boolean(
-    env.CHALLONGE_OAUTH_CLIENT_ID &&
-    env.CHALLONGE_OAUTH_CLIENT_SECRET &&
-    String(env.CHALLONGE_OAUTH_REDIRECT_URI || '').startsWith('https://'),
-  );
-  const oauthSavedReady = Boolean(challongeOAuth?.client_configured && challongeOAuth?.redirect_configured);
   const showConnections = section === 'all' || section === 'connections';
   const showSystem = section === 'all' || section === 'system';
   const showBot = section === 'all' || section === 'bot';
@@ -221,72 +140,17 @@ export function GeneralSettings({ section = 'all', embedded = false }: { section
               🔌
             </div>
             <div>
-              <h2 className="text-lg font-bold text-white">Connection support</h2>
-              <p className="text-xs text-textDim italic">OAuth callback and local Hub settings that support the account connections above.</p>
+              <h2 className="text-lg font-bold text-white">Service link</h2>
+              <p className="text-xs text-textDim italic">Public Hub address used by managed integrations and player links.</p>
             </div>
           </div>
 
           <div className="space-y-4">
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-mono text-gray-400 uppercase tracking-widest">Challonge API Key</label>
-              <input className="bg-appDark border border-white/10 rounded-md px-4 py-2 text-sm text-white focus:border-accentYellow outline-none" type="password"
-                placeholder={env.CHALLONGE_API_KEY ? '••••••••••••••••' : 'Keep empty to leave unchanged'} onChange={e => updateEnv('CHALLONGE_API_KEY', e.target.value)} />
-              <p className="text-[10px] text-gray-500 italic">Stored server-side only. Supports direct tournaments and optional communities.</p>
-            </div>
-
-            <div className="rounded-md border border-blue-400/20 bg-blue-400/5 p-4 flex flex-col gap-3" aria-labelledby="challonge-oauth-title">
-              <div>
-                <p id="challonge-oauth-title" className="text-xs font-mono text-blue-200 uppercase tracking-widest">Challonge OAuth</p>
-                <p className="text-[11px] text-gray-400 mt-1">Paste the exact HTTPS callback URL in Challonge Connect. Connect saves this form automatically; no page refresh is needed.</p>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-xs text-gray-400">Client ID</label>
-                  <input className="bg-appDark border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-accentYellow outline-none"
-                    autoComplete="off" spellCheck={false} value={env.CHALLONGE_OAUTH_CLIENT_ID || ''} onChange={e => updateEnv('CHALLONGE_OAUTH_CLIENT_ID', e.target.value)} />
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-xs text-gray-400">Client Secret</label>
-                  <input className="bg-appDark border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-accentYellow outline-none" type="password"
-                    autoComplete="new-password" placeholder={env.CHALLONGE_OAUTH_CLIENT_SECRET ? 'Saved securely — enter only to replace' : 'Paste the client secret'} onChange={e => updateEnv('CHALLONGE_OAUTH_CLIENT_SECRET', e.target.value)} />
-                </div>
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs text-gray-400">OAuth Callback URL</label>
-                <input className="bg-appDark border border-white/10 rounded-md px-3 py-2 text-sm text-white focus:border-accentYellow outline-none"
-                  placeholder="https://your-public-host/api/auth/challonge/callback"
-                  type="url" inputMode="url" autoComplete="url" spellCheck={false} value={env.CHALLONGE_OAUTH_REDIRECT_URI || ''} onChange={e => updateEnv('CHALLONGE_OAUTH_REDIRECT_URI', e.target.value)} />
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span className={`text-[11px] ${challongeOAuth?.connected ? 'text-statusGreen' : 'text-gray-400'}`} aria-live="polite">
-                  {challongeOAuth?.connected ? '● Connected with OAuth' : oauthSavedReady ? '○ Ready to connect' : '○ Configuration required'}
-                </span>
-                <button onClick={connectChallongeOAuth} disabled={oauthBusy || (!oauthDraftReady && !oauthSavedReady)}
-                  className="px-3 py-1.5 rounded bg-blue-600 text-white text-xs font-bold disabled:opacity-40">
-                  {oauthBusy ? 'Opening Challonge…' : challongeOAuth?.connected ? 'Reconnect Challonge' : 'Connect Challonge'}
-                </button>
-              </div>
-              {oauthError && <p className="text-xs text-statusRed" role="alert">{oauthError}</p>}
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-mono text-gray-400 uppercase tracking-widest">Discord Public Channel ID</label>
-              <input 
-                className="bg-appDark border border-white/10 rounded-md px-4 py-2 text-sm text-white focus:border-accentYellow outline-none"
-                value={env.MATCH_CALL_CHANNEL_ID || ''}
-                onChange={e => updateEnv('MATCH_CALL_CHANNEL_ID', e.target.value)}
-              />
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-mono text-gray-400 uppercase tracking-widest">Discord Bot Token</label>
-              <input
-                className="bg-appDark border border-white/10 rounded-md px-4 py-2 text-sm text-white focus:border-accentYellow outline-none"
-                type="password"
-                placeholder="Keep empty to leave unchanged"
-                onChange={e => updateEnv('DISCORD_BOT_TOKEN', e.target.value)}
-              />
-              <p className="text-[10px] text-gray-500 italic">Current: {env.DISCORD_BOT_TOKEN ? '••••••••' : 'Not set'} · Restart the bot process after rotating.</p>
+            <div className="rounded-md border border-indigo-300/20 bg-indigo-300/5 p-4">
+              <p className="text-xs font-mono uppercase tracking-widest text-indigo-200">Managed integrations</p>
+              <p className="mt-1 text-[11px] leading-relaxed text-gray-400">
+                Install Discord and connect tournament providers through Integration Accounts above. The aiTOB bot token and OAuth application credentials are deployment-owned and are never entered per Workspace.
+              </p>
             </div>
 
             <div className="flex flex-col gap-1.5">
@@ -308,7 +172,7 @@ export function GeneralSettings({ section = 'all', embedded = false }: { section
               disabled={isSaving}
               className="flex-1 bg-accentYellow hover:bg-yellow-500 text-black font-bold py-2.5 rounded-lg transition-all shadow-lg active:scale-95 disabled:opacity-50"
             >
-              Update Connections
+              Update service URL
             </button>
             <button 
               onClick={reconnect}

@@ -35,6 +35,8 @@ from backend.api.routers.ai_service import router as ai_service_router
 from backend.api.routers.session import router as session_router
 from backend.api.routers.entitlements import router as entitlements_router
 from backend.api.routers.player_profiles import router as player_profiles_router
+from backend.api.routers.provider_oauth import router as provider_oauth_router
+from backend.api.routers.tournament_setup import router as tournament_setup_router
 
 load_dotenv()
 logger = logging.getLogger("aitob.api")
@@ -215,6 +217,8 @@ app.include_router(planned_streams_router, prefix="/api")
 app.include_router(providers_router, prefix="/api/providers")
 app.include_router(challonge_oauth_router, prefix="/api/auth")
 app.include_router(discord_oauth_router, prefix="/api")
+app.include_router(provider_oauth_router, prefix="/api/auth")
+app.include_router(tournament_setup_router, prefix="/api/tournament-setup")
 app.include_router(action_proposals_router, prefix="/api")
 app.include_router(organizer_console_router, prefix="/api")
 app.include_router(ai_service_router, prefix="/api")

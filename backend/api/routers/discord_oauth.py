@@ -109,6 +109,19 @@ async def discord_callback(
                 if item.get("provider_type") == "discord"
                 and str(item.get("external_account_id")) == str(guild_id)
             ), None)
+            if not account:
+                # A pre-managed-bot installation may already own tournament
+                # bindings and destinations under the synthetic `legacy`
+                # identity. Reuse that single workspace account so OAuth
+                # upgrades it in place instead of leaving a duplicate card
+                # and splitting runtime routing across two Discord accounts.
+                legacy_accounts = [
+                    item for item in accounts
+                    if item.get("provider_type") == "discord"
+                    and str(item.get("external_account_id")) == "legacy"
+                ]
+                if len(legacy_accounts) == 1:
+                    account = legacy_accounts[0]
             metadata = {
                 "guild_id": str(guild_id),
                 "guild_name": guild["name"],

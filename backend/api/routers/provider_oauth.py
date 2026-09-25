@@ -165,11 +165,14 @@ async def _challonge_identity(token: str) -> dict:
             "Authorization": f"Bearer {token}", "Authorization-Type": "v2", "Accept": "application/json",
         })
     if response.is_error:
-        return {"id": "oauth-user", "name": "Challonge account"}
+        raise RuntimeError("Challonge could not verify the connected account.")
     payload = response.json()
     data = payload.get("data") if isinstance(payload, dict) else None
     attrs = (data or {}).get("attributes") if isinstance(data, dict) else {}
-    return {"id": (data or {}).get("id") or "oauth-user", "name": (attrs or {}).get("username") or (attrs or {}).get("email") or "Challonge account"}
+    external_id = (data or {}).get("id")
+    if external_id is None:
+        raise RuntimeError("Challonge returned no connected account identity.")
+    return {"id": external_id, "name": (attrs or {}).get("username") or (attrs or {}).get("email") or "Challonge account"}
 
 
 async def _upsert_oauth_account(provider: str, workspace_id: str, token: dict) -> str:
@@ -185,9 +188,24 @@ async def _upsert_oauth_account(provider: str, workspace_id: str, token: dict) -
     )
     accounts = await integrations.list_integration_accounts(workspace_id)
     account = next((item for item in accounts if item["provider_type"] == provider and item["external_account_id"] == external_id), None)
+    if not account:
+        legacy_accounts = [
+            item for item in accounts
+            if item["provider_type"] == provider and item["external_account_id"] == "legacy"
+        ]
+        # Migration created at most one legacy account per provider/workspace.
+        # Reuse it only when the choice is unambiguous so tournament and scope
+        # references keep the same durable account id after OAuth consent.
+        if len(legacy_accounts) == 1:
+            account = legacy_accounts[0]
     if account:
         account_id = str(account["id"])
-        await integrations.update_integration_account(account_id, workspace_id=workspace_id, display_name=display_name)
+        await integrations.update_integration_account(
+            account_id,
+            workspace_id=workspace_id,
+            external_account_id=external_id,
+            display_name=display_name,
+        )
     else:
         account = await integrations.create_integration_account(workspace_id, provider, external_id, display_name)
         account_id = str(account["id"])

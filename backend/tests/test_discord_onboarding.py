@@ -9,7 +9,9 @@ from fastapi import HTTPException
 from backend.api.routers import discord_oauth, integrations as integrations_api
 from backend.api.routers.discord_oauth import _hash
 from backend.core import database
+from backend.core import discord_api
 from backend.core.discord_api import authorization_url
+from backend.core.schema_migrations import migration_statements
 from backend.api.schemas import IntegrationAccountRequest, IntegrationCredentialRequest, IntegrationDestinationRequest
 
 
@@ -48,6 +50,83 @@ def test_discord_install_url_uses_managed_application_and_required_scopes(monkey
 
 
 @pytest.mark.asyncio
+async def test_discord_guild_discovery_resolves_the_managed_bot_member(monkeypatch):
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "managed-token")
+    requested_paths = []
+
+    async def request(method, path, *, token, **_kwargs):
+        assert method == "GET" and token == "managed-token"
+        requested_paths.append(path)
+        responses = {
+            "/users/@me": {"id": "bot-1"},
+            "/guilds/guild-1": {"id": "guild-1", "name": "Arena"},
+            "/guilds/guild-1/channels": [{
+                "id": "channel-1", "name": "matches", "type": 0,
+                "permission_overwrites": [],
+            }],
+            "/guilds/guild-1/roles": [{
+                "id": "guild-1", "name": "@everyone", "permissions": str(1 << 10),
+            }],
+            "/guilds/guild-1/members/bot-1": {"roles": []},
+        }
+        return responses[path]
+
+    monkeypatch.setattr(discord_api, "_request", request)
+    result = await discord_api.discover_guild("guild-1")
+
+    assert result["guild"] == {"id": "guild-1", "name": "Arena"}
+    assert result["channels"][0]["id"] == "channel-1"
+    assert "/guilds/guild-1/members/bot-1" in requested_paths
+    assert all(not path.endswith("/members/@me") for path in requested_paths)
+
+
+@pytest.mark.asyncio
+async def test_legacy_discord_oauth_state_schema_is_upgraded_for_hub_installation(
+    postgres_repository_database,
+):
+    targets = {
+        "ALTER TABLE discord_oauth_states ALTER COLUMN draft_id DROP NOT NULL",
+        "ALTER TABLE discord_oauth_states ADD COLUMN IF NOT EXISTS account_id TEXT",
+        "ALTER TABLE discord_oauth_states ADD COLUMN IF NOT EXISTS consumed_at TIMESTAMP",
+    }
+    migration_ids = {
+        migration_id for migration_id, _phase, statement in migration_statements()
+        if statement in targets
+    }
+    assert len(migration_ids) == len(targets)
+
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute("ALTER TABLE discord_oauth_states DROP COLUMN account_id")
+        await db.execute("ALTER TABLE discord_oauth_states DROP COLUMN consumed_at")
+        await db.execute("ALTER TABLE discord_oauth_states ALTER COLUMN draft_id SET NOT NULL")
+        for migration_id in migration_ids:
+            await db.execute(
+                "DELETE FROM schema_migration_history WHERE migration_id=?",
+                (migration_id,),
+            )
+        await db.commit()
+
+    await database.init_db()
+
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
+        columns = await (await db.execute(
+            "SELECT column_name, is_nullable FROM information_schema.columns "
+            "WHERE table_schema='public' AND table_name='discord_oauth_states'"
+        )).fetchall()
+        projection = {str(row[0]): str(row[1]) for row in columns}
+        await db.execute(
+            "INSERT INTO discord_oauth_states"
+            "(state_hash,workspace_id,actor_id,draft_id,return_step,expires_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (_hash("hub-install"), "w", "u", None, "connections", int(time.time()) + 60),
+        )
+        await db.commit()
+
+    assert projection["draft_id"] == "YES"
+    assert {"account_id", "consumed_at"}.issubset(projection)
+
+
+@pytest.mark.asyncio
 async def test_discord_callback_verifies_installer_and_updates_draft(postgres_repository_database, monkeypatch):
     await _seed()
     async with database.dbapi.connect(database.DATABASE_DSN) as db:
@@ -80,6 +159,60 @@ async def test_discord_callback_verifies_installer_and_updates_draft(postgres_re
     draft = await __import__("backend.core.tournament_setup", fromlist=["get_draft"]).get_draft("d", "w")
     assert draft["discord_setup"]["guild_id"] == "guild-1"
     assert draft["discord_setup"]["discord_account_id"] == accounts[0]["id"]
+
+
+@pytest.mark.asyncio
+async def test_discord_callback_upgrades_single_legacy_account_in_place(
+    postgres_repository_database,
+    monkeypatch,
+):
+    await _seed()
+    core_integrations = __import__(
+        "backend.core.integrations",
+        fromlist=["create_integration_account", "add_integration_destination", "list_integration_accounts", "list_integration_destinations"],
+    )
+    legacy = await core_integrations.create_integration_account(
+        "w", "discord", "legacy", "Migrated Discord",
+    )
+    legacy_destination = await core_integrations.add_integration_destination(
+        legacy["id"], "match_call_channel", "channel-1", "Migrated channel",
+        workspace_id="w",
+    )
+    async with database.dbapi.connect(database.DATABASE_DSN) as db:
+        await db.execute(
+            "INSERT INTO discord_oauth_states(state_hash,workspace_id,actor_id,draft_id,return_step,expires_at) VALUES (?,?,?,?,?,?)",
+            (_hash("legacy-upgrade"), "w", "u", None, "connections", int(time.time()) + 60),
+        )
+        await db.commit()
+
+    async def exchange(_code):
+        return {"access_token": "short-lived-user-token", "scope": "identify guilds bot applications.commands"}
+
+    async def installer(_token, guild_id):
+        return {"user": {"id": "installer-1"}, "guild": {"id": guild_id, "permissions": str(1 << 5)}}
+
+    async def discover(guild_id):
+        return {"guild": {"id": guild_id, "name": "Arena"}, "channels": [], "roles": []}
+
+    monkeypatch.setattr(discord_oauth, "exchange_code", exchange)
+    monkeypatch.setattr(discord_oauth, "authorize_installer", installer)
+    monkeypatch.setattr(discord_oauth, "discover_guild", discover)
+    response = await discord_oauth.discord_callback(
+        code="code", state="legacy-upgrade", guild_id="guild-1",
+    )
+
+    assert "discord=authorized" in response.headers["location"]
+    accounts = await core_integrations.list_integration_accounts("w")
+    discord_accounts = [item for item in accounts if item["provider_type"] == "discord"]
+    assert [(item["id"], item["external_account_id"], item["display_name"]) for item in discord_accounts] == [
+        (legacy["id"], "guild-1", "Arena"),
+    ]
+    destinations = await core_integrations.list_integration_destinations(
+        legacy["id"], workspace_id="w",
+    )
+    assert [(item["id"], item["display_name"], item["configured"]) for item in destinations] == [
+        (legacy_destination["id"], "Migrated channel", True),
+    ]
 
 
 @pytest.mark.asyncio

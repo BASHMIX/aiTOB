@@ -125,11 +125,17 @@ def _effective_channel_bits(
 
 async def discover_guild(guild_id: str) -> dict[str, Any]:
     token = _required_env("DISCORD_BOT_TOKEN")
+    bot_user = await _request("GET", "/users/@me", token=token)
+    member_id = str(bot_user.get("id") or "")
+    if not member_id:
+        raise DiscordAPIError("Discord did not return the managed bot identity")
     guild = await _request("GET", f"/guilds/{guild_id}", token=token)
     channels = await _request("GET", f"/guilds/{guild_id}/channels", token=token)
     roles = await _request("GET", f"/guilds/{guild_id}/roles", token=token)
-    member = await _request("GET", f"/guilds/{guild_id}/members/@me", token=token)
-    member_id = str((member.get("user") or {}).get("id") or "")
+    # Discord has no /guilds/{guild}/members/@me bot endpoint. Resolve the
+    # managed application's bot identity once, then request that guild member
+    # explicitly so channel permission calculation uses the real role set.
+    member = await _request("GET", f"/guilds/{guild_id}/members/{member_id}", token=token)
     member_roles = [str(value) for value in member.get("roles") or []]
     safe_channels = []
     for channel in channels:

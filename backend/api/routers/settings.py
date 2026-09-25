@@ -33,7 +33,9 @@ _SECRET_KEYS = {
 }
 
 _MIGRATED_INTEGRATION_KEYS = {
-    "DISCORD_BOT_TOKEN", "MATCH_CALL_CHANNEL_ID", "CHALLONGE_API_KEY",
+    "DISCORD_BOT_TOKEN", "MATCH_CALL_CHANNEL_ID", "STARTGG_API_TOKEN",
+    "STARTGG_CLIENT_ID", "STARTGG_CLIENT_SECRET", "STARTGG_OAUTH_REDIRECT_URI",
+    "CHALLONGE_API_KEY",
     "CHALLONGE_OAUTH_CLIENT_ID", "CHALLONGE_OAUTH_CLIENT_SECRET",
     "CHALLONGE_OAUTH_REDIRECT_URI", "CHALLONGE_OAUTH_ACCESS_TOKEN",
     "CHALLONGE_OAUTH_REFRESH_TOKEN", "CHALLONGE_OAUTH_EXPIRES_AT",
@@ -109,7 +111,11 @@ async def api_patch_env(body: PatchEnvRequest):
     d = body.model_dump(exclude_none=True)
     attempted_legacy = sorted(key for key in d if key in _MIGRATED_INTEGRATION_KEYS)
     if attempted_legacy:
-        raise HTTPException(409, "Provider and Discord credentials are account-scoped. Use Integration Accounts.")
+        raise HTTPException(
+            409,
+            "Provider credentials are account-scoped and OAuth application credentials are deployment-owned. "
+            "Use Integration Accounts or deployment configuration.",
+        )
     secret_keys = {
         "STARTGG_API_TOKEN", "STARTGG_CLIENT_SECRET", "CHALLONGE_API_KEY",
         "CHALLONGE_OAUTH_CLIENT_SECRET", "CHALLONGE_OAUTH_ACCESS_TOKEN",

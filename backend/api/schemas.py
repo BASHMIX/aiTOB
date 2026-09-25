@@ -10,6 +10,47 @@ class ProviderFeatureFlagsResponse(BaseModel):
     challonge_dq_commands_enabled: bool = False
 
 
+class SetupDraftResponse(BaseModel):
+    """Safe, resumable Tournament Setup projection returned to the browser."""
+
+    id: str
+    workspace_id: str
+    revision: int = Field(ge=0)
+    status: Literal["editing", "ready", "materialized", "abandoned"]
+    current_step: Literal["provider", "tournament", "discord", "assistant", "review"]
+    completed_steps: List[Literal["provider", "tournament", "discord", "assistant", "review"]] = Field(default_factory=list)
+    provider_scope: Optional[Dict[str, Any]] = None
+    tournament_review: Dict[str, Any] = Field(default_factory=dict)
+    operating_profile: Dict[str, Any] = Field(default_factory=dict)
+    discord_setup: Dict[str, Any] = Field(default_factory=dict)
+    assistant_setup: Dict[str, Any] = Field(default_factory=dict)
+    validation: Dict[str, Any] = Field(default_factory=dict)
+    materialized_tournament_id: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class SetupDraftSectionPatch(BaseModel):
+    section: Literal[
+        "provider_scope", "tournament_review", "operating_profile",
+        "discord_setup", "assistant_setup", "navigation",
+    ]
+    value: Dict[str, Any] = Field(default_factory=dict)
+    current_step: Optional[Literal["provider", "tournament", "discord", "assistant", "review"]] = None
+
+
+class ProviderScopeResolveRequest(BaseModel):
+    revision: int = Field(ge=0)
+    provider_account_id: str = Field(min_length=1, max_length=100)
+    locator: str = Field(min_length=1, max_length=1000)
+    challonge_subdomain: Optional[str] = Field(default=None, max_length=100)
+
+
+class ProviderScopeSelectRequest(BaseModel):
+    revision: int = Field(ge=0)
+    external_scope_id: str = Field(min_length=1, max_length=300)
+
+
 class ProviderStateProjectionV2(BaseModel):
     """Dark API model only; no Phase 2 route exposes or consumes it."""
 
@@ -334,7 +375,7 @@ class AIConnectionTestRequest(BaseModel):
 
 
 class IntegrationAccountRequest(BaseModel):
-    provider_type: str = Field(pattern="^(discord|challonge)$")
+    provider_type: str = Field(pattern="^(discord|challonge|startgg)$")
     external_account_id: str = Field(min_length=1, max_length=200)
     display_name: str = Field(min_length=1, max_length=200)
     metadata: Dict[str, Any] = Field(default_factory=dict)

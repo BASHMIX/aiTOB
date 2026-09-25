@@ -1384,5 +1384,11 @@ MIGRATIONS = [
     "CREATE TABLE IF NOT EXISTS tournament_entrant_overrides (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id), provider TEXT NOT NULL DEFAULT 'startgg', tournament_slug TEXT NOT NULL, event_id TEXT NOT NULL, entrant_id TEXT NOT NULL, display_name TEXT, prefix TEXT, country TEXT, avatar_url TEXT, character_id TEXT, character_name TEXT, character_image_url TEXT, notes TEXT, updated_by TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE (workspace_id, provider, tournament_slug, event_id, entrant_id))",
     "ALTER TABLE tournament_entrant_overrides ADD COLUMN IF NOT EXISTS notes TEXT",
     "ALTER TABLE tournament_entrant_overrides ADD COLUMN IF NOT EXISTS updated_by TEXT",
+    # Early managed-Discord builds required a tournament setup draft for every
+    # OAuth attempt. Connections can now be installed directly from the Hub,
+    # where no draft exists, so legacy databases must accept a NULL draft_id.
+    "ALTER TABLE discord_oauth_states ALTER COLUMN draft_id DROP NOT NULL",
+    "ALTER TABLE discord_oauth_states ADD COLUMN IF NOT EXISTS account_id TEXT",
+    "ALTER TABLE discord_oauth_states ADD COLUMN IF NOT EXISTS consumed_at TIMESTAMP",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_player_profiles_workspace_discord ON player_profiles (workspace_id, discord_id) WHERE discord_id IS NOT NULL",
 ]

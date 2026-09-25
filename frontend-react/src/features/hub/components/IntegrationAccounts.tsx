@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
-import startGgLogo from '@/assets/Start.gg.svg';
 
 type AccountProviderType = 'discord' | 'challonge' | 'startgg';
 type ProviderType = AccountProviderType;
@@ -20,7 +19,7 @@ type DiscordChannel = { id: string; name: string; ready: boolean };
 const providerMeta: Record<ProviderType, ProviderMeta> = {
   discord: { label: 'Discord', icon: '✦', credential: 'Managed by aiTOB', identity: 'Connected server ID', destination: 'No match-call channel configured' },
   challonge: { label: 'Challonge', icon: '⌘', credential: 'API key or account token', identity: 'Challonge account ID', destination: 'Tournament destinations are selected per tournament' },
-  startgg: { label: 'Start.gg', icon: '◆', credential: 'API token', identity: 'Shared provider credential', destination: 'Configured above as a shared provider connection' },
+  startgg: { label: 'Start.gg', icon: '◆', credential: 'API token', identity: 'Start.gg account ID', destination: 'Tournament destinations are selected per tournament' },
 };
 
 // Integration records are durable configuration.  A value written by an
@@ -47,12 +46,6 @@ function StatusPill({ configured, status }: { configured: boolean; status: strin
 
 export function IntegrationAccounts() {
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [startggConfigured, setStartggConfigured] = useState(false);
-  const [startggToken, setStartggToken] = useState('');
-  const [startggClientId, setStartggClientId] = useState('');
-  const [startggClientSecret, setStartggClientSecret] = useState('');
-  const [startggClientConfigured, setStartggClientConfigured] = useState(false);
-  const [startggTest, setStartggTest] = useState<string | null>(null);
   const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null);
   const [providerFilter, setProviderFilter] = useState<'all' | ProviderType>('all');
   const [draft, setDraft] = useState<{ provider_type: AccountProviderType; external_account_id: string; display_name: string }>({ provider_type: 'challonge', external_account_id: '', display_name: '' });
@@ -87,16 +80,8 @@ export function IntegrationAccounts() {
 
   const load = async () => {
     try {
-      const [accountsResponse, environmentResponse] = await Promise.all([
-        axios.get('/api/integrations'),
-        axios.get('/api/env'),
-      ]);
+      const accountsResponse = await axios.get('/api/integrations');
       setAccounts(accountsResponse.data.accounts || []);
-      // The connection endpoint deliberately returns a configured marker, not
-      // the token. Keep this page write-only for credentials.
-      setStartggConfigured(Boolean(environmentResponse.data?.STARTGG_API_TOKEN));
-      setStartggClientId(environmentResponse.data?.STARTGG_CLIENT_ID || '');
-      setStartggClientConfigured(Boolean(environmentResponse.data?.STARTGG_CLIENT_SECRET));
     } catch {
       setMessage({ text: 'Could not load integration accounts.', ok: false });
     }
@@ -104,7 +89,6 @@ export function IntegrationAccounts() {
   useEffect(() => { void load(); }, []);
 
   const filteredAccounts = useMemo(() => accounts.filter((account) => providerFilter === 'all' || account.provider_type === providerFilter), [accounts, providerFilter]);
-  const showStartgg = providerFilter === 'all' || providerFilter === 'startgg';
   const showAccountControls = true;
   const showMessage = (text: string, ok = true) => setMessage({ text, ok });
 
@@ -185,51 +169,6 @@ export function IntegrationAccounts() {
     } finally { setBusy(null); }
   };
 
-  const saveStartggToken = async () => {
-    const payload: Record<string, string> = {};
-    if (startggToken.trim()) payload.STARTGG_API_TOKEN = startggToken.trim();
-    if (startggClientId.trim()) payload.STARTGG_CLIENT_ID = startggClientId.trim();
-    if (startggClientSecret.trim()) payload.STARTGG_CLIENT_SECRET = startggClientSecret.trim();
-    if (!Object.keys(payload).length) {
-      showMessage('Enter a Start.gg API token or OAuth application value before saving.', false);
-      return;
-    }
-    setBusy('startgg:save');
-    setStartggTest(null);
-    try {
-      await axios.patch('/api/env', payload);
-      setStartggToken('');
-      setStartggClientSecret('');
-      if (payload.STARTGG_API_TOKEN) setStartggConfigured(true);
-      if (payload.STARTGG_CLIENT_SECRET) setStartggClientConfigured(true);
-      showMessage('Start.gg settings saved server-side. Secrets are never returned to this page.');
-    } catch (error: any) {
-      showMessage(error.response?.data?.detail || 'Could not save the Start.gg token.', false);
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const testStartggConnection = async () => {
-    setBusy('startgg:test');
-    setStartggTest(null);
-    try {
-      const response = await axios.post('/api/settings/token-check');
-      const result = response.data || {};
-      if (result.valid && result.has_write_scope) {
-        setStartggTest('Connected — the token has tournament-organizer write access.');
-      } else if (result.valid) {
-        setStartggTest('Connected — the token is valid, but tournament-organizer write access is missing.');
-      } else {
-        setStartggTest('Start.gg could not verify this token. Check the account permissions and try again.');
-      }
-    } catch {
-      setStartggTest('Start.gg could not be reached for a token check.');
-    } finally {
-      setBusy(null);
-    }
-  };
-
   return (
     <div className="space-y-5 animate-fadeIn">
       <section className="rounded-xl border border-white/10 bg-cardDark p-4 shadow-sm sm:p-5">
@@ -245,52 +184,8 @@ export function IntegrationAccounts() {
         {message && <p role="status" className={`mt-4 rounded-lg border px-3 py-2 text-xs ${message.ok ? 'border-statusGreen/30 bg-statusGreen/10 text-statusGreen' : 'border-statusRed/30 bg-statusRed/10 text-statusRed'}`}>{message.text}</p>}
       </section>
 
-      {showStartgg && <section className="rounded-xl border border-white/10 bg-cardDark p-4 shadow-sm sm:p-5">
-        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-sky-400/10 p-2">
-              <img src={startGgLogo} alt="" aria-hidden="true" className="h-full w-full object-contain" />
-            </div>
-            <div>
-              <h2 className="text-sm font-bold text-white">Start.gg</h2>
-              <p className="mt-0.5 text-[11px] text-textDim">Tournament provider connection · shared service credential</p>
-            </div>
-          </div>
-          <StatusPill configured={startggConfigured} status={startggConfigured ? 'active' : 'pending'} />
-        </div>
-        <p className="mt-3 text-xs leading-relaxed text-textDim">Use this token for Start.gg bracket reads and organizer actions. It is stored on the Hub and is never returned to the browser. Discord and Challonge use the account-scoped cards below.</p>
-        <div className="mt-4 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
-          <input
-            type="password"
-            autoComplete="new-password"
-            className="w-full rounded-lg border border-white/10 bg-appDark px-3 py-2 text-sm text-white outline-none focus:border-accentYellow/60"
-            placeholder={startggConfigured ? 'Enter a new token only to replace the current one' : 'Paste Start.gg API token'}
-            value={startggToken}
-            onChange={(event) => setStartggToken(event.target.value)}
-          />
-          <button type="button" onClick={saveStartggToken} disabled={busy === 'startgg:save'} className="rounded-lg border border-accentYellow/35 bg-accentYellow/10 px-3 py-2 text-xs font-bold text-accentYellow transition-colors hover:bg-accentYellow/20 disabled:opacity-50">
-            {busy === 'startgg:save' ? 'Saving…' : startggConfigured ? 'Rotate token' : 'Save token'}
-          </button>
-          <button type="button" onClick={() => void signInProvider('startgg')} disabled={busy === 'oauth:startgg'} className="rounded-lg border border-sky-300/30 bg-sky-300/10 px-3 py-2 text-xs font-bold text-sky-100 transition-colors hover:bg-sky-300/20 disabled:opacity-50">
-            {busy === 'oauth:startgg' ? 'Opening…' : 'Sign in with Start.gg'}
-          </button>
-          <button type="button" onClick={testStartggConnection} disabled={!startggConfigured || busy === 'startgg:test'} className="rounded-lg border border-white/10 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-white/10 disabled:opacity-50">
-            {busy === 'startgg:test' ? 'Testing…' : 'Test connection'}
-          </button>
-        </div>
-        <div className="mt-3 rounded-lg border border-white/10 bg-black/10 p-3">
-          <p className="text-[10px] font-mono uppercase tracking-wider text-textDim">Optional player OAuth application</p>
-          <p className="mt-1 text-[11px] text-textDim">Only needed if aiTOB uses Start.gg player sign-in. These values do not replace the organizer API token.</p>
-          <div className="mt-2 grid gap-2 md:grid-cols-2">
-            <input className="rounded-lg border border-white/10 bg-appDark px-3 py-2 text-sm text-white outline-none focus:border-accentYellow/60" placeholder="OAuth Client ID" value={startggClientId} onChange={(event) => setStartggClientId(event.target.value)} />
-            <input type="password" autoComplete="new-password" className="rounded-lg border border-white/10 bg-appDark px-3 py-2 text-sm text-white outline-none focus:border-accentYellow/60" placeholder={startggClientConfigured ? 'Enter only to replace OAuth Client Secret' : 'OAuth Client Secret'} value={startggClientSecret} onChange={(event) => setStartggClientSecret(event.target.value)} />
-          </div>
-        </div>
-        {startggTest && <p role="status" className="mt-3 rounded-lg border border-white/10 bg-black/15 px-3 py-2 text-xs text-textDim">{startggTest}</p>}
-      </section>}
-
       {showAccountControls && <section className="rounded-xl border border-white/10 bg-cardDark p-4 shadow-sm sm:p-5">
-        <div className="mb-4 flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-sm font-bold text-white">Add an account</h2><p className="mt-1 text-xs text-textDim">Install the managed aiTOB app for Discord; customers never enter a bot token.</p></div><div className="flex flex-wrap gap-2"><button type="button" onClick={() => void connectDiscord()} disabled={busy === 'oauth:discord'} className="rounded-lg border border-indigo-300/30 bg-indigo-300/10 px-3 py-2 text-xs font-bold text-indigo-100 transition-colors hover:bg-indigo-300/20 disabled:opacity-50">{busy === 'oauth:discord' ? 'Opening…' : 'Connect Discord'}</button><button type="button" onClick={() => void signInProvider('challonge')} disabled={busy === 'oauth:challonge'} className="rounded-lg border border-blue-300/30 bg-blue-300/10 px-3 py-2 text-xs font-bold text-blue-100 transition-colors hover:bg-blue-300/20 disabled:opacity-50">{busy === 'oauth:challonge' ? 'Opening…' : 'Sign in with Challonge'}</button></div></div>
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-sm font-bold text-white">Add an account</h2><p className="mt-1 text-xs text-textDim">Connect a provider account or install the managed aiTOB app for Discord. Deployment OAuth secrets are never entered here.</p></div><div className="flex flex-wrap gap-2"><button type="button" onClick={() => void connectDiscord()} disabled={busy === 'oauth:discord'} className="rounded-lg border border-indigo-300/30 bg-indigo-300/10 px-3 py-2 text-xs font-bold text-indigo-100 transition-colors hover:bg-indigo-300/20 disabled:opacity-50">{busy === 'oauth:discord' ? 'Opening…' : 'Connect Discord'}</button><button type="button" onClick={() => void signInProvider('startgg')} disabled={busy === 'oauth:startgg'} className="rounded-lg border border-sky-300/30 bg-sky-300/10 px-3 py-2 text-xs font-bold text-sky-100 transition-colors hover:bg-sky-300/20 disabled:opacity-50">{busy === 'oauth:startgg' ? 'Opening…' : 'Sign in with Start.gg'}</button><button type="button" onClick={() => void signInProvider('challonge')} disabled={busy === 'oauth:challonge'} className="rounded-lg border border-blue-300/30 bg-blue-300/10 px-3 py-2 text-xs font-bold text-blue-100 transition-colors hover:bg-blue-300/20 disabled:opacity-50">{busy === 'oauth:challonge' ? 'Opening…' : 'Sign in with Challonge'}</button></div></div>
         <div className="grid gap-3 md:grid-cols-3">
           <label className="space-y-1.5"><span className="text-[10px] font-mono uppercase tracking-wider text-textDim">Provider</span><select className="w-full rounded-lg border border-white/10 bg-appDark px-3 py-2 text-sm text-white outline-none focus:border-accentYellow/60" value={draft.provider_type} onChange={(event) => setDraft({ ...draft, provider_type: event.target.value as AccountProviderType })}><option value="challonge">Challonge</option><option value="startgg">Start.gg</option></select></label>
           <label className="space-y-1.5"><span className="text-[10px] font-mono uppercase tracking-wider text-textDim">{providerMeta[draft.provider_type].identity}</span><input className="w-full rounded-lg border border-white/10 bg-appDark px-3 py-2 text-sm text-white outline-none focus:border-accentYellow/60" placeholder="Account identity" value={draft.external_account_id} onChange={(event) => setDraft({ ...draft, external_account_id: event.target.value })} /></label>
