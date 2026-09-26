@@ -28,6 +28,14 @@ _CHALLONGE_TOKEN = "https://api.challonge.com/oauth/token"
 _STARTGG_SCOPE = "user.identity tournament.manager tournament.reporter"
 
 
+def _managed_provider_oauth_enabled() -> bool:
+    """Keep platform-billed provider OAuth dark unless deliberately enabled."""
+
+    return str(os.getenv("AITOB_MANAGED_PROVIDER_OAUTH", "false")).strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
 def _hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -45,6 +53,8 @@ async def _callback_url(provider: str) -> str:
 
 
 async def _oauth_available(provider: str) -> bool:
+    if not _managed_provider_oauth_enabled():
+        return False
     prefix = "STARTGG" if provider == "startgg" else "CHALLONGE_OAUTH"
     client_id = await _secret(f"{prefix}_CLIENT_ID")
     client_secret = await _secret(f"{prefix}_CLIENT_SECRET")
@@ -111,6 +121,8 @@ async def begin_provider_oauth(
     provider = provider.strip().lower()
     if provider not in {"startgg", "challonge"}:
         raise HTTPException(422, "Unsupported provider OAuth flow.")
+    if not _managed_provider_oauth_enabled():
+        raise HTTPException(409, "Managed provider OAuth is disabled. Connect a Workspace-owned credential instead.")
     body = body or {}
     draft_id = str(body.get("draft_id") or "").strip() or None
     return_step = str(body.get("return_step") or "provider").strip()

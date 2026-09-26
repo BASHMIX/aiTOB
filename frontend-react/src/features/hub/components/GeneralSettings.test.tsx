@@ -38,7 +38,7 @@ describe('GeneralSettings connection boundary', () => {
     await waitFor(() => expect(screen.getByDisplayValue('https://aitob.example')).toBeInTheDocument());
     expect(screen.queryByText('Discord Bot Token')).not.toBeInTheDocument();
     expect(screen.queryByText('Discord Public Channel ID')).not.toBeInTheDocument();
-    expect(screen.getByText(/never entered per Workspace/i)).toBeInTheDocument();
+    expect(screen.getByText(/credentials owned and billed by this Workspace/i)).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Update service URL' }));
     await waitFor(() => expect(mockedAxios.patch).toHaveBeenCalledWith(

@@ -12,6 +12,7 @@ from backend.core.workspace_auth import SessionPrincipal
 from backend.api.schemas import (
     IntegrationAccountRequest, IntegrationCredentialRequest,
     IntegrationDestinationRequest, IntegrationOAuthApplicationRequest, ProviderIdentityLinkRequest,
+    ProviderCredentialConnectRequest,
 )
 from backend.core.identity_links import save_identity_override
 from backend.core.integrations import (
@@ -20,11 +21,13 @@ from backend.core.integrations import (
     disable_integration_account, list_integration_accounts, set_integration_secret,
     get_integration_account, list_integration_destinations,
     enable_integration_account, remove_integration_secret,
+    update_integration_account,
 )
 from backend.core.entitlements import EntitlementLimitExceeded, require_workspace_capacity
 from backend.core.discord_resources import permission_checks
 from backend.core.discord_api import DiscordAPIError, discover_guild, send_test_message
 from backend.core.tournament_templates import render_message, TemplateError
+from backend.core.provider_credentials import ProviderCredentialError, verify_provider_credential
 
 router = APIRouter(tags=["integrations"])
 
@@ -54,13 +57,7 @@ async def list_accounts(principal: SessionPrincipal = Depends(require_permission
 async def create_account(body: IntegrationAccountRequest, principal: SessionPrincipal = Depends(require_permission("integrations.manage"))):
     if body.provider_type == "discord":
         raise HTTPException(422, "Use the managed Discord installation flow")
-    try:
-        await require_workspace_capacity(principal.workspace_id, "integrations")
-        return await create_integration_account(principal.workspace_id, body.provider_type, body.external_account_id, body.display_name, metadata=body.metadata)
-    except EntitlementLimitExceeded as exc:
-        raise HTTPException(409, str(exc)) from exc
-    except IntegrationError as exc:
-        raise HTTPException(422, str(exc)) from exc
+    raise HTTPException(422, "Use the verified BYOC provider credential flow")
 
 
 @router.post("/integrations/oauth-applications", status_code=status.HTTP_201_CREATED)
@@ -73,6 +70,82 @@ async def create_application(body: IntegrationOAuthApplicationRequest, principal
         raise HTTPException(422, str(exc)) from exc
 
 
+@router.post("/integrations/provider-credentials/connect")
+async def connect_provider_credential(
+    body: ProviderCredentialConnectRequest,
+    principal: SessionPrincipal = Depends(require_permission("integrations.manage")),
+):
+    """Verify and store one workspace-owned provider credential.
+
+    Identity is always read from the provider. The organizer never supplies an
+    account id or display name, preventing a local label from masquerading as
+    the credential owner.
+    """
+
+    try:
+        verified = await verify_provider_credential(body.provider_type, body.credential)
+    except ProviderCredentialError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+    accounts = await list_integration_accounts(principal.workspace_id)
+    account = next(
+        (
+            item for item in accounts
+            if item["provider_type"] == verified.provider_type
+            and item["external_account_id"] == verified.external_account_id
+        ),
+        None,
+    )
+    if account is None:
+        legacy_accounts = [
+            item for item in accounts
+            if item["provider_type"] == verified.provider_type
+            and item["external_account_id"] == "legacy"
+        ]
+        # Preserve tournament bindings created by the one-time credential
+        # migration. An ambiguous legacy set is never guessed.
+        if len(legacy_accounts) == 1:
+            account = legacy_accounts[0]
+    try:
+        if account is None:
+            await require_workspace_capacity(principal.workspace_id, "integrations")
+            account = await create_integration_account(
+                principal.workspace_id,
+                verified.provider_type,
+                verified.external_account_id,
+                verified.display_name,
+                metadata=verified.metadata,
+            )
+        else:
+            account = await update_integration_account(
+                str(account["id"]),
+                workspace_id=principal.workspace_id,
+                external_account_id=verified.external_account_id,
+                display_name=verified.display_name,
+                metadata=verified.metadata,
+            )
+            if account.get("status") == "disabled":
+                account = await enable_integration_account(
+                    str(account["id"]), workspace_id=principal.workspace_id
+                )
+        await set_integration_secret(
+            str(account["id"]),
+            verified.secret_type,
+            body.credential.strip(),
+            workspace_id=principal.workspace_id,
+        )
+    except EntitlementLimitExceeded as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except IntegrationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {
+        "ok": True,
+        "account": account,
+        "configured": True,
+        "credential_owner": "workspace",
+    }
+
+
 @router.post("/integrations/{account_id}/credentials")
 async def rotate_credential(account_id: str, body: IntegrationCredentialRequest, principal: SessionPrincipal = Depends(require_permission("integrations.manage"))):
     account = await get_integration_account(account_id, workspace_id=principal.workspace_id)
@@ -80,6 +153,15 @@ async def rotate_credential(account_id: str, body: IntegrationCredentialRequest,
         raise HTTPException(404, "Integration account not found")
     if account.get("provider_type") == "discord":
         raise HTTPException(422, "Discord uses the platform-managed bot; customer bot tokens are not accepted")
+    if account.get("provider_type") in {"startgg", "challonge"}:
+        try:
+            verified = await verify_provider_credential(str(account["provider_type"]), body.secret)
+        except ProviderCredentialError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        if verified.external_account_id != str(account.get("external_account_id") or ""):
+            raise HTTPException(409, "This credential belongs to a different provider account. Connect it as a separate account.")
+        if body.secret_type != verified.secret_type:
+            raise HTTPException(422, "Credential type does not match the selected provider.")
     try:
         await set_integration_secret(account_id, body.secret_type, body.secret, workspace_id=principal.workspace_id)
     except IntegrationError as exc:

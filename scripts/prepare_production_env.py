@@ -19,6 +19,7 @@ RETIRED_KEYS = {
     "DISCORD_GUILD_ID",
     "AITOB_DISCORD_WORKSPACE_ID",
     "AITOB_RUNTIME_DATABASE_NAME",
+    "STARTGG_API_TOKEN",
     "PROVIDER_V2_CONTRACTS_ENABLED",
     "PROVIDER_COORDINATOR_ENABLED",
 }
@@ -126,6 +127,7 @@ def prepare(path: Path) -> dict[str, list[str]]:
     values["DEBUG"] = "False"
     values.setdefault("AITOB_LEGACY_HUB_PASSWORD_COMPAT", "false")
     values.setdefault("ALLOW_PUBLIC_REGISTRATION", "false")
+    values.setdefault("AITOB_MANAGED_PROVIDER_OAUTH", "false")
     values.setdefault("DISCORD_CLIENT_ID", "")
     values.setdefault("DISCORD_CLIENT_SECRET", "")
 
@@ -133,7 +135,8 @@ def prepare(path: Path) -> dict[str, list[str]]:
         "DATABASE_URL", "AITOB_POSTGRES_DB",
         "APP_PUBLIC_URL", "FRONTEND_BASE_URL", "DISCORD_OAUTH_REDIRECT_URI",
         "DISCORD_CLIENT_ID", "DISCORD_CLIENT_SECRET", "AITOB_SESSION_COOKIE_SECURE",
-        "AITOB_LEGACY_HUB_PASSWORD_COMPAT", "ALLOW_PUBLIC_REGISTRATION", "DEBUG",
+        "AITOB_LEGACY_HUB_PASSWORD_COMPAT", "ALLOW_PUBLIC_REGISTRATION",
+        "AITOB_MANAGED_PROVIDER_OAUTH", "DEBUG",
     }
     emitted: set[str] = set()
     output: list[str] = []

@@ -18,6 +18,7 @@ def test_prepare_removes_legacy_values_and_generates_distinct_keys(tmp_path):
         "\n".join([
             "DB_PATH=legacy.sqlite",
             "AITOB_DISCORD_WORKSPACE_ID=workspace-1",
+            "STARTGG_API_TOKEN=retired-shared-token",
             "API_BASE_URL=https://aitob.example",
             "APP_PUBLIC_URL=http://127.0.0.1:5173",
             "DATABASE_URL=postgresql://user:pass@example/legacy",
@@ -36,9 +37,13 @@ def test_prepare_removes_legacy_values_and_generates_distinct_keys(tmp_path):
     text = env_file.read_text(encoding="utf-8")
     values = dict(module._assignment(line) for line in text.splitlines() if module._assignment(line))
 
-    assert set(result["removed"]) == {"DB_PATH", "AITOB_DISCORD_WORKSPACE_ID", "AITOB_RUNTIME_DATABASE_NAME"}
+    assert set(result["removed"]) == {
+        "DB_PATH", "AITOB_DISCORD_WORKSPACE_ID", "AITOB_RUNTIME_DATABASE_NAME",
+        "STARTGG_API_TOKEN",
+    }
     assert "DB_PATH=" not in text and "AITOB_DISCORD_WORKSPACE_ID=" not in text
     assert "AITOB_RUNTIME_DATABASE_NAME=" not in text
+    assert "STARTGG_API_TOKEN=" not in text
     assert values["AITOB_POSTGRES_DB"] == "approved_staging"
     assert values["DATABASE_URL"].endswith("/approved_staging")
     assert values["APP_PUBLIC_URL"] == values["FRONTEND_BASE_URL"] == "https://aitob.example"
@@ -48,6 +53,7 @@ def test_prepare_removes_legacy_values_and_generates_distinct_keys(tmp_path):
     assert text.count("DISCORD_CLIENT_ID=") == 1
     assert text.count("DISCORD_CLIENT_SECRET=") == 1
     assert values["AITOB_SESSION_COOKIE_SECURE"] == "true"
+    assert values["AITOB_MANAGED_PROVIDER_OAUTH"] == "false"
     assert len({values[key] for key in module.GENERATED_KEYS}) == len(module.GENERATED_KEYS)
     assert module.validate(env_file) == []
 

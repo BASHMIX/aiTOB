@@ -95,6 +95,8 @@ async def test_provider_oauth_availability_requires_complete_https_configuration
     ):
         monkeypatch.delenv(key, raising=False)
 
+    monkeypatch.setenv("AITOB_MANAGED_PROVIDER_OAUTH", "true")
+
     assert await provider_oauth._oauth_available("startgg") is False
     assert await provider_oauth._oauth_available("challonge") is False
 

@@ -46,10 +46,9 @@ function StatusPill({ configured, status }: { configured: boolean; status: strin
 
 export function IntegrationAccounts() {
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [providerOAuth, setProviderOAuth] = useState({ startgg: false, challonge: false });
   const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null);
   const [providerFilter, setProviderFilter] = useState<'all' | ProviderType>('all');
-  const [draft, setDraft] = useState<{ provider_type: AccountProviderType; external_account_id: string; display_name: string }>({ provider_type: 'challonge', external_account_id: '', display_name: '' });
+  const [draft, setDraft] = useState<{ provider_type: 'challonge' | 'startgg'; credential: string }>({ provider_type: 'challonge', credential: '' });
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [discordChannels, setDiscordChannels] = useState<Record<string, DiscordChannel[]>>({});
@@ -67,29 +66,10 @@ export function IntegrationAccounts() {
     }
   };
 
-  const signInProvider = async (provider: 'startgg' | 'challonge') => {
-    setBusy(`oauth:${provider}`);
-    setMessage(null);
-    try {
-      const response = await axios.post(`/api/auth/providers/${provider}/connect`, { return_step: 'provider' });
-      window.location.assign(response.data.authorization_url);
-    } catch (error: any) {
-      setMessage({ text: error.response?.data?.detail || `Could not start ${provider} sign-in.`, ok: false });
-      setBusy(null);
-    }
-  };
-
   const load = async () => {
     try {
-      const [accountsResponse, capabilitiesResponse] = await Promise.all([
-        axios.get('/api/integrations'),
-        axios.get('/api/auth/providers/capabilities').catch(() => ({ data: { oauth: {} } })),
-      ]);
-      setAccounts(accountsResponse.data.accounts || []);
-      setProviderOAuth({
-        startgg: Boolean(capabilitiesResponse.data.oauth?.startgg),
-        challonge: Boolean(capabilitiesResponse.data.oauth?.challonge),
-      });
+      const accountsResponse = await axios.get('/api/integrations');
+      setAccounts((accountsResponse.data.accounts || []).filter((account: Account) => ['discord', 'challonge', 'startgg'].includes(account.provider_type)));
     } catch {
       setMessage({ text: 'Could not load integration accounts.', ok: false });
     }
@@ -100,19 +80,20 @@ export function IntegrationAccounts() {
   const showAccountControls = true;
   const showMessage = (text: string, ok = true) => setMessage({ text, ok });
 
-  const create = async () => {
-    if (!draft.external_account_id.trim() || !draft.display_name.trim()) {
-      showMessage('Enter a display name and account identity first.', false);
+  const connectProvider = async () => {
+    if (!draft.credential.trim()) {
+      showMessage(`Enter your ${providerMeta[draft.provider_type].credential.toLowerCase()} first.`, false);
       return;
     }
-    setBusy('create');
+    setBusy('connect-provider');
     try {
-      await axios.post('/api/integrations', draft);
-      setDraft({ provider_type: 'challonge', external_account_id: '', display_name: '' });
-      showMessage('Account created. Add its encrypted credential below.');
+      const response = await axios.post('/api/integrations/provider-credentials/connect', draft);
+      const accountName = response.data.account?.display_name || providerMeta[draft.provider_type].label;
+      setDraft((current) => ({ ...current, credential: '' }));
+      showMessage(`${accountName} verified and connected with this Workspace credential.`);
       await load();
     } catch (error: any) {
-      showMessage(error.response?.data?.detail || 'Could not create account.', false);
+      showMessage(error.response?.data?.detail || 'Could not verify this provider credential.', false);
     } finally {
       setBusy(null);
     }
@@ -193,13 +174,12 @@ export function IntegrationAccounts() {
       </section>
 
       {showAccountControls && <section className="rounded-xl border border-white/10 bg-cardDark p-4 shadow-sm sm:p-5">
-        <div className="mb-4 flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-sm font-bold text-white">Add an account</h2><p className="mt-1 text-xs text-textDim">Connect a provider account or install the managed aiTOB app for Discord. When provider OAuth is unavailable, add the account and store its encrypted token below.</p></div><div className="flex flex-wrap gap-2"><button type="button" onClick={() => void connectDiscord()} disabled={busy === 'oauth:discord'} className="rounded-lg border border-indigo-300/30 bg-indigo-300/10 px-3 py-2 text-xs font-bold text-indigo-100 transition-colors hover:bg-indigo-300/20 disabled:opacity-50">{busy === 'oauth:discord' ? 'Opening…' : 'Connect Discord'}</button>{providerOAuth.startgg && <button type="button" onClick={() => void signInProvider('startgg')} disabled={busy === 'oauth:startgg'} className="rounded-lg border border-sky-300/30 bg-sky-300/10 px-3 py-2 text-xs font-bold text-sky-100 transition-colors hover:bg-sky-300/20 disabled:opacity-50">{busy === 'oauth:startgg' ? 'Opening…' : 'Sign in with Start.gg'}</button>}{providerOAuth.challonge && <button type="button" onClick={() => void signInProvider('challonge')} disabled={busy === 'oauth:challonge'} className="rounded-lg border border-blue-300/30 bg-blue-300/10 px-3 py-2 text-xs font-bold text-blue-100 transition-colors hover:bg-blue-300/20 disabled:opacity-50">{busy === 'oauth:challonge' ? 'Opening…' : 'Sign in with Challonge'}</button>}</div></div>
-        <div className="grid gap-3 md:grid-cols-3">
-          <label className="space-y-1.5"><span className="text-[10px] font-mono uppercase tracking-wider text-textDim">Provider</span><select className="w-full rounded-lg border border-white/10 bg-appDark px-3 py-2 text-sm text-white outline-none focus:border-accentYellow/60" value={draft.provider_type} onChange={(event) => setDraft({ ...draft, provider_type: event.target.value as AccountProviderType })}><option value="challonge">Challonge</option><option value="startgg">Start.gg</option></select></label>
-          <label className="space-y-1.5"><span className="text-[10px] font-mono uppercase tracking-wider text-textDim">{providerMeta[draft.provider_type].identity}</span><input className="w-full rounded-lg border border-white/10 bg-appDark px-3 py-2 text-sm text-white outline-none focus:border-accentYellow/60" placeholder="Account identity" value={draft.external_account_id} onChange={(event) => setDraft({ ...draft, external_account_id: event.target.value })} /></label>
-          <label className="space-y-1.5"><span className="text-[10px] font-mono uppercase tracking-wider text-textDim">Display name</span><input className="w-full rounded-lg border border-white/10 bg-appDark px-3 py-2 text-sm text-white outline-none focus:border-accentYellow/60" placeholder="e.g. FNC test bot" value={draft.display_name} onChange={(event) => setDraft({ ...draft, display_name: event.target.value })} /></label>
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-sm font-bold text-white">Connect your provider account</h2><p className="mt-1 max-w-2xl text-xs text-textDim">Bring your own credential. aiTOB verifies it with the provider, reads the real account identity, and stores the credential encrypted for this Workspace only.</p></div><button type="button" onClick={() => void connectDiscord()} disabled={busy === 'oauth:discord'} className="rounded-lg border border-indigo-300/30 bg-indigo-300/10 px-3 py-2 text-xs font-bold text-indigo-100 transition-colors hover:bg-indigo-300/20 disabled:opacity-50">{busy === 'oauth:discord' ? 'Opening…' : 'Connect Discord'}</button></div>
+        <div className="grid gap-3 md:grid-cols-[minmax(12rem,0.45fr)_minmax(0,1fr)]">
+          <label className="space-y-1.5"><span className="text-[10px] font-mono uppercase tracking-wider text-textDim">Provider</span><select className="w-full rounded-lg border border-white/10 bg-appDark px-3 py-2 text-sm text-white outline-none focus:border-accentYellow/60" value={draft.provider_type} onChange={(event) => setDraft({ ...draft, provider_type: event.target.value as 'challonge' | 'startgg' })}><option value="challonge">Challonge</option><option value="startgg">Start.gg</option></select></label>
+          <label className="space-y-1.5"><span className="text-[10px] font-mono uppercase tracking-wider text-textDim">{providerMeta[draft.provider_type].credential}</span><input type="password" autoComplete="new-password" className="w-full rounded-lg border border-white/10 bg-appDark px-3 py-2 text-sm text-white outline-none focus:border-accentYellow/60" placeholder={draft.provider_type === 'startgg' ? 'Paste your Start.gg API token' : 'Paste your Challonge API key'} value={draft.credential} onChange={(event) => setDraft({ ...draft, credential: event.target.value })} /></label>
         </div>
-        <button type="button" onClick={create} disabled={busy === 'create'} className="mt-4 rounded-lg bg-accentYellow px-3 py-2 text-xs font-bold text-black transition-colors hover:bg-yellow-300 disabled:opacity-50">{busy === 'create' ? 'Adding…' : 'Add account'}</button>
+        <div className="mt-4 flex flex-wrap items-center gap-3"><button type="button" onClick={connectProvider} disabled={busy === 'connect-provider'} className="rounded-lg bg-accentYellow px-3 py-2 text-xs font-bold text-black transition-colors hover:bg-yellow-300 disabled:opacity-50">{busy === 'connect-provider' ? 'Verifying…' : `Verify & connect ${providerMeta[draft.provider_type].label}`}</button><p className="text-[11px] text-textDim">Account ID and display name are read from the provider; they are never entered manually.</p></div>
       </section>}
 
       <div className="space-y-3">

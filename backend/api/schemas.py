@@ -410,6 +410,11 @@ class IntegrationAccountRequest(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+class ProviderCredentialConnectRequest(BaseModel):
+    provider_type: Literal["challonge", "startgg"]
+    credential: str = Field(min_length=1, max_length=10_000)
+
+
 class IntegrationCredentialRequest(BaseModel):
     secret_type: str = Field(pattern="^(bot_token|api_key|access_token|refresh_token)$")
     secret: str = Field(min_length=1)

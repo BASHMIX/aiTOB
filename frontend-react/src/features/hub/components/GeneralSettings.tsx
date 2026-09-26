@@ -149,7 +149,7 @@ export function GeneralSettings({ section = 'all', embedded = false }: { section
             <div className="rounded-md border border-indigo-300/20 bg-indigo-300/5 p-4">
               <p className="text-xs font-mono uppercase tracking-widest text-indigo-200">Managed integrations</p>
               <p className="mt-1 text-[11px] leading-relaxed text-gray-400">
-                Install Discord and connect tournament providers through Integration Accounts above. The aiTOB bot token and OAuth application credentials are deployment-owned and are never entered per Workspace.
+                Discord uses the platform-managed aiTOB bot. Tournament and AI providers use credentials owned and billed by this Workspace through the connection cards above.
               </p>
             </div>
 

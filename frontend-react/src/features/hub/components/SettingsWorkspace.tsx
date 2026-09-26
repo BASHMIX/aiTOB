@@ -133,7 +133,8 @@ function TournamentWorkflowSettings() {
 }
 
 export function SettingsWorkspace() {
-  const [section, setSection] = useState<SettingsSection>('overview');
+  const requestedSection = new URLSearchParams(window.location.search).get('settings') as SettingsSection | null;
+  const [section, setSection] = useState<SettingsSection>(sections.some((item) => item.id === requestedSection) ? requestedSection! : 'overview');
   const canIntegrations = usePermission('integrations.manage');
   const canTournament = usePermission('tournament.manage');
   const canSettings = usePermission('settings.manage');
@@ -185,6 +186,7 @@ export function SettingsWorkspace() {
         {activeSection === 'connections' && (
           <div className="space-y-5">
             <IntegrationAccounts />
+            <AISettings connectionOnly />
             <GeneralSettings section="connections" embedded />
           </div>
         )}
