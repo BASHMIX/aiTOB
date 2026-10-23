@@ -193,3 +193,8 @@ logs/
 !docs/LIVE_TEST_RUNBOOK.md
 .doc/
 .docs/
+
+# Plugins build artifacts
+plugins/**/release/
+plugins/**/dist-release/
+plugins/**/*.zip

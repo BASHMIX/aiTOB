@@ -1,0 +1,64 @@
+{
+  "name": "aitob-station-agent",
+  "version": "1.0.0",
+  "description": "Official aiTOB Station Agent & Telemetry Bridge for Street Fighter 6 and OBS Studio",
+  "main": "dist-electron/main.cjs",
+  "type": "module",
+  "scripts": {
+    "dev": "node dev-runner.mjs",
+    "build:electron": "esbuild electron/main.ts --bundle --platform=node --target=node20 --external:electron --outfile=dist-electron/main.cjs && esbuild electron/preload.ts --bundle --platform=node --target=node20 --external:electron --outfile=dist-electron/preload.cjs",
+    "build:react": "vite build",
+    "build": "npm run build:electron && npm run build:react",
+    "pack": "electron-builder --dir",
+    "dist": "npm run build && electron-builder --win",
+    "preview": "vite preview"
+  },
+  "build": {
+    "appId": "com.aitob.stationagent",
+    "productName": "aiTOB Station Agent",
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "sf6_mod_files",
+        "to": "sf6_mod_files",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ]
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.14.0",
+    "obs-websocket-js": "^5.0.6",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "tailwind-merge": "^3.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "autoprefixer": "^10.5.0",
+    "electron": "^34.5.8",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.0",
+    "postcss": "^8.5.14",
+    "tailwindcss": "^3.4.19",
+    "typescript": "^5.6.3",
+    "vite": "^8.0.10"
+  }
+}

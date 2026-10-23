@@ -1,0 +1,7 @@
+node_modules/
+dist/
+dist-electron/
+dist-release/
+release/
+*.zip
+*.log
