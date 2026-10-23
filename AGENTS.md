@@ -49,3 +49,9 @@ npm run build
 Preserve unrelated user changes. Use PostgreSQL-native concurrency and
 transactions, keep external calls outside database transactions, and run the
 focused tests plus the frontend production build for affected behavior.
+
+<!-- SPECKIT START -->
+## Active Spec Kit feature
+
+- Tournament Results Media: `specs/006-results-media/plan.md`
+<!-- SPECKIT END -->

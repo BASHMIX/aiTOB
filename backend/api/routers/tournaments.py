@@ -9,10 +9,12 @@ from backend.core.database import (
     get_stations, set_tournament_sync_status, get_bracket_snapshot,
     get_live_sync_state_v2, get_setting, cancel_pending_dispatcher_work,
     get_tournament_game_metadata, set_tournament_game_metadata,
+    get_tournament_workspace_id,
 )
 from backend.core.providers.registry import get_provider_for_account, get_provider_for_tournament
 from backend.core.contracts.tournament_types import ProviderSet, ProviderTournament
 from backend.core.provider_sync_manager import sync_manager, serialize_set
+from backend.core.bracket_tree import extract_top8_bracket, extract_player_victory_path
 from backend.core.provider_projection import tournament_provider_projection
 from backend.core.challonge_resolution import resolution_service
 from backend.core.provider_feature_flags import get_provider_feature_flags
@@ -21,7 +23,7 @@ from backend.core.providers.challonge.client import ChallongeError, ChallongeRat
 from backend.core.database import persist_challonge_identity
 from backend.core.entitlements import EntitlementLimitExceeded, require_workspace_capacity
 from backend.api.ws_manager import manager as hub_mgr
-from backend.api.auth import verify_hub_password, require_permission
+from backend.api.auth import verify_hub_password, require_permission, optional_session_principal
 from backend.api.rollout import require_tournament_setup_wizard_enabled
 from backend.core.workspace_auth import SessionPrincipal
 from backend.api.schemas import (
@@ -355,6 +357,184 @@ async def api_get_sets(slug: str, principal: SessionPrincipal = Depends(require_
         "sync_status": t.get("provider_sync_status") or "stale",
         "stale_refresh_scheduled": scheduled,
         "economy_sync_on_stale_open": bool(t.get("economy_sync_on_stale_open", 1)),
+    }
+
+
+def _enrich_sets_with_player_overrides(sets: list[dict], overrides: dict) -> list[dict]:
+    if not overrides or not sets:
+        return sets
+    by_eid = {str(k): v for k, v in overrides.items() if k}
+    by_name = {
+        str(v.get("display_name") or v.get("name") or "").strip().lower(): v
+        for v in overrides.values()
+        if v.get("display_name") or v.get("name")
+    }
+    enriched = []
+    for raw_s in sets:
+        s = dict(raw_s)
+        p1_eid = str(s.get("p1_eid") or "")
+        p2_eid = str(s.get("p2_eid") or "")
+        ov1 = by_eid.get(p1_eid) or by_name.get(str(s.get("p1") or s.get("p1_name") or "").strip().lower())
+        if ov1:
+            if ov1.get("avatar_url"):
+                s["p1_avatar"] = ov1["avatar_url"]
+            if ov1.get("prefix") or ov1.get("team"):
+                s["p1_prefix"] = ov1.get("prefix") or ov1.get("team")
+            if ov1.get("country"):
+                s["p1_country"] = ov1["country"]
+            if ov1.get("display_name") or ov1.get("name"):
+                s["p1"] = ov1.get("display_name") or ov1.get("name")
+                s["p1_name"] = ov1.get("display_name") or ov1.get("name")
+            if ov1.get("character_image_url") or ov1.get("character_url"):
+                s["p1_character_url"] = ov1.get("character_image_url") or ov1.get("character_url")
+            if ov1.get("character_name") or ov1.get("character"):
+                s["p1_character"] = ov1.get("character_name") or ov1.get("character")
+        ov2 = by_eid.get(p2_eid) or by_name.get(str(s.get("p2") or s.get("p2_name") or "").strip().lower())
+        if ov2:
+            if ov2.get("avatar_url"):
+                s["p2_avatar"] = ov2["avatar_url"]
+            if ov2.get("prefix") or ov2.get("team"):
+                s["p2_prefix"] = ov2.get("prefix") or ov2.get("team")
+            if ov2.get("country"):
+                s["p2_country"] = ov2["country"]
+            if ov2.get("display_name") or ov2.get("name"):
+                s["p2"] = ov2.get("display_name") or ov2.get("name")
+                s["p2_name"] = ov2.get("display_name") or ov2.get("name")
+            if ov2.get("character_image_url") or ov2.get("character_url"):
+                s["p2_character_url"] = ov2.get("character_image_url") or ov2.get("character_url")
+            if ov2.get("character_name") or ov2.get("character"):
+                s["p2_character"] = ov2.get("character_name") or ov2.get("character")
+        enriched.append(s)
+    return enriched
+
+
+def _resolve_tournament_event_metadata(t: dict, sets: list[dict], requested_event_id: Optional[str] = None) -> tuple[str, str]:
+    game_name = str(t.get("game") or "")
+    event_name = str(t.get("event_name") or "")
+    target_eid = str(requested_event_id or (sets[0].get("event_id") if sets and sets[0].get("event_id") else "") or t.get("event_id") or "").strip()
+    raw = t.get("raw_data") or {}
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = {}
+    if isinstance(raw, dict):
+        events = raw.get("events") or raw.get("tournament", {}).get("events", [])
+        if isinstance(events, list):
+            for ev in events:
+                if str(ev.get("id")) == target_eid:
+                    if ev.get("name"):
+                        event_name = ev["name"]
+                    vg = ev.get("videogame")
+                    if isinstance(vg, dict) and vg.get("name"):
+                        game_name = vg["name"]
+                    elif ev.get("game"):
+                        game_name = ev["game"]
+                    break
+    return game_name, event_name
+
+
+@router.get(
+    "/{slug:path}/bracket-tree",
+    summary="Fetch structured Top 8 / Finals bracket tree for overlays",
+    responses={502: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+    operation_id="fetchTournamentBracketTree"
+)
+async def api_get_bracket_tree(
+    slug: str,
+    event_id: Optional[str] = None,
+    principal: Optional[SessionPrincipal] = Depends(optional_session_principal),
+):
+    """Return an authoritative Top 8 Double Elimination tree for overlay display."""
+    workspace_id = _workspace(principal) or await get_tournament_workspace_id(slug)
+    t = await get_tournament(slug, workspace_id)
+    if not t:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tournament not found")
+    if workspace_id:
+        await sync_manager.maybe_sync_on_stale_open(slug, workspace_id=workspace_id)
+    else:
+        await sync_manager.maybe_sync_on_stale_open(slug)
+    snapshot = await get_bracket_snapshot(slug, workspace_id)
+    sets = snapshot.get("sets") or []
+    overrides = await get_all_player_overrides(workspace_id=workspace_id)
+    try:
+        from backend.core.player_profiles import list_tournament_entrant_overrides
+        scoped_list = await list_tournament_entrant_overrides(
+            workspace_id=workspace_id or "",
+            tournament_slug=slug,
+            event_id=event_id,
+        )
+        for scoped in scoped_list:
+            eid = str(scoped.get("entrant_id") or "")
+            if eid:
+                base = dict(overrides.get(eid) or {})
+                for k in ("display_name", "prefix", "country", "avatar_url", "character_id", "character_name", "character_image_url"):
+                    if scoped.get(k):
+                        base[k] = scoped[k]
+                if scoped.get("character_name"):
+                    base["character"] = scoped["character_name"]
+                overrides[eid] = base
+    except Exception:
+        pass
+    sets = _enrich_sets_with_player_overrides(sets, overrides)
+    tree = extract_top8_bracket(sets, event_id=event_id)
+    game_name, event_name = _resolve_tournament_event_metadata(t, sets, requested_event_id=event_id)
+    return {
+        "tournament_slug": slug,
+        "tournament_name": t.get("name") or "",
+        "game_name": game_name,
+        "event_name": event_name,
+        "synced_at": snapshot.get("synced_at"),
+        **tree,
+    }
+
+
+@router.get(
+    "/{slug:path}/player-victory-path",
+    summary="Fetch a player's progressive victory path through the tournament",
+    responses={502: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+    operation_id="fetchTournamentPlayerVictoryPath",
+)
+async def api_get_player_victory_path(
+    slug: str,
+    player_id: Optional[str] = None,
+    player_name: Optional[str] = None,
+    event_id: Optional[str] = None,
+    principal: Optional[SessionPrincipal] = Depends(optional_session_principal),
+):
+    """Return an authoritative victory path (won sets grouped by stage) for overlay display."""
+    if not player_id and not player_name:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Either player_id or player_name is required",
+        )
+    workspace_id = _workspace(principal) or await get_tournament_workspace_id(slug)
+    t = await get_tournament(slug, workspace_id)
+    if not t:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tournament not found")
+    if workspace_id:
+        await sync_manager.maybe_sync_on_stale_open(slug, workspace_id=workspace_id)
+    else:
+        await sync_manager.maybe_sync_on_stale_open(slug)
+    snapshot = await get_bracket_snapshot(slug, workspace_id)
+    sets = snapshot.get("sets") or []
+    overrides = await get_all_player_overrides(workspace_id=workspace_id)
+    sets = _enrich_sets_with_player_overrides(sets, overrides)
+    path = extract_player_victory_path(
+        sets,
+        player_id=player_id,
+        player_name=player_name,
+        event_id=event_id,
+    )
+    game_name, event_name = _resolve_tournament_event_metadata(t, sets, requested_event_id=event_id)
+    return {
+        "tournament_slug": slug,
+        "tournament_name": t.get("name") or "",
+        "game_name": game_name,
+        "event_name": event_name,
+        "synced_at": snapshot.get("synced_at"),
+        "event_id": event_id,
+        **path,
     }
 
 

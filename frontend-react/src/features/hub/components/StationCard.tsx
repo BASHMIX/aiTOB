@@ -220,6 +220,15 @@ export function StationCard({ station, onReload, canManageStations = true, canMa
         </div>
         {(canManageStations || canManageOverlays) && <div className="flex gap-2 text-textDim">
           {canManageStations && (
+            <button
+              onClick={() => copyLink()}
+              title="Copy Station Agent / OBS Link (follows active slide)"
+              className="hover:text-white"
+            >
+              📋
+            </button>
+          )}
+          {canManageStations && (
           <button
             onClick={() => setSettingsOpen(true)}
             title="Station settings (stream, bot, overlay)"

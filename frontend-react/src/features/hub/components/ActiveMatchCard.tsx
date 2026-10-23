@@ -40,6 +40,36 @@ export function ActiveMatchCard({ match }: { match: any }) {
   const [stationOpen, setStationOpen] = useState(false);
   const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
   const stationRef = useRef<HTMLDivElement>(null);
+  const [ftOpen, setFtOpen] = useState(false);
+  const ftRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (ftRef.current && !ftRef.current.contains(event.target as Node)) {
+        setFtOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [ftRef]);
+
+  const updateBestOf = async (newBestOf: number) => {
+    setFtOpen(false);
+    setMatches(matches.map(m => m.set_id === match.set_id ? { ...m, best_of: newBestOf } : m));
+    try {
+      await axios.patch(`/api/active-matches/${match.set_id}`, { best_of: newBestOf });
+    } catch (e) {
+      console.error('Failed to update match format', e);
+    }
+  };
+
+  const getFormatLabel = (bestOf?: number) => {
+    if (bestOf === 5) return 'FT3';
+    if (bestOf === 7) return 'FT4';
+    if (bestOf === 9) return 'FT5';
+    if (bestOf === 13) return 'FT7';
+    return 'FT2';
+  };
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -369,7 +399,41 @@ export function ActiveMatchCard({ match }: { match: any }) {
       {/* ── Round / Timer ── */}
       <div className="px-3 py-1 text-[10px] text-textDim border-b border-white/5 flex items-center justify-between bg-black/10">
         <div className="truncate pr-2">
-          Round: <span className="text-textLight font-semibold">{match.round_name || '—'}</span>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span>Round: <span className="text-textLight font-semibold">{match.round_name || '—'}</span></span>
+            <div className="relative inline-block" ref={ftRef}>
+              <button
+                type="button"
+                disabled={!canOperate}
+                onClick={() => setFtOpen(!ftOpen)}
+                className="rounded border border-amber-400/30 bg-amber-400/10 px-1.5 py-0.5 text-[9px] font-bold text-amber-300 hover:bg-amber-400/20 transition-all flex items-center gap-0.5 leading-none cursor-pointer"
+                title="Match format (First to N). Click to change."
+              >
+                <span>{getFormatLabel(match.best_of)}</span>
+                {canOperate && <span className="text-[7px] opacity-70">▼</span>}
+              </button>
+              {ftOpen && (
+                <div className="absolute left-0 top-full mt-1 z-50 bg-cardDark border border-white/10 rounded-md shadow-2xl py-1 min-w-[85px] text-left animate-slideUp">
+                  {[
+                    { label: 'FT2 (Bo3)', bestOf: 3 },
+                    { label: 'FT3 (Bo5)', bestOf: 5 },
+                    { label: 'FT5 (Bo9)', bestOf: 9 },
+                    { label: 'FT7 (Bo13)', bestOf: 13 },
+                  ].map((opt) => (
+                    <button
+                      key={opt.bestOf}
+                      onClick={() => updateBestOf(opt.bestOf)}
+                      className={`w-full text-left px-2.5 py-1 text-[10px] hover:bg-white/10 transition-colors ${
+                        (match.best_of ?? 3) === opt.bestOf ? 'text-accentYellow font-bold' : 'text-gray-200'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
           {match.is_stream_match && (
             <span className="ml-2 text-blue-400 inline-flex items-center gap-0.5 font-bold">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3 h-3">

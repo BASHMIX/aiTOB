@@ -242,6 +242,8 @@ query TournamentSets($slug: String!, $page: Int!, $perPage: Int!, $phaseIds: [ID
         nodes {
           id
           state
+          winnerId
+          completedAt
           fullRoundText
           identifier
           phaseGroup { displayIdentifier }
@@ -417,6 +419,46 @@ query {
   currentUser { id name }
 }
 """
+
+EVENT_STANDINGS = """
+query EventStandings($eventId: ID!, $page: Int!, $perPage: Int!) {
+  event(id: $eventId) {
+    id
+    name
+    state
+    videogame {
+      id
+      name
+    }
+    standings(query: {page: $page, perPage: $perPage}) {
+      pageInfo {
+        page
+        perPage
+        totalPages
+        total
+      }
+      nodes {
+        placement
+        entrant {
+          id
+          name
+          participants {
+            id
+            gamerTag
+            prefix
+            user {
+              id
+              location { country countryId }
+              images { url type }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
 
 PROBE_WRITE_SCOPE = """
 mutation ProbeWriteScope {

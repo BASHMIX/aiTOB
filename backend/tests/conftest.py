@@ -78,7 +78,11 @@ def postgres_repository_database(monkeypatch, postgres_template_database):
     monkeypatch.setenv("DATABASE_URL", target)
     monkeypatch.setattr(database, "DATABASE_DSN", target)
     try:
-        yield target
+        # Tests only depend on the fixture for setup/teardown.  Do not expose
+        # the disposable DSN as a parametrized fixture value: pytest includes
+        # fixture values in failure diagnostics, which could leak credentials
+        # from AITOB_PG_TEST_URL into CI logs.
+        yield None
     finally:
         with psycopg.connect(admin, autocommit=True) as connection:
             connection.execute(

@@ -8,9 +8,13 @@ from backend.core.contracts import (
     ProviderActionKind, ProviderCapabilitiesV2, ProviderCapability,
     ProviderCommandResultV2, ProviderCommandState, ProviderCommandV2,
     ProviderSnapshotRequestV2, ProviderSnapshotV2, SnapshotScope,
+    ProviderEventResults, ProviderPageMetadata,
 )
 from backend.core.providers.startgg import queries
-from backend.core.providers.startgg.mapper import map_tournament, map_set, map_stream
+from collections import Counter
+from dataclasses import replace
+
+from backend.core.providers.startgg.mapper import map_tournament, map_set, map_stream, map_event_standings
 from backend.core.providers.startgg.state_map import SGG_STATE_MAP, is_active_state
 from backend.core.providers.startgg.client import StartGGClient
 
@@ -122,6 +126,104 @@ class StartGGProvider(ITournamentProvider):
                     SnapshotScope.ACTIVE_MATCHES,
                     SnapshotScope.FULL_SNAPSHOT,
                 }),
+            )
+
+        if request.scope is SnapshotScope.FINAL_STANDINGS:
+            event_id = str(request.options.get("event_id") or request.tournament_id or "").strip()
+            page = int(request.options.get("page") or 1)
+            per_page = int(request.options.get("per_page") or 50)
+            all_pages = bool(request.options.get("all_pages", False))
+
+            data = await self._client.fetch_event_standings(event_id, page=page, per_page=per_page)
+            event_data = (data or {}).get("event") or {}
+            results = map_event_standings(event_data)
+
+            if all_pages and results.page.has_more:
+                current_page = page
+                first_results = results
+                pages = [results]
+                # 512 validated standings require 11 pages at the default
+                # page size.  Use a generous safety bound instead of the old
+                # ten-page truncation, and mark the snapshot incomplete if a
+                # provider ever exceeds it.
+                max_pages = 100
+                while results.page.has_more and current_page < max_pages:
+                    current_page += 1
+                    next_data = await self._client.fetch_event_standings(event_id, page=current_page, per_page=per_page)
+                    next_event = (next_data or {}).get("event") or {}
+                    next_results = map_event_standings(next_event)
+                    pages.append(next_results)
+                    results = next_results
+
+                accumulated = [standing for item in pages for standing in item.standings]
+                warnings = list(dict.fromkeys(warning for item in pages for warning in item.warnings))
+                seen: set[str] = set()
+                unique_standings = []
+                for standing in accumulated:
+                    if standing.entrant_id in seen:
+                        warnings.append(
+                            f"Duplicate entrant {standing.entrant_id} across Start.gg standings pages"
+                        )
+                        continue
+                    seen.add(standing.entrant_id)
+                    unique_standings.append(standing)
+
+                placement_counts = Counter(item.placement for item in unique_standings)
+                merged_standings = [
+                    replace(
+                        standing,
+                        ordinal=index,
+                        is_tied=placement_counts[standing.placement] > 1,
+                    )
+                    for index, standing in enumerate(unique_standings, start=1)
+                ]
+                total_entries = pages[-1].page.total_entries or first_results.page.total_entries
+                if total_entries and len(merged_standings) != total_entries:
+                    warnings.append(
+                        f"Start.gg standings pagination returned {len(merged_standings)} of {total_entries} entrants"
+                    )
+                has_more = pages[-1].page.has_more
+                if has_more:
+                    warnings.append("Start.gg standings exceeded the safe pagination limit")
+                if any(
+                    page_results.event_id != first_results.event_id
+                    or page_results.completion_state_raw != first_results.completion_state_raw
+                    for page_results in pages[1:]
+                ):
+                    warnings.append("Start.gg standings pages returned inconsistent event evidence")
+
+                results = ProviderEventResults(
+                    event_id=first_results.event_id,
+                    event_name=first_results.event_name,
+                    game_id=first_results.game_id,
+                    game_name=first_results.game_name,
+                    is_completed=first_results.is_completed,
+                    completion_state_raw=first_results.completion_state_raw,
+                    standings=merged_standings,
+                    page=ProviderPageMetadata(
+                        number=current_page,
+                        size=per_page,
+                        total_entries=total_entries or len(merged_standings),
+                        has_more=has_more,
+                        is_complete=(
+                            not has_more
+                            and not warnings
+                            and (not total_entries or len(merged_standings) == total_entries)
+                        ),
+                    ),
+                    observed_at=observed_at,
+                    finalized_at=first_results.finalized_at,
+                    revision=first_results.revision,
+                    raw_evidence=first_results.raw_evidence,
+                    warnings=list(dict.fromkeys(warnings)),
+                )
+
+            return ProviderSnapshotV2(
+                request=request,
+                payload={"event_results": results},
+                observed_at=observed_at,
+                covered_scopes=frozenset({SnapshotScope.FINAL_STANDINGS}),
+                covered_entity_ids=frozenset({results.event_id} if results and results.event_id else {event_id}),
             )
 
         tournament = await self.fetch_tournament(request.tournament_id)

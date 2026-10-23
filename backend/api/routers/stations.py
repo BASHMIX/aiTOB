@@ -1,3 +1,6 @@
+import asyncio
+from typing import Any, Mapping
+
 from fastapi import APIRouter, Body, Depends, HTTPException
 from collections import defaultdict
 from backend.core.database import (
@@ -7,7 +10,7 @@ from backend.core.database import (
     get_station_queue, enqueue_station_match, reorder_station_queue, dequeue_station_match
 )
 from backend.api.auth import require_permission
-from backend.core.workspace_auth import SessionPrincipal
+from backend.core.workspace_auth import SessionPrincipal, enforce_auth_rate_limit
 from backend.core.entitlements import EntitlementLimitExceeded, require_workspace_capacity
 from backend.api.schemas import (
     CreateStationRequest, UpdateStationRequest, AddStationOverlayRequest, SetActiveOverlayRequest,
@@ -15,8 +18,127 @@ from backend.api.schemas import (
     BroadcastPreviewRequest,
     EnqueueMatchRequest, ReorderQueueRequest,
 )
+from datetime import datetime, timezone
+from backend.api.results_media_schemas import (
+    BindSessionRequest,
+    ResultsSessionResponse,
+    SessionCommandRequest,
+)
+from backend.core.database import record_audit_event
+from backend.core import results_media
+from backend.core.results_media_repository import (
+    bind_station_session,
+    get_media_output,
+    get_result_version_by_id,
+    get_station_session,
+    get_version_entries,
+    update_station_session_command,
+)
 
 router = APIRouter(tags=["stations"])
+
+_results_play_all_tasks: set[asyncio.Task[None]] = set()
+
+
+def _results_sequence_timing(scene: Mapping[str, Any] | None) -> tuple[int, int]:
+    """Return persisted start/stagger timing for the first live results consumer."""
+    nodes = scene.get("nodes") if isinstance(scene, Mapping) else None
+    if isinstance(nodes, Mapping):
+        for node in nodes.values():
+            if not isinstance(node, Mapping):
+                continue
+            if node.get("type") != "results-group" or node.get("mode") != "sequence":
+                if node.get("type") == "results-cards":
+                    auto_sequence = node.get("autoSequence")
+                    if isinstance(auto_sequence, Mapping) and auto_sequence.get("enabled") is True:
+                        return 0, int(auto_sequence.get("delayBetweenStartsMs", 500))
+                    schedule = node.get("schedule")
+                    if isinstance(schedule, Mapping):
+                        interval = int(schedule.get("delayBetweenStartsMs", 500))
+                        if schedule.get("trigger") == "after-previous":
+                            child_ids = node.get("childIds")
+                            first_child = nodes.get(child_ids[0]) if isinstance(child_ids, list) and child_ids else None
+                            lifecycle = first_child.get("outerAnimation") if isinstance(first_child, Mapping) else None
+                            if isinstance(lifecycle, Mapping):
+                                interval += sum(
+                                    int(lifecycle.get(key, 0))
+                                    for key in ("enterDurationMs", "visibleHoldMs", "exitDurationMs")
+                                )
+                        return 0, interval
+                continue
+            sequence = node.get("sequence")
+            if isinstance(sequence, Mapping):
+                return int(sequence.get("startDelayMs", 300)), int(sequence.get("intervalMs", 800))
+    return 300, 800
+
+
+async def _broadcast_results_session(
+    workspace_id: str,
+    station_id: str,
+    session: Mapping[str, Any],
+) -> None:
+    from backend.api.ws_manager import manager as ws_manager
+
+    event = {
+        "type": "results_session_update",
+        "station_id": station_id,
+        "session": {
+            "media_output_id": session.get("media_output_id"),
+            "state": session.get("state"),
+            "cue_index": session.get("cue_index"),
+            "session_revision": session.get("session_revision"),
+            "updated_at": session.get("updated_at"),
+        },
+    }
+    await ws_manager.broadcast_to_slot(station_id, event, workspace_id)
+    await ws_manager.broadcast({**event, "_workspace_id": workspace_id})
+
+
+async def _run_results_play_all(
+    *,
+    workspace_id: str,
+    station_id: str,
+    user_id: str,
+    expected_revision: int,
+    starting_cue: int,
+    max_cue: int,
+    start_delay_ms: int,
+    interval_ms: int,
+) -> None:
+    """Advance a Play All request with persisted CAS updates and broadcasts.
+
+    Any manual command changes the revision/state and therefore stops this
+    worker on its next boundary.  This keeps Hold/Clear/Next deterministic and
+    prevents an older Play All task from overwriting newer operator intent.
+    """
+    targets = list(range(starting_cue + 1, max_cue + 1))
+    if not targets:
+        targets = [max_cue]
+
+    for index, cue_index in enumerate(targets):
+        delay_ms = start_delay_ms if index == 0 and starting_cue < 0 else interval_ms
+        await asyncio.sleep(max(0, delay_ms) / 1000)
+        current = await get_station_session(workspace_id, station_id)
+        if (
+            not current
+            or current.get("session_revision") != expected_revision
+            or current.get("state") != "live"
+        ):
+            return
+
+        is_last = cue_index >= max_cue
+        updated = await update_station_session_command(
+            workspace_id=workspace_id,
+            station_id=station_id,
+            new_state="complete" if is_last else "live",
+            new_cue_index=cue_index,
+            expected_revision=expected_revision,
+            user_id=user_id,
+        )
+        if not updated:
+            return
+        expected_revision = int(updated["session_revision"])
+        await _broadcast_results_session(workspace_id, station_id, updated)
 
 
 @router.get("/{id}/broadcast-state", summary="Get the station broadcast preview projection")
@@ -308,3 +430,283 @@ async def api_dequeue_station_match(
     await ws_manager.broadcast_to_slot(id, {"type": "match_update"}, principal.workspace_id)
     return {"message": "Match removed from queue"}
 
+
+@router.get(
+    "/{id}/results-session",
+    response_model=ResultsSessionResponse,
+    summary="Read persisted results playback state",
+)
+async def api_get_station_results_session(
+    id: str,
+    principal: SessionPrincipal = Depends(require_permission("workspace.read")),
+):
+    """Read the persisted station results playback session."""
+    station = await get_station(id, principal.workspace_id)
+    if not station:
+        raise HTTPException(status_code=404, detail="Station not found")
+
+    session = await get_station_session(principal.workspace_id, id)
+    if not session:
+        return ResultsSessionResponse(
+            station_id=id,
+            media_output_id=None,
+            state="cleared",
+            cue_index=-1,
+            session_revision=0,
+            error_code=None,
+            updated_at=datetime.now(timezone.utc).isoformat(),
+        )
+    return ResultsSessionResponse(**session)
+
+
+@router.put(
+    "/{id}/results-session",
+    response_model=ResultsSessionResponse,
+    summary="Bind a frozen live output to the station in ready state",
+)
+async def api_bind_station_results_session(
+    id: str,
+    body: BindSessionRequest,
+    principal: SessionPrincipal = Depends(require_permission("results.broadcast")),
+):
+    """Bind a frozen live media output to the station in ready state."""
+    station = await get_station(id, principal.workspace_id)
+    if not station:
+        raise HTTPException(status_code=404, detail="Station not found")
+
+    media_output = await get_media_output(principal.workspace_id, body.media_output_id)
+    if not media_output:
+        raise HTTPException(status_code=404, detail="Media output not found")
+    if media_output.get("output_kind") != "live":
+        raise HTTPException(status_code=422, detail="Only a live results output can be bound to a station")
+
+    version = await get_result_version_by_id(principal.workspace_id, media_output["result_version_id"])
+    if not version or results_media.result_version_readiness(version) != "final":
+        raise HTTPException(status_code=409, detail="The bound results version is not currently Final")
+    scene_errors = results_media.validate_results_scene(
+        media_output.get("scene_config") or {},
+        version_id=version["id"],
+        require_sequence=True,
+    )
+    if scene_errors:
+        raise HTTPException(status_code=422, detail={"code": "invalid_results_scene", "errors": scene_errors})
+    entries, _ = await get_version_entries(
+        principal.workspace_id,
+        version["id"],
+        cutoff=media_output.get("cutoff", "top8"),
+        page=media_output.get("page_number", 1),
+        page_size=results_media.results_scene_page_size(media_output.get("scene_config")),
+    )
+    if not entries:
+        raise HTTPException(status_code=422, detail="The bound results output has no cues")
+
+    try:
+        await enforce_auth_rate_limit(
+            "results_overlay_bind",
+            f"{principal.workspace_id}:{id}",
+            limit=30,
+            window_seconds=60,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=429, detail="Too many overlay binding requests. Slow down.") from exc
+
+    bound = await bind_station_session(
+        workspace_id=principal.workspace_id,
+        station_id=id,
+        media_output_id=body.media_output_id,
+        expected_revision=body.expected_revision,
+        user_id=principal.user_id,
+    )
+    if not bound:
+        raise HTTPException(status_code=409, detail="Revision conflict")
+
+    from backend.api.ws_manager import manager as ws_manager
+
+    event = {
+        "type": "results_session_update",
+        "station_id": id,
+        "session": {
+            "media_output_id": bound["media_output_id"],
+            "state": bound["state"],
+            "cue_index": bound["cue_index"],
+            "session_revision": bound["session_revision"],
+            "updated_at": bound["updated_at"],
+        },
+    }
+    await ws_manager.broadcast_to_slot(id, event, principal.workspace_id)
+    await ws_manager.broadcast({**event, "_workspace_id": principal.workspace_id})
+
+    await record_audit_event(
+        workspace_id=principal.workspace_id,
+        action="station.results_session.bind",
+        outcome="success",
+        actor_id=principal.user_id,
+        target_type="station",
+        target_id=id,
+        detail={
+            "media_output_id": body.media_output_id,
+            "session_revision": bound["session_revision"],
+        },
+    )
+
+    return ResultsSessionResponse(**bound)
+
+
+@router.post(
+    "/{id}/results-session/commands",
+    response_model=ResultsSessionResponse,
+    summary="Apply one idempotent playback command",
+)
+async def api_command_station_results_session(
+    id: str,
+    body: SessionCommandRequest,
+    principal: SessionPrincipal = Depends(require_permission("results.broadcast")),
+):
+    """Apply one idempotent playback command to the station results session."""
+    station = await get_station(id, principal.workspace_id)
+    if not station:
+        raise HTTPException(status_code=404, detail="Station not found")
+
+    current_session = await get_station_session(principal.workspace_id, id)
+    if not current_session:
+        current_session = {
+            "station_id": id,
+            "media_output_id": None,
+            "state": "cleared",
+            "cue_index": -1,
+            "session_revision": 0,
+        }
+
+    try:
+        await enforce_auth_rate_limit(
+            "results_overlay_command",
+            f"{principal.workspace_id}:{id}",
+            limit=120,
+            window_seconds=60,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=429, detail="Too many overlay commands. Slow down.") from exc
+
+    cmd = body.command
+    valid_states = {
+        "take_live": {"ready", "held", "complete"},
+        "play_all": {"ready", "live", "held", "complete"},
+        "next": {"ready", "live", "held"},
+        "previous": {"live", "held", "complete"},
+        "hold": {"live"},
+        "restart": {"ready", "live", "held", "complete"},
+        "clear": {"ready", "live", "held", "complete", "error", "cleared"},
+    }
+
+    if current_session["state"] not in valid_states.get(cmd, set()):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Command '{cmd}' is invalid for state '{current_session['state']}'",
+        )
+
+    if cmd != "clear" and not current_session.get("media_output_id"):
+        raise HTTPException(status_code=422, detail="No media output bound to station")
+
+    max_cue = 0
+    play_all_start_delay_ms = 300
+    play_all_interval_ms = 800
+    if current_session.get("media_output_id"):
+        out = await get_media_output(principal.workspace_id, current_session["media_output_id"])
+        if out:
+            play_all_start_delay_ms, play_all_interval_ms = _results_sequence_timing(
+                out.get("scene_config")
+            )
+            entries, _ = await get_version_entries(
+                principal.workspace_id,
+                out["result_version_id"],
+                cutoff=out.get("cutoff", "top8"),
+                page=out.get("page_number", 1),
+                page_size=results_media.results_scene_page_size(out.get("scene_config")),
+            )
+            if entries:
+                max_cue = max(0, len(entries) - 1)
+
+    cur_cue = current_session.get("cue_index", -1)
+    if cmd == "take_live":
+        new_state = "live"
+        new_cue = cur_cue
+    elif cmd == "play_all":
+        new_state = "live"
+        new_cue = cur_cue
+    elif cmd == "next":
+        new_state = "complete" if cur_cue >= max_cue else "live"
+        new_cue = min(max_cue, cur_cue + 1)
+    elif cmd == "previous":
+        new_state = "live" if current_session["state"] in ("live", "complete") else current_session["state"]
+        new_cue = max(-1, cur_cue - 1)
+    elif cmd == "hold":
+        new_state = "held"
+        new_cue = cur_cue
+    elif cmd == "restart":
+        new_state = "live"
+        new_cue = -1
+    elif cmd == "clear":
+        new_state = "cleared"
+        new_cue = -1
+    else:
+        raise HTTPException(status_code=422, detail=f"Unsupported command '{cmd}'")
+
+    updated = await update_station_session_command(
+        workspace_id=principal.workspace_id,
+        station_id=id,
+        new_state=new_state,
+        new_cue_index=new_cue,
+        expected_revision=body.expected_revision,
+        user_id=principal.user_id,
+    )
+    if not updated:
+        raise HTTPException(status_code=409, detail="Revision conflict")
+
+    from backend.api.ws_manager import manager as ws_manager
+
+    event = {
+        "type": "results_session_update",
+        "station_id": id,
+        "session": {
+            "media_output_id": updated["media_output_id"],
+            "state": updated["state"],
+            "cue_index": updated["cue_index"],
+            "session_revision": updated["session_revision"],
+            "updated_at": updated["updated_at"],
+        },
+    }
+    await ws_manager.broadcast_to_slot(id, event, principal.workspace_id)
+    await ws_manager.broadcast({**event, "_workspace_id": principal.workspace_id})
+
+    await record_audit_event(
+        workspace_id=principal.workspace_id,
+        action=f"station.results_session.{cmd}",
+        outcome="success",
+        actor_id=principal.user_id,
+        target_type="station",
+        target_id=id,
+        detail={
+            "command": cmd,
+            "new_state": updated["state"],
+            "new_cue_index": updated["cue_index"],
+            "session_revision": updated["session_revision"],
+        },
+    )
+
+    if cmd == "play_all":
+        task = asyncio.create_task(
+            _run_results_play_all(
+                workspace_id=principal.workspace_id,
+                station_id=id,
+                user_id=principal.user_id,
+                expected_revision=int(updated["session_revision"]),
+                starting_cue=int(updated["cue_index"]),
+                max_cue=max_cue,
+                start_delay_ms=play_all_start_delay_ms,
+                interval_ms=play_all_interval_ms,
+            )
+        )
+        _results_play_all_tasks.add(task)
+        task.add_done_callback(_results_play_all_tasks.discard)
+
+    return ResultsSessionResponse(**updated)

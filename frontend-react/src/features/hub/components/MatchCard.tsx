@@ -490,9 +490,14 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
           )}
 
           {/* Stage / Round */}
-          <span className="text-textDim truncate font-semibold text-xs" title={match.round}>
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-textDim truncate font-semibold text-xs" title={match.round}>
             {match.round || "Round"}
-          </span>
+            </span>
+            <span className="rounded bg-amber-500/10 border border-amber-500/30 px-1 py-0.5 text-[8px] font-bold text-amber-300 shrink-0">
+              {match.raw?.best_of === 5 ? 'FT3' : match.raw?.best_of === 7 ? 'FT4' : match.raw?.best_of === 9 ? 'FT5' : match.raw?.best_of === 13 ? 'FT7' : 'FT2'}
+            </span>
+          </div>
           {match.stateAxes && (
             <div className="flex flex-wrap gap-1 pt-0.5 text-[8px] font-sans">
               <span className="rounded border border-sky-500/30 px-1 text-sky-200" title={match.stateAxes.provider?.raw || undefined}>P: {match.stateAxes.provider?.normalized || 'unknown'}</span>

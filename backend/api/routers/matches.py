@@ -462,7 +462,13 @@ async def api_send_match(set_id: str, principal: SessionPrincipal = Depends(requ
     }
     if _ws(principal) is not None:
         report_kwargs["workspace_id"] = _ws(principal)
-    result = await report_score_to_provider(**report_kwargs)
+    try:
+        result = await report_score_to_provider(**report_kwargs)
+    except MatchCommandError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Provider update error: {exc}",
+        ) from exc
     if result.success:
         if _ws(principal) is None:
             # Preserve direct unit/legacy callers that have no session

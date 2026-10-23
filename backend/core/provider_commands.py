@@ -53,7 +53,10 @@ class DurableProviderMutationService:
             )
         if state == "snapshot_verified":
             raise MatchCommandError("Provider command was already completed")
-        if state in {"permanent_failure", "conflict", "needs_review"}:
+        if state == "permanent_failure":
+            await lifecycle.mark(command["id"], "pending", reason="Operator re-attempted failed command")
+            state = "pending"
+        elif state in {"conflict", "needs_review"}:
             raise MatchCommandError("Provider command requires organizer review")
 
         await lifecycle.mark(command["id"], "sending")

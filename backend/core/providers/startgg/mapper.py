@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from backend.core.contracts.tournament_types import (
     ProviderTournament, ProviderEvent, ProviderEntrant,
     ProviderSet, ProviderSetState, ProviderStream,
+    ProviderStandingEntry, ProviderPageMetadata, ProviderEventResults,
 )
 from backend.core.providers.startgg.state_map import SGG_STATE_MAP
 
@@ -207,4 +208,120 @@ def map_tournament(raw: Dict[str, Any]) -> ProviderTournament:
         streams=streams,
         starts_at=str(starts_at) if starts_at is not None else None,
         state=str(raw.get("state")) if raw.get("state") is not None else None,
+    )
+
+
+def map_event_standings(raw_event: Dict[str, Any]) -> ProviderEventResults:
+    """Map Start.gg event standings response into canonical ProviderEventResults."""
+    event_id = str(raw_event.get("id") or "")
+    event_name = str(raw_event.get("name") or "")
+    videogame = raw_event.get("videogame") or {}
+    game_id = str(videogame.get("id")) if videogame.get("id") is not None else None
+    game_name = videogame.get("name")
+
+    raw_state = str(raw_event.get("state") or "")
+    is_completed = raw_state.upper() in {"COMPLETED", "3"}
+
+    standings_data = raw_event.get("standings") or {}
+    page_info = standings_data.get("pageInfo") or {}
+    page_num = int(page_info.get("page") or 1)
+    per_page = int(page_info.get("perPage") or 16)
+    total_entries = int(page_info.get("total") or 0)
+    total_pages = int(page_info.get("totalPages") or 1)
+    has_more = page_num < total_pages
+
+    raw_nodes = standings_data.get("nodes") or []
+    standings: List[ProviderStandingEntry] = []
+    seen_entrant_ids = set()
+    warnings: List[str] = []
+
+    placement_counts: Dict[int, int] = {}
+    valid_entries_raw = []
+
+    for node in raw_nodes:
+        if not isinstance(node, dict):
+            continue
+        placement = node.get("placement")
+        if placement is None:
+            warnings.append(f"Node missing placement in event {event_id}")
+            continue
+        try:
+            placement = int(placement)
+        except (ValueError, TypeError):
+            warnings.append(f"Invalid placement {placement} in event {event_id}")
+            continue
+
+        entrant = node.get("entrant") or {}
+        entrant_id = str(entrant.get("id") or "")
+        if not entrant_id:
+            warnings.append(f"Entrant missing id in event {event_id}")
+            continue
+
+        if entrant_id in seen_entrant_ids:
+            warnings.append(f"Duplicate entrant {entrant_id} in event {event_id}")
+            continue
+        seen_entrant_ids.add(entrant_id)
+
+        placement_counts[placement] = placement_counts.get(placement, 0) + 1
+        valid_entries_raw.append((placement, entrant))
+
+    # Keep a stable global provider order when this page is later merged with
+    # additional pages.  The provider returns page-local nodes, while the
+    # persistence contract requires ordinals to be unique for the whole event.
+    ordinal = ((page_num - 1) * per_page) + 1
+    for placement, entrant in valid_entries_raw:
+        entrant_id = str(entrant.get("id"))
+        entrant_name = str(entrant.get("name") or "Unknown Entrant")
+        participants = entrant.get("participants") or []
+        avatar_url = _extract_avatar(participants)
+        user_id = _extract_user_id(participants)
+
+        prefix = None
+        country = None
+        for p in participants:
+            if isinstance(p, dict):
+                if not prefix and p.get("prefix"):
+                    prefix = str(p["prefix"]).strip() or None
+                user = p.get("user") or {}
+                location = user.get("location") or {}
+                if not country and location.get("country"):
+                    country = str(location["country"]).strip() or None
+
+        is_tied = placement_counts.get(placement, 0) > 1
+
+        standings.append(ProviderStandingEntry(
+            ordinal=ordinal,
+            placement=placement,
+            entrant_id=entrant_id,
+            entrant_name=entrant_name,
+            is_tied=is_tied,
+            provider_user_id=user_id,
+            prefix=prefix,
+            country=country,
+            avatar_url=avatar_url,
+        ))
+        ordinal += 1
+
+    page_metadata = ProviderPageMetadata(
+        number=page_num,
+        size=per_page,
+        total_entries=total_entries if total_entries > 0 else len(standings),
+        has_more=has_more,
+        # A page containing malformed/duplicate rows is not usable evidence
+        # for a Final capture.  Multi-page completeness is finalized by the
+        # provider after every page has been merged.
+        is_complete=not has_more and not warnings,
+    )
+
+    return ProviderEventResults(
+        event_id=event_id,
+        event_name=event_name,
+        game_id=game_id,
+        game_name=game_name,
+        is_completed=is_completed,
+        completion_state_raw=raw_state,
+        standings=standings,
+        page=page_metadata,
+        raw_evidence=raw_state,
+        warnings=warnings,
     )

@@ -25,4 +25,21 @@ describe('RolesPermissions', () => {
     expect(screen.getByText('Apply manual DQ')).toBeInTheDocument();
     expect(screen.getAllByLabelText('Not allowed').length).toBeGreaterThan(0);
   });
+
+  it('renders user-facing labels for results.manage and results.broadcast', async () => {
+    mockedAxios.get.mockResolvedValueOnce({ data: {
+      current_role: 'owner',
+      current_permissions: ['results.manage', 'results.broadcast'],
+      roles: [
+        { key: 'owner', label: 'Owner', permissions: ['results.manage', 'results.broadcast'] },
+        { key: 'stream_operator', label: 'Stream Operator', permissions: ['results.broadcast'] },
+      ],
+    } });
+
+    render(<RolesPermissions />);
+
+    await waitFor(() => expect(screen.getByText('Your role:')).toBeInTheDocument());
+    expect(screen.getByText('Manage tournament results media')).toBeInTheDocument();
+    expect(screen.getByText('Control live results overlay')).toBeInTheDocument();
+  });
 });

@@ -126,3 +126,40 @@ normal application migrations there, and execute smoke queries before cutover:
 Never pass the production database as the restore target. Delete the disposable
 restore database only after confirming its resolved name is the intended drill
 database.
+
+## Results Media and OBS Overlay acceptance matrix
+
+Verify static exports, live broadcast sequences, and presentation isolation in a disposable environment.
+
+### Final Standings & Immutable Versioning
+1. Complete a test tournament in Start.gg or Challonge with at least 8 entrants.
+2. In aiTOB, open **Results Studio** (`/admin/results`).
+3. Click **Refresh Results**. Confirm `Provider Final` badge appears and entrant standings are frozen with observation hash.
+4. Verify preflight warnings identify any missing avatar or character media.
+
+### Static 1080p Media Export & Audit Receipts
+1. In **Results Studio**, select the **Champion Focus** template.
+2. Click **Export PNG**.
+3. Confirm unscaled 1920x1080 PNG is generated and downloaded with a valid filename (e.g., `<slug>-<event>-top8-standings.png`).
+4. Inspect PostgreSQL `results_media_outputs` table: verify output kind is `static`, `export_sha256` is recorded, and byte size matches downloaded asset.
+
+### Live Results Overlay & Broadcast Sequence Controls
+1. Bind the media output to an active station: in Station Settings or Results Studio, bind the generated output.
+2. Open the station OBS browser source at `/obs/{station_id}/view` in an external browser window.
+3. Open **Results Overlay Controls** in the operator panel.
+4. Click **Take Live**: verify the browser source transitions from blank/match to the frozen results scene at cue 0.
+5. Click **Next** / **Previous**: verify card highlight and reveal advance smoothly through placements.
+6. Click **Hold**: verify sequence pause. Click **Restart**: verify sequence rewinds to first placement.
+7. Click **Clear**: verify scene clears cleanly without tearing or leaking state into active match overlays.
+
+### Operator Recovery & Service Restart
+1. While an overlay sequence is `live` at cue 4, restart the backend API service (`python stop.py`, `python run.py`).
+2. Refresh the OBS browser page: verify it queries `GET /obs/{station_id}/data` and reconstructs `projection_kind: tournament_results` at cue 4 without losing place.
+3. Re-open operator controls: verify current revision is fetched and subsequent commands execute without revision conflict.
+
+### Entrant Presentation Correction & Profile Promotion
+1. In Participants & Overrides, edit a top entrant's featured character for the current event. Select `Event-only override` and save.
+2. Verify only the current tournament's results preview reflects the new character; Player Archive profile default character remains unchanged.
+3. Edit the entrant again, select `Update Player Profile (Promote to Player Archive)`, and save.
+4. Confirm Player Archive is updated and an audit event with action `player_profile.promote_override` is recorded.
+5. In Results Studio, verify the previously frozen Result Version remains unchanged until **Refresh Results** is clicked.

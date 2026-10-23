@@ -16,6 +16,9 @@ interface MatchOperationsSettingsProps {
   initialCheckInSource?: string;
   phaseGroups: string[];
   providerType?: 'startgg' | 'challonge';
+  initialSetFormatDefault?: string;
+  initialSetFormatUpgradeRule?: string;
+  initialSetFormatUpgraded?: string;
   onSave: () => void;
 }
 
@@ -34,6 +37,9 @@ export function MatchOperationsSettings({
   initialCheckInSource = "discord",
   phaseGroups,
   providerType = 'startgg',
+  initialSetFormatDefault = 'ft2',
+  initialSetFormatUpgradeRule = 'finals_only',
+  initialSetFormatUpgraded = 'ft3',
   onSave,
 }: MatchOperationsSettingsProps) {
   const [autoDqEnabled, setAutoDqEnabled] = useState(initialAutoDqEnabled);
@@ -48,6 +54,9 @@ export function MatchOperationsSettings({
   const [autoDispatchOnStream, setAutoDispatchOnStream] = useState(initialAutoDispatchOnStream);
   const [ignoreActivityGuard, setIgnoreActivityGuard] = useState(initialIgnoreActivityGuard);
   const [checkInSource, setCheckInSource] = useState(initialCheckInSource);
+  const [setFormatDefault, setSetFormatDefault] = useState(initialSetFormatDefault);
+  const [setFormatUpgradeRule, setSetFormatUpgradeRule] = useState(initialSetFormatUpgradeRule);
+  const [setFormatUpgraded, setSetFormatUpgraded] = useState(initialSetFormatUpgraded);
   const [saving, setSaving] = useState(false);
   const [dispatcherStatus, setDispatcherStatus] = useState<{
     state: 'running' | 'paused_tournament' | 'paused_global' | 'service_offline';
@@ -86,6 +95,9 @@ export function MatchOperationsSettings({
         auto_dispatch_on_stream: autoDispatchOnStream,
         ignore_activity_guard: ignoreActivityGuard,
         check_in_source: checkInSource,
+        set_format_default: setFormatDefault,
+        set_format_upgrade_rule: setFormatUpgradeRule,
+        set_format_upgraded: setFormatUpgraded,
       });
       await refreshDispatcherStatus();
       onSave();
@@ -201,6 +213,65 @@ export function MatchOperationsSettings({
               <option value="auto" className="text-black">Auto (Finish immediately on report)</option>
             </select>
             <span className="text-xs text-textDim">{isChallonge ? 'The bot may collect a result, but provider verification remains required before completion.' : 'Let the Discord bot DM players to collect and submit scores'}</span>
+          </div>
+
+          {/* ── Set Format Rules (نظام المواجهات FT) ── */}
+          <div className="flex flex-col gap-3 p-3 rounded-lg bg-black/40 border border-purple-500/30">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-sm font-bold text-purple-300">⚔️ Match Set Format</span>
+              <span className="text-[11px] text-textDim leading-snug">
+                Configure default Best-of / First-to format and automatic upgrade rules for final stages.
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1 border-t border-white/5">
+              {/* Default Format */}
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-semibold text-gray-200">Default Format</label>
+                <select
+                  value={setFormatDefault}
+                  onChange={e => setSetFormatDefault(e.target.value)}
+                  className="w-full bg-black/40 border border-white/10 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-purple-500/50"
+                >
+                  <option value="ft2" className="text-black">FT2 · Best of 3 (First to 2)</option>
+                  <option value="ft3" className="text-black">FT3 · Best of 5 (First to 3)</option>
+                  <option value="ft5" className="text-black">FT5 · Best of 9 (First to 5)</option>
+                </select>
+              </div>
+
+              {/* Auto Upgrade Rule */}
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-semibold text-gray-200">Auto-Upgrade Rule</label>
+                <select
+                  value={setFormatUpgradeRule}
+                  onChange={e => setSetFormatUpgradeRule(e.target.value)}
+                  className="w-full bg-black/40 border border-white/10 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-purple-500/50"
+                >
+                  <option value="finals_only" className="text-black">Finals Only (Winners, Losers & Grand Final)</option>
+                  <option value="top8_finals" className="text-black">Top 8 / Semi-Finals & Finals</option>
+                  <option value="disabled" className="text-black">Disabled (All matches use Default Format)</option>
+                </select>
+              </div>
+            </div>
+
+            {setFormatUpgradeRule !== 'disabled' && (
+              <div className="flex flex-col gap-1 pt-1 border-t border-white/5">
+                <label className="text-xs font-semibold text-gray-200">Upgraded Format</label>
+                <select
+                  value={setFormatUpgraded}
+                  onChange={e => setSetFormatUpgraded(e.target.value)}
+                  className="w-full bg-black/40 border border-white/10 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-purple-500/50"
+                >
+                  <option value="ft3" className="text-black">FT3 · Best of 5 (First to 3)</option>
+                  <option value="ft5" className="text-black">FT5 · Best of 9 (First to 5)</option>
+                  <option value="ft7" className="text-black">FT7 · Best of 13 (First to 7)</option>
+                </select>
+              </div>
+            )}
+
+            <span className="text-[11px] text-textDim leading-snug">
+              Rules apply automatically when sets are imported or updated. Organizers can also manually override individual match formats directly from the match card.
+            </span>
           </div>
 
           {/* ── Auto-Dispatcher ── */}

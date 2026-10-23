@@ -8,6 +8,7 @@ from backend.core.contracts.tournament_types import (
     ProviderSnapshotRequestV2, ProviderSnapshotV2, ProviderCommandV2,
     ProviderCommandResultV2, ReconciliationDecisionV2, SnapshotPriority,
     CompletionSourceV2, MatchCompletionV2,
+    ProviderStandingEntry, ProviderPageMetadata, ProviderEventResults,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "ProviderSnapshotRequestV2", "ProviderSnapshotV2", "ProviderCommandV2",
     "ProviderCommandResultV2", "ReconciliationDecisionV2", "SnapshotPriority",
     "CompletionSourceV2", "MatchCompletionV2",
+    "ProviderStandingEntry", "ProviderPageMetadata", "ProviderEventResults",
 ]

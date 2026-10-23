@@ -38,6 +38,7 @@ async def apply_postgres_schema(db):
         await db.execute(statement)
         await db.execute("INSERT INTO schema_migration_history (migration_id, phase) VALUES (?, ?)", (migration_id, phase))
     await apply_workspace_constraint_migrations(db)
+    await apply_results_media_constraint_migrations(db)
     await consolidate_legacy_player_links(db)
     await promote_linked_overrides_to_archive(db)
     await promote_linked_provider_data_to_archive(db)
@@ -70,6 +71,10 @@ POSTGRES_WORKSPACE_TABLES = (
     "player_game_profiles",
     "player_character_defaults",
     "tournament_entrant_overrides",
+    "tournament_result_versions",
+    "tournament_result_entries",
+    "results_media_outputs",
+    "results_overlay_sessions",
 )
 
 
@@ -140,6 +145,107 @@ async def apply_workspace_constraint_migrations(db):
     await db.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_overlays_workspace_name "
         "ON overlays (workspace_id, name)"
+    )
+
+
+async def _ensure_named_constraint(db, table: str, name: str, definition: str) -> None:
+    exists = await (await db.execute(
+        "SELECT 1 FROM pg_constraint WHERE conrelid=?::regclass AND conname=?",
+        (table, name),
+    )).fetchone()
+    if not exists:
+        await db.execute(f'ALTER TABLE "{table}" ADD CONSTRAINT "{name}" {definition}')
+
+
+async def apply_results_media_constraint_migrations(db) -> None:
+    """Enforce tenant ownership edges for frozen results aggregates.
+
+    A globally unique child id is not sufficient proof that the caller's
+    ``workspace_id`` owns its parent.  Composite keys make cross-Workspace
+    references impossible even if an application predicate regresses.
+    """
+    await db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_trv_workspace_id "
+        "ON tournament_result_versions(workspace_id, id)"
+    )
+    await db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_rmo_workspace_id "
+        "ON results_media_outputs(workspace_id, id)"
+    )
+    await db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_stations_workspace_id "
+        "ON stations(workspace_id, id)"
+    )
+    await db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_player_profiles_workspace_id "
+        "ON player_profiles(workspace_id, id)"
+    )
+
+    await _ensure_named_constraint(
+        db,
+        "tournament_result_entries",
+        "fk_tre_workspace_version",
+        "FOREIGN KEY (workspace_id, version_id) "
+        "REFERENCES tournament_result_versions(workspace_id, id) ON DELETE RESTRICT",
+    )
+    await _ensure_named_constraint(
+        db,
+        "tournament_result_entries",
+        "fk_tre_workspace_profile",
+        "FOREIGN KEY (workspace_id, player_profile_id) "
+        "REFERENCES player_profiles(workspace_id, id) ON DELETE RESTRICT",
+    )
+    await _ensure_named_constraint(
+        db,
+        "results_media_outputs",
+        "fk_rmo_workspace_version",
+        "FOREIGN KEY (workspace_id, result_version_id) "
+        "REFERENCES tournament_result_versions(workspace_id, id) ON DELETE RESTRICT",
+    )
+    await _ensure_named_constraint(
+        db,
+        "results_overlay_sessions",
+        "fk_ros_workspace_station",
+        "FOREIGN KEY (workspace_id, station_id) "
+        "REFERENCES stations(workspace_id, id) ON DELETE CASCADE",
+    )
+    await _ensure_named_constraint(
+        db,
+        "results_overlay_sessions",
+        "fk_ros_workspace_output",
+        "FOREIGN KEY (workspace_id, media_output_id) "
+        "REFERENCES results_media_outputs(workspace_id, id) ON DELETE RESTRICT",
+    )
+
+    await _ensure_named_constraint(
+        db,
+        "tournament_result_versions",
+        "ck_trv_entry_count_nonnegative",
+        "CHECK (entry_count >= 0)",
+    )
+    await _ensure_named_constraint(
+        db,
+        "tournament_result_entries",
+        "ck_tre_ordinal_positive",
+        "CHECK (ordinal > 0)",
+    )
+    await _ensure_named_constraint(
+        db,
+        "results_media_outputs",
+        "ck_rmo_export_receipt_pair",
+        "CHECK ((export_byte_size IS NULL) = (export_sha256 IS NULL))",
+    )
+    await _ensure_named_constraint(
+        db,
+        "results_overlay_sessions",
+        "ck_ros_cue_index",
+        "CHECK (cue_index >= -1)",
+    )
+    await _ensure_named_constraint(
+        db,
+        "results_overlay_sessions",
+        "ck_ros_revision",
+        "CHECK (session_revision >= 0)",
     )
 
 

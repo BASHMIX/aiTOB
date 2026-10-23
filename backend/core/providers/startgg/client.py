@@ -242,6 +242,15 @@ class StartGGClient:
             print(f"Failed to report score: {e}")
             return False
 
+    async def fetch_event_standings(self, event_id: str, page: int = 1, per_page: int = 50) -> Dict[str, Any]:
+        """Fetch paginated event standings for final results media."""
+        return await self.query(queries.EVENT_STANDINGS, {
+            "eventId": str(event_id),
+            "page": page,
+            "perPage": per_page,
+        })
+
+
     def _generate_game_data(self, winner_id: str, entrant1_id: str, entrant2_id: str,
                              entrant1_score: int, entrant2_score: int) -> list:
         """Convert set-level scores to per-game gameData entries.
@@ -294,11 +303,6 @@ class StartGGClient:
             current_state = None
         if current_state == 3:
             raise Exception(f"Set {set_id} is already COMPLETED on Start.gg. Reset before re-reporting.")
-        if current_state == 1:
-            raise Exception(
-                f"Set {set_id} is in CREATED state — upstream matches have not resolved. "
-                "Cannot mark in progress yet."
-            )
 
         # 3. Transition to ACTIVE. Surface failures (do not swallow) so the operator
         #    sees the actual root cause (permissions, state, missing entrants, etc.).

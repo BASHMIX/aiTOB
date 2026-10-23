@@ -123,6 +123,9 @@ function TournamentWorkflowSettings() {
           initialCheckInSource={matchConfiguration?.check_in_source || 'discord'}
           phaseGroups={phaseGroups}
           providerType={tournament?.provider_type}
+          initialSetFormatDefault={tournament?.set_format_default || 'ft2'}
+          initialSetFormatUpgradeRule={tournament?.set_format_upgrade_rule || 'finals_only'}
+          initialSetFormatUpgraded={tournament?.set_format_upgraded || 'ft3'}
           onSave={() => {
             axios.get('/api/tournaments').then((response) => setTournaments(response.data.tournaments || []));
           }}

@@ -189,6 +189,7 @@ class PatchActiveMatchRequest(BaseModel):
     p2_score: Optional[int] = Field(default=None, description="Updated score for player 2", examples=[0])
     swapped: Optional[bool] = Field(default=None, description="Whether player positions are swapped in overlay", examples=[False])
     bot_enabled: Optional[bool] = Field(default=None, description="Whether discord bot manages this match", examples=[True])
+    best_of: Optional[int] = Field(default=None, description="Series length / Best Of format (3=FT2, 5=FT3, 9=FT5)", examples=[3, 5, 9])
 
 
 class PlayerReadyRequest(BaseModel):
@@ -524,6 +525,9 @@ class PatchTournamentSettingsRequest(BaseModel):
         default=None,
         description="In Economy mode, permit one background Challonge refresh when a stale dashboard opens.",
     )
+    set_format_default: Optional[str] = Field(default=None, description="Default set format ('ft2', 'ft3', 'ft5')", examples=["ft2"])
+    set_format_upgrade_rule: Optional[str] = Field(default=None, description="Auto upgrade rule ('finals_only', 'top8_finals', 'disabled')", examples=["finals_only"])
+    set_format_upgraded: Optional[str] = Field(default=None, description="Format to upgrade to ('ft3', 'ft5')", examples=["ft3"])
 
     @field_validator("check_in_source")
     @classmethod

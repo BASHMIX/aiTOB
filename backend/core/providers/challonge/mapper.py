@@ -1,5 +1,8 @@
 from __future__ import annotations
-from backend.core.contracts import ProviderEntrant, ProviderSet, ProviderTournament, ProviderEvent
+from backend.core.contracts import (
+    ProviderEntrant, ProviderSet, ProviderTournament, ProviderEvent,
+    ProviderEventResults, ProviderStandingEntry, ProviderPageMetadata,
+)
 from .state_map import map_state
 
 def attrs(item: dict) -> dict: return item.get("attributes") or {}
@@ -76,3 +79,107 @@ def map_match(item: dict, tournament_id: str, by_id: dict[str, ProviderEntrant],
                        provider_updated_at=a.get("updated_at"),
                        winner_id=str(a.get("winner_id")) if a.get("winner_id") is not None else None,
                        entrant1_score=scores.get(p1 or ""), entrant2_score=scores.get(p2 or ""))
+
+
+def map_challonge_standings(tournament: dict, participants: list[dict]) -> ProviderEventResults:
+    """Map Challonge tournament and participants to unified ProviderEventResults."""
+    t_attrs = attrs(tournament)
+    tid = str(tournament.get("id") or t_attrs.get("id") or "")
+    tname = str(t_attrs.get("name") or f"Challonge {tid}")
+    raw_state = str(t_attrs.get("state") or "").lower()
+    game_name = t_attrs.get("game_name")
+    group_stage_enabled = bool(t_attrs.get("group_stage_enabled"))
+
+    warnings: list[str] = []
+    is_completed = (raw_state == "complete")
+
+    if raw_state == "awaiting_review":
+        is_completed = False
+        warnings.append("Tournament is awaiting_review; standings are provisional.")
+    elif not is_completed:
+        warnings.append(f"Tournament state is '{raw_state}'; standings are provisional.")
+
+    # Parse and validate participant final ranks
+    ranked_entries: list[dict] = []
+    missing_rank_count = 0
+
+    for p in participants:
+        p_attrs = attrs(p)
+        pid = str(p.get("id"))
+        pname = str(p_attrs.get("name") or p_attrs.get("display_name") or f"Player {pid}").strip()
+        final_rank = p_attrs.get("final_rank")
+
+        if final_rank is None:
+            missing_rank_count += 1
+            continue
+
+        try:
+            placement = int(final_rank)
+        except (ValueError, TypeError):
+            missing_rank_count += 1
+            continue
+
+        avatar = p_attrs.get("attached_participatable_portrait_url") or p_attrs.get("icon")
+        ranked_entries.append({
+            "entrant_id": pid,
+            "entrant_name": pname,
+            "placement": placement,
+            "avatar_url": avatar,
+            "raw_payload": p_attrs,
+        })
+
+    if missing_rank_count > 0:
+        # Challonge deliberately leaves group-only participants without a
+        # final_rank in a completed two-stage tournament.  Its v2.1 contract
+        # assigns final_rank to every entrant who reached the final stage, so
+        # those ranked rows are the authoritative final standings.  A missing
+        # rank in a normal bracket (or before completion) is still blocking.
+        if raw_state == "complete" and group_stage_enabled and ranked_entries:
+            warnings.append(
+                f"{missing_rank_count} group-stage-only participant(s) were omitted from final standings."
+            )
+        else:
+            is_completed = False
+            warnings.append(f"{missing_rank_count} participant(s) do not have final_rank assigned.")
+
+    # Sort participants by placement ascending, entrant_id ascending
+    ranked_entries.sort(key=lambda x: (x["placement"], x["entrant_id"]))
+
+    # Detect ties
+    placement_counts: dict[int, int] = {}
+    for entry in ranked_entries:
+        placement_counts[entry["placement"]] = placement_counts.get(entry["placement"], 0) + 1
+
+    standings: list[ProviderStandingEntry] = []
+    for idx, entry in enumerate(ranked_entries, start=1):
+        placement = entry["placement"]
+        is_tied = placement_counts[placement] > 1
+        standings.append(
+            ProviderStandingEntry(
+                ordinal=idx,
+                placement=placement,
+                entrant_id=entry["entrant_id"],
+                entrant_name=entry["entrant_name"],
+                is_tied=is_tied,
+                avatar_url=entry["avatar_url"],
+                metadata=entry["raw_payload"],
+            )
+        )
+
+    return ProviderEventResults(
+        event_id=tid,
+        event_name=tname,
+        game_id=None,
+        game_name=game_name,
+        is_completed=is_completed,
+        completion_state_raw=raw_state,
+        standings=standings,
+        page=ProviderPageMetadata(
+            number=1,
+            size=len(standings) or 16,
+            total_entries=len(standings),
+            has_more=False,
+            is_complete=True,
+        ),
+        warnings=warnings,
+    )

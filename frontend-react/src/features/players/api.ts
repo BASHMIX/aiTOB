@@ -32,7 +32,6 @@ export async function getPlayerProfile(profileId: string): Promise<PlayerProfile
   const response = await axios.get<PlayerProfileDetailResponse>(`${BASE_URL}/${encodeURIComponent(profileId)}`);
   return response.data;
 }
-
 export async function createPlayerProfile(payload: CreateProfilePayload): Promise<PlayerProfile> {
   const response = await axios.post<PlayerProfile>(BASE_URL, payload);
   return response.data;
@@ -107,5 +106,27 @@ export async function resolvePresentationV1(params: {
       entrant_id: params.entrantId,
     },
   });
+  return response.data;
+}
+
+export interface PromoteOverridePayload {
+  tournament_slug: string;
+  event_id: string;
+  entrant_id: string;
+  provider?: string;
+}
+
+export async function promoteEntrantOverride(
+  payload: PromoteOverridePayload
+): Promise<{ ok: boolean; profile?: PlayerProfile }> {
+  const response = await axios.post<{ ok: boolean; profile?: PlayerProfile }>(
+    `${BASE_URL}/promote-override`,
+    {
+      tournament_slug: payload.tournament_slug,
+      event_id: payload.event_id,
+      entrant_id: payload.entrant_id,
+      provider: payload.provider ?? 'startgg',
+    }
+  );
   return response.data;
 }

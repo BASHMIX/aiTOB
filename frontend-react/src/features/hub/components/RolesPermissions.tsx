@@ -23,6 +23,8 @@ const permissionLabels: Record<string, string> = {
   'assistant.use': 'Use AI assistant',
   'proposal.review': 'Review AI proposals',
   'conflict.manage': 'Resolve conflicts',
+  'results.manage': 'Manage tournament results media',
+  'results.broadcast': 'Control live results overlay',
 };
 
 export function RolesPermissions() {

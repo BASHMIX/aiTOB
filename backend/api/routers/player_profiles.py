@@ -49,7 +49,37 @@ class CreateCharacterDefaultRequest(BaseModel):
     is_primary: bool = True
 
 
+class PromoteOverrideRequest(BaseModel):
+    tournament_slug: str = Field(min_length=1)
+    event_id: str = Field(min_length=1)
+    entrant_id: str = Field(min_length=1)
+    provider: str = "startgg"
+
+
 # ── Versioned v1 Presentation Hook ──────────────────────────────────────────
+
+@router.post(
+    "/promote-override",
+    summary="Promote an entrant override to Player Archive profile",
+    operation_id="promoteEntrantOverride",
+)
+async def api_promote_override(
+    body: PromoteOverrideRequest,
+    principal: SessionPrincipal = Depends(require_permission("results.manage")),
+) -> dict[str, Any]:
+    try:
+        updated_profile = await player_profiles.promote_entrant_override_to_profile(
+            workspace_id=principal.workspace_id,
+            tournament_slug=body.tournament_slug,
+            event_id=body.event_id,
+            entrant_id=body.entrant_id,
+            provider=body.provider,
+            actor_id=principal.user_id,
+        )
+        return {"ok": True, "profile": updated_profile}
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
 
 @router.post(
     "/presentation/v1",

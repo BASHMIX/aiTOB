@@ -69,6 +69,8 @@ async def issue_overlay_access(
 async def resolve_overlay_access(token: str, station_public_id: str) -> dict | None:
     if not token:
         return None
+    norm_id = station_public_id.strip()
+    slug_id = norm_id.lower().replace(" ", "_").replace("-", "_")
     async with dbapi.connect(database.DATABASE_DSN) as db:
         db.row_factory = dbapi.Row
         row = await (await db.execute(
@@ -76,8 +78,8 @@ async def resolve_overlay_access(token: str, station_public_id: str) -> dict | N
                       s.public_id, s.name, s.active_overlay
                FROM overlay_access_tokens oat JOIN stations s ON s.id=oat.station_id
                WHERE oat.token_hash=? AND oat.revoked_at IS NULL
-                 AND (s.public_id=? OR s.id=?)""",
-            (_hash(token), station_public_id, station_public_id),
+                 AND (s.public_id=? OR s.id=? OR LOWER(s.name)=LOWER(?) OR s.public_id=? OR s.id=?)""",
+            (_hash(token), norm_id, norm_id, norm_id, slug_id, slug_id),
         )).fetchone()
     if not row:
         return None

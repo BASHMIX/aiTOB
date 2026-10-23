@@ -6,6 +6,7 @@ import re
 import uuid
 from typing import Optional
 from backend.core.contracts.tournament_types import ProviderSet, ProviderSetState, ProviderEntrant
+from backend.core.tournament_format import resolve_match_best_of
 
 DATABASE_DSN = os.getenv("DATABASE_URL", "")
 
@@ -719,6 +720,32 @@ async def update_tournament_settings(slug: str, workspace_id: str | None = None,
                 update_data.append((bot_enabled, r["set_id"]))
             if update_data:
                 await db.executemany("UPDATE active_matches SET bot_enabled = ? WHERE set_id = ?", update_data)
+        if any(k in kwargs for k in ("set_format_default", "set_format_upgrade_rule", "set_format_upgraded")):
+            db.row_factory = dbapi.Row
+            t_query = "SELECT set_format_default, set_format_upgrade_rule, set_format_upgraded FROM tournaments WHERE slug = ?"
+            t_params: list = [slug]
+            if workspace_id is not None and "workspace_id" in valid_cols:
+                t_query += " AND workspace_id = ?"
+                t_params.append(workspace_id)
+            async with db.execute(t_query, t_params) as cursor:
+                t_row = await cursor.fetchone()
+            if t_row:
+                fmt_default = t_row["set_format_default"] or "ft2"
+                fmt_rule = t_row["set_format_upgrade_rule"] or "finals_only"
+                fmt_upgraded = t_row["set_format_upgraded"] or "ft3"
+                match_query = "SELECT set_id, round_name FROM active_matches WHERE tournament_slug = ? AND status != 'complete'"
+                match_params: list = [slug]
+                if workspace_id is not None:
+                    match_query += " AND workspace_id = ?"
+                    match_params.append(workspace_id)
+                async with db.execute(match_query, match_params) as cursor:
+                    m_rows = [dict(r) for r in await cursor.fetchall()]
+                upd_matches = []
+                for m in m_rows:
+                    new_best_of = resolve_match_best_of(m.get("round_name"), fmt_default, fmt_rule, fmt_upgraded)
+                    upd_matches.append((new_best_of, m["set_id"]))
+                if upd_matches:
+                    await db.executemany("UPDATE active_matches SET best_of = ? WHERE set_id = ?", upd_matches)
         await db.commit()
 
 async def get_tournaments(workspace_id: str | None = None):
@@ -1611,8 +1638,8 @@ def _station_public(row: dict) -> dict:
 
 
 async def _station_storage_id(db, station_id: str, workspace_id: str | None) -> str | None:
-    query = "SELECT id FROM stations WHERE (id=? OR public_id=?)"
-    params: tuple = (station_id, station_id)
+    query = "SELECT id FROM stations WHERE (id=? OR public_id=? OR LOWER(name)=LOWER(?))"
+    params: tuple = (station_id, station_id, station_id)
     if workspace_id is not None:
         query += " AND workspace_id=?"
         params += (workspace_id,)
@@ -2301,12 +2328,15 @@ async def _preload_sync_data(db, tournament_slug: str, workspace_id: str | None 
     scope = " AND workspace_id = ?" if workspace_id is not None else ""
     scope_params = (workspace_id,) if workspace_id is not None else ()
     async with db.execute(
-        "SELECT bot_manage_limit, check_in_source FROM tournaments WHERE slug = ?" + scope,
+        "SELECT bot_manage_limit, check_in_source, set_format_default, set_format_upgrade_rule, set_format_upgraded FROM tournaments WHERE slug = ?" + scope,
         (tournament_slug,) + scope_params,
     ) as t_cursor:
         t_row = await t_cursor.fetchone()
         bot_manage_limit = t_row[0] if t_row else "off"
         check_in_source = (t_row[1] if t_row and t_row[1] else "discord")
+        set_format_default = (t_row[2] if t_row and t_row[2] else "ft2")
+        set_format_upgrade_rule = (t_row[3] if t_row and t_row[3] else "finals_only")
+        set_format_upgraded = (t_row[4] if t_row and t_row[4] else "ft3")
 
     async with db.execute("SELECT set_id, status FROM active_matches WHERE tournament_slug = ?" + scope, (tournament_slug,) + scope_params) as cursor:
         rows = await cursor.fetchall()
@@ -2352,12 +2382,13 @@ async def _preload_sync_data(db, tournament_slug: str, workspace_id: str | None 
             for row in await cursor.fetchall()
         }
 
-    return bot_manage_limit, check_in_source, local_matches, planned, station_by_stream, discord_by_startgg, avatar_by_startgg, explicit_links
+    return bot_manage_limit, check_in_source, local_matches, planned, station_by_stream, discord_by_startgg, avatar_by_startgg, explicit_links, set_format_default, set_format_upgrade_rule, set_format_upgraded
 
 async def _update_existing_match(
     db, sid, ps, local_status, provider_status, planned, station_by_stream, discord_by_startgg,
     p1_name, p2_name, p1_avatar, p2_avatar, p1_eid, p2_eid, round_name, match_num, phase_group,
     check_in_source='discord', explicit_links=None, workspace_id: str | None = None,
+    set_format_default: str = 'ft2', set_format_upgrade_rule: str = 'finals_only', set_format_upgraded: str = 'ft3',
 ):
     """Reconcile one existing match against the provider state. Returns a list of hub
     commands the CALLER must enqueue AFTER commit (enqueuing mid-transaction would risk a
@@ -2399,6 +2430,7 @@ async def _update_existing_match(
             p1_discord=COALESCE(NULLIF(p1_discord,''), ?),
             p2_discord=COALESCE(NULLIF(p2_discord,''), ?),
             round_name=?, match_number=?, phase_group=?,
+            best_of=COALESCE(best_of, ?),
             event_id=?, event_name=?, status=?,
             provider_state_raw=?, provider_state_normalized=?,
             hub_status=?, hub_status_origin='provider_sync',
@@ -2410,6 +2442,7 @@ async def _update_existing_match(
            p1_eid, p2_eid,
            p1_discord, p2_discord,
            round_name, match_num, str(phase_group),
+           resolve_match_best_of(round_name, set_format_default, set_format_upgrade_rule, set_format_upgraded),
            ps.event_id or "", ps.event_name or "", new_status,
            ps.provider_state_raw,
            ps.state.name.lower() if ps.state else None,
@@ -2478,6 +2511,7 @@ async def _insert_new_match(
     db, sid, ps, tournament_slug, bot_manage_limit, planned, station_by_stream, discord_by_startgg,
     p1_name, p2_name, p1_avatar, p2_avatar, p1_eid, p2_eid, round_name, match_num, phase_group, explicit_links=None,
     workspace_id: str | None = None,
+    set_format_default: str = 'ft2', set_format_upgrade_rule: str = 'finals_only', set_format_upgraded: str = 'ft3',
 ):
     should_add = ps.state in _AUTO_ADD_STATES or sid in planned
     if should_add:
@@ -2504,12 +2538,12 @@ async def _insert_new_match(
             INSERT INTO active_matches (
                 set_id, tournament_slug, event_id, event_name, p1_name, p2_name, p1_avatar, p2_avatar,
                 p1_entrant_id, p2_entrant_id, p1_discord, p2_discord,
-                round_name, match_number, phase_group,
+                round_name, match_number, phase_group, best_of,
                 status, bot_enabled, is_stream_match, station_id, provider_set_id, provider_state{workspace_column}
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?{workspace_value})
         """, (sid, tournament_slug, ps.event_id or "", ps.event_name or "", p1_name, p2_name, p1_avatar, p2_avatar,
                p1_eid, p2_eid, p1_discord, p2_discord,
-               round_name, match_num, str(phase_group),
+               round_name, match_num, str(phase_group), resolve_match_best_of(round_name, set_format_default, set_format_upgrade_rule, set_format_upgraded),
                new_status, bot_enabled, is_stream, station_id, str(ps.id).split(":")[-1], str(ps.state)
                ) + ((workspace_id,) if workspace_id is not None else ()))
 
@@ -2522,7 +2556,7 @@ async def sync_active_matches(tournament_slug: str, provider_sets: list[Provider
     is_stream_match=TRUE and (if a stream_id is set) a matching station assigned.
     """
     async with dbapi.connect(DATABASE_DSN) as db:
-        bot_manage_limit, check_in_source, local_matches, planned, station_by_stream, discord_by_startgg, avatar_by_startgg, explicit_links = await _preload_sync_data(db, tournament_slug, workspace_id)
+        bot_manage_limit, check_in_source, local_matches, planned, station_by_stream, discord_by_startgg, avatar_by_startgg, explicit_links, set_format_default, set_format_upgrade_rule, set_format_upgraded = await _preload_sync_data(db, tournament_slug, workspace_id)
 
         found_sids = set()
         # Hub commands to enqueue AFTER commit (enqueuing mid-transaction risks a
@@ -2569,6 +2603,7 @@ async def sync_active_matches(tournament_slug: str, provider_sets: list[Provider
                     db, sid, ps, local_status, provider_status, planned, station_by_stream, discord_by_startgg,
                     p1_name, p2_name, p1_avatar, p2_avatar, p1_eid, p2_eid, round_name, match_num, phase_group,
                     check_in_source=check_in_source, explicit_links=explicit_links, workspace_id=workspace_id,
+                    set_format_default=set_format_default, set_format_upgrade_rule=set_format_upgrade_rule, set_format_upgraded=set_format_upgraded,
                 )
                 if cmds:
                     pending_cmds.extend(cmds)
@@ -2577,6 +2612,7 @@ async def sync_active_matches(tournament_slug: str, provider_sets: list[Provider
                     db, sid, ps, tournament_slug, bot_manage_limit, planned, station_by_stream, discord_by_startgg,
                     p1_name, p2_name, p1_avatar, p2_avatar, p1_eid, p2_eid, round_name, match_num, phase_group,
                     explicit_links=explicit_links, workspace_id=workspace_id,
+                    set_format_default=set_format_default, set_format_upgrade_rule=set_format_upgrade_rule, set_format_upgraded=set_format_upgraded,
                 )
 
         # Remove orphans — since provider.fetch_sets retrieves all paginated sets, orphan list is complete

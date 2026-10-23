@@ -50,6 +50,30 @@ export function StationSettingsModal({ station, onClose, onSaved }: StationSetti
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [binding, setBinding] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [copiedToken, setCopiedToken] = useState(false);
+
+  const handleCopyStationLink = async (onlyToken = false) => {
+    try {
+      const res = await axios.post(`/api/stations/${station.id}/overlay-access`);
+      const url = `${window.location.origin}${res.data.url}`;
+      const tokenMatch = res.data.url.match(/access_token=([^&]+)/);
+      const tokenVal = tokenMatch ? tokenMatch[1] : "";
+      
+      if (onlyToken && tokenVal) {
+        await navigator.clipboard.writeText(tokenVal);
+        setCopiedToken(true);
+        setTimeout(() => setCopiedToken(false), 3000);
+      } else {
+        await navigator.clipboard.writeText(url);
+        setCopiedLink(true);
+        setTimeout(() => setCopiedLink(false), 3000);
+      }
+    } catch (e) {
+      console.error(e);
+      alert("Failed to generate station link / pairing token");
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -162,6 +186,36 @@ export function StationSettingsModal({ station, onClose, onSaved }: StationSetti
         </div>
 
         <div className="p-5 flex flex-col gap-4 overflow-y-auto custom-scrollbar">
+          {/* Station Agent & OBS Link / Pairing Token */}
+          <div className="p-3.5 rounded-lg bg-cyan-950/30 border border-cyan-500/40 flex flex-col gap-2.5 shadow-inner">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-semibold text-cyan-300 flex items-center gap-1.5">
+                <span>🔑</span> Station Agent & OBS Token
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleCopyStationLink(true)}
+                  className="px-2.5 py-1 text-xs font-bold rounded bg-cyan-500/20 text-cyan-300 hover:bg-cyan-500/30 border border-cyan-500/40 transition cursor-pointer"
+                  title="Copy only the Pairing Token value"
+                >
+                  {copiedToken ? "✓ Token Copied!" : "📋 Copy Token"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleCopyStationLink(false)}
+                  className="px-2.5 py-1 text-xs font-bold rounded bg-blue-600/30 text-blue-300 hover:bg-blue-600/50 border border-blue-500/40 transition cursor-pointer"
+                  title="Copy full OBS overlay link"
+                >
+                  {copiedLink ? "✓ Link Copied!" : "🔗 Copy Full Link"}
+                </button>
+              </div>
+            </div>
+            <p className="text-[11px] text-textDim leading-relaxed">
+              Click <strong>Copy Token</strong> to paste into the <em>Pairing Token</em> field in Station Agent, or <strong>Copy Full Link</strong> to use directly in OBS or Station Agent.
+            </p>
+          </div>
+
           {/* Name */}
           <label className="flex flex-col gap-1.5 p-3 rounded-lg bg-black/25 border border-white/5">
             <span className="text-sm font-semibold text-gray-200">Display Name</span>

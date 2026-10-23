@@ -25,6 +25,16 @@ Set-Location ..
 python run.py
 ```
 
+`run.py` terminates only stale processes that belong to this checkout. It
+refuses to kill Docker, WSL relays, or unrelated applications that own a
+requested port. To run the source stack beside a Compose API already using
+port 8000, select an alternate API port; Vite and the bot inherit it:
+
+```powershell
+$env:AITOB_API_PORT = '8001'
+python run.py
+```
+
 Stop the three local processes with:
 
 ```powershell
@@ -110,9 +120,33 @@ explicitly disposable provider resources with `AITOB_ALLOW_LIVE_TESTS=true`.
   on the enrollment and entrant link. Entrant overrides remain scoped per tournament
   and event. The v1 presentation hook (`/api/player-profiles/presentation/v1`)
   provides field-level provenance (`entrant_override` → `player_profile` → `provider_snapshot` → `placeholder`).
-- Strict OBS Boundary: Live broadcast overlays (`/obs/*`), `broadcast_projection.py`,
-  station projections, and provider bracket synchronization do NOT consume the
-  new player presentation hook in v1; their independent pipelines remain unchanged.
+- Results Media & Results Studio: Author and publish verified tournament results
+  graphics and live OBS sequences at `/admin/results`. Results versions freeze provider
+  standings, resolved player presentation, observation hashes, and verification state into
+  immutable versions. Static media exports produce unscaled 1080p PNG graphics with
+  cryptographic SHA-256 audit receipts. Live broadcast overlays (`/obs/{station_id}/view`)
+  project results sessions without an active match, driven by operator sequence controls
+  (Take Live, Play All, Next, Previous, Hold, Restart, Clear) with revision monotonicity.
+  The overlay editor offers two intentionally separate authoring paths that share
+  one Result Card design and renderer:
+  - **Add Result Card** creates one freely positioned atomic card inside a
+    layout-neutral Results Cards scheduler. Use **Edit Card Design** to arrange
+    the bound player layers, then animate the atomic card through the editor's
+    standard **Animation** panel used by text, images, and shapes. The Results
+    Cards parent owns only Top 8/Top 16/All selection, order, preview transport,
+    and **Delay Between Starts**; that delay is a stagger and may overlap cards.
+  - **Add Results Group** keeps the preset Board/image-export workflow and the
+    established group sequence. It uses the same Result Card design. **Create
+    Editable Linked Cards** deliberately converts the current template layout
+    into movable cards without copying the shared design.
+  Preview-generated cards are runtime-only. Only explicitly inserted or
+  materialized linked cards are saved as scene nodes.
+- Provider Finality & Featured Characters: Provider state is strictly authoritative;
+  Start.gg requires completed event standings, while Challonge requires completed
+  tournaments with final ranks. Standings characters represent organizer-selected or profile
+  featured artwork and are labeled as such without falsely asserting in-match usage.
+  Event-scoped character corrections preserve immutable past versions and require explicit
+  promotion to update the Player Archive game profile.
 
 ## Source map
 

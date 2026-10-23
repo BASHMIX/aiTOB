@@ -2,7 +2,7 @@ import os, json
 import logging
 import asyncio
 import re
-from fastapi import FastAPI, Header, Request, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, Header, Request, WebSocket, WebSocketDisconnect, HTTPException, Body
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -38,6 +38,7 @@ from backend.api.routers.player_profiles import router as player_profiles_router
 from backend.api.routers.provider_oauth import router as provider_oauth_router
 from backend.api.routers.tournament_setup import router as tournament_setup_router
 from backend.api.routers.player_registration import router as player_registration_router
+from backend.api.routers.results_media import router as results_media_router
 
 load_dotenv()
 logger = logging.getLogger("aitob.api")
@@ -90,6 +91,9 @@ app = FastAPI(
 DEV_ORIGINS = [
     "http://localhost:5173",   # Vite dev server (frontend-react)
     "http://127.0.0.1:5173",
+    # Station Agent plugin dev server (commented out):
+    # "http://localhost:5174",
+    # "http://127.0.0.1:5174",
     "http://localhost:8000",   # uvicorn — same-host OBS browser sources / hub.html
     "http://127.0.0.1:8000",
 ]
@@ -106,7 +110,7 @@ if _runtime_env == "production" and not _origins_env:
 
 # Optional: allow a whole subdomain space for cloud-hosted overlays (set only if needed),
 # e.g. ALLOWED_ORIGIN_REGEX=https://.*\.mydomain\.com
-_origin_regex = os.getenv("ALLOWED_ORIGIN_REGEX") or r"^https?://(?:localhost|127\.0\.0\.1):(5173|8000)$"
+_origin_regex = os.getenv("ALLOWED_ORIGIN_REGEX") or r"^https?://(?:localhost|127\.0\.0\.1)(?::\d+)?$"
 
 app.add_middleware(
     CORSMiddleware,
@@ -133,7 +137,7 @@ async def session_csrf_guard(request: Request, call_next):
         loopback_allowed = (
             parsed_candidate.scheme in {"http", "https"}
             and parsed_candidate.hostname in {"localhost", "127.0.0.1", "::1"}
-            and parsed_candidate.port in {5173, 8000}
+            and parsed_candidate.port in {5173, 8000}  # 5174 (Station Agent plugin commented out)
         )
         origin_allowed = loopback_allowed or candidate in DEV_ORIGINS or any(
             candidate == allowed or candidate.startswith(allowed + "/")
@@ -202,6 +206,7 @@ async def general_exception_handler(request: Request, exc: Exception):
     )
 
 # Routers — prefixes must match what the frontend calls
+app.include_router(results_media_router)
 app.include_router(player_registration_router, prefix="/api")
 app.include_router(tournaments_router, prefix="/api/tournaments")
 app.include_router(players_router,     prefix="/api/players")
@@ -507,6 +512,9 @@ async def overlay_websocket_endpoint(websocket: WebSocket, slot: str):
             message = json.loads(data)
             if message.get("type") == "ping":
                 await ws_manager.send_personal_message({"type": "pong"}, websocket)
+            # Station Agent plugin telemetry sync (commented out):
+            # elif message.get("type") in ("sync_characters", "sync_telemetry"):
+            #     await handle_station_telemetry_sync(slot, message, access["workspace_id"])
             else:
                 await ws_manager.broadcast_to_slot(slot, message, access["workspace_id"])
     except WebSocketDisconnect:
@@ -550,6 +558,14 @@ async def get_obs_overlay_data(station_id: str, x_overlay_token: str | None = He
     """Return the current active match telemetry data and overlay configuration for a given station."""
     from backend.core.database import get_active_matches, get_station, get_overlays
     from backend.core.overlay_access import resolve_overlay_access
+    from backend.core.broadcast_projection import get_station_broadcast_state
+    from backend.core.results_media_repository import (
+        get_station_session,
+        get_media_output,
+        get_result_version_by_id,
+        get_version_entries,
+    )
+    from backend.core.results_media import results_scene_page_size
     import json
     
     # 1. Fetch station details to find active overlay
@@ -588,18 +604,293 @@ async def get_obs_overlay_data(station_id: str, x_overlay_token: str | None = He
         from backend.core.database import get_tournament
         tournament = await get_tournament(active_match["tournament_slug"], workspace_id)
         tournament_name = (tournament or {}).get("name")
+
+    broadcast_state = await get_station_broadcast_state(station_id, workspace_id) or {}
+    if broadcast_state.get("active_match"):
+        active_match = broadcast_state["active_match"]
+    if broadcast_state.get("tournament_name"):
+        tournament_name = broadcast_state["tournament_name"]
+
+    # 4. Resolve projection kind and tournament results projection
+    projection_kind = "current-match"
+    results_projection = None
+    resolved_config = base_config
+
+    if not active_match:
+        session = await get_station_session(workspace_id, station_id)
+        if session and session.get("media_output_id") and session.get("state") not in ("cleared", None):
+            media_output = await get_media_output(workspace_id, session["media_output_id"])
+            if media_output:
+                version = await get_result_version_by_id(workspace_id, media_output["result_version_id"])
+                if version:
+                    entries, _ = await get_version_entries(
+                        workspace_id,
+                        media_output["result_version_id"],
+                        cutoff=media_output.get("cutoff", "top8"),
+                        page=media_output.get("page_number", 1),
+                        page_size=results_scene_page_size(media_output.get("scene_config")),
+                    )
+                    projection_kind = "tournament-results"
+                    resolved_config = media_output.get("scene_config") or base_config
+                    results_projection = {
+                        "output_id": media_output["id"],
+                        "result_version_id": version["id"],
+                        "capture_status": version["capture_status"],
+                        "event": {
+                            "id": version["event_id"],
+                            "name": version["event_name"],
+                            "game_name": version.get("game_name"),
+                        },
+                        "entries": entries,
+                        "session": {
+                            "state": session["state"],
+                            "cue_index": session["cue_index"],
+                            "session_revision": session["session_revision"],
+                        },
+                    }
     
     return {
+        "projection_kind": projection_kind,
+        "results_projection": results_projection,
         "station": station,
         "overlay_name": overlay_name,
-        "config": base_config,
+        "config": resolved_config,
         "active_match": active_match,
         "tournament_name": tournament_name,
+        "tournament_slug": (active_match or {}).get("tournament_slug") or (station or {}).get("tournament_slug"),
         "preview_mode": broadcast_state.get("preview_mode", False),
         "next_match": broadcast_state.get("next_match"),
         "next_match_tbd": broadcast_state.get("next_match_tbd", True),
         "busy_players": broadcast_state.get("busy_players", []),
     }
+
+
+# ============================================================================
+# STATION AGENT PLUGIN COMPATIBILITY (COMMENTED OUT)
+# The endpoints and handlers below provide live telemetry synchronization and
+# automated score reporting from the Station Agent plugin.
+# ============================================================================
+# async def handle_station_telemetry_sync(station_id: str, payload: dict, workspace_id: str):
+#     """Reflect live game characters and telemetry onto the platform active match and player profiles."""
+#     from backend.core.database import get_active_matches, get_station, save_player_override, get_active_match
+#     station = await get_station(station_id, workspace_id)
+#     storage_id = station.get("storage_id") if station else station_id
+#     matches = await get_active_matches(workspace_id=workspace_id)
+#     active_match = next((m for m in matches if m.get("station_id") in {station_id, storage_id} and m.get("status") in ["not_started", "called", "in_progress"]), None)
+#     if not active_match and payload.get("set_id"):
+#         active_match = await get_active_match(str(payload["set_id"]), workspace_id)
+#     if not active_match:
+#         return
+# 
+#     p1_char = str(payload.get("p1_character") or "").strip()
+#     p2_char = str(payload.get("p2_character") or "").strip()
+#     p1_cid = payload.get("p1_character_id")
+#     p2_cid = payload.get("p2_character_id")
+# 
+#     t_slug = active_match.get("tournament_slug")
+#     e_id = active_match.get("event_id")
+#     prov = active_match.get("provider_type") or "startgg"
+# 
+#     updated_any = False
+# 
+#     if p1_char and p1_char.lower() not in ("none", "unknown", "—", "-"):
+#         p1_eid = active_match.get("p1_entrant_id")
+#         if p1_eid:
+#             p1_data = {
+#                 "character": p1_char,
+#                 "character_name": p1_char,
+#                 "character_id": str(p1_cid) if p1_cid is not None else None,
+#             }
+#             await save_player_override(str(p1_eid), p1_data, workspace_id)
+#             if t_slug and e_id:
+#                 try:
+#                     from backend.core.player_profiles import set_tournament_entrant_override
+#                     await set_tournament_entrant_override(
+#                         workspace_id=workspace_id,
+#                         provider=prov,
+#                         tournament_slug=t_slug,
+#                         event_id=e_id,
+#                         entrant_id=str(p1_eid),
+#                         data=p1_data,
+#                         updated_by="Station Agent Telemetry",
+#                     )
+#                 except Exception:
+#                     pass
+#             updated_any = True
+# 
+#     if p2_char and p2_char.lower() not in ("none", "unknown", "—", "-"):
+#         p2_eid = active_match.get("p2_entrant_id")
+#         if p2_eid:
+#             p2_data = {
+#                 "character": p2_char,
+#                 "character_name": p2_char,
+#                 "character_id": str(p2_cid) if p2_cid is not None else None,
+#             }
+#             await save_player_override(str(p2_eid), p2_data, workspace_id)
+#             if t_slug and e_id:
+#                 try:
+#                     from backend.core.player_profiles import set_tournament_entrant_override
+#                     await set_tournament_entrant_override(
+#                         workspace_id=workspace_id,
+#                         provider=prov,
+#                         tournament_slug=t_slug,
+#                         event_id=e_id,
+#                         entrant_id=str(p2_eid),
+#                         data=p2_data,
+#                         updated_by="Station Agent Telemetry",
+#                     )
+#                 except Exception:
+#                     pass
+#             updated_any = True
+# 
+#     p1_score = payload.get("p1_score")
+#     p2_score = payload.get("p2_score")
+#     if p1_score is not None or p2_score is not None:
+#         from backend.core.database import upsert_active_match
+#         score_kwargs = {}
+#         if p1_score is not None:
+#             score_kwargs["p1_score"] = int(p1_score)
+#         if p2_score is not None:
+#             score_kwargs["p2_score"] = int(p2_score)
+#         await upsert_active_match(active_match["set_id"], workspace_id=workspace_id, **score_kwargs)
+#         updated_any = True
+# 
+#     if updated_any:
+#         await ws_manager.broadcast({"type": "match_update", "_workspace_id": workspace_id})
+#         await ws_manager.broadcast_to_slot(station_id, {
+#             "type": "telemetry_update",
+#             "p1_character": p1_char,
+#             "p2_character": p2_char,
+#             "p1_score": p1_score,
+#             "p2_score": p2_score,
+#         }, workspace_id)
+# 
+# 
+# @app.post("/obs/{station_id}/sync-telemetry", tags=["obs"], summary="Sync live station telemetry from game bridge")
+# async def sync_obs_station_telemetry(
+#     station_id: str,
+#     payload: dict = Body(...),
+#     x_overlay_token: str | None = Header(default=None),
+# ):
+#     """Receive live in-game characters and telemetry from Station Agent and reflect them onto the platform."""
+#     from backend.core.overlay_access import resolve_overlay_access
+#     access = await resolve_overlay_access(x_overlay_token or "", station_id)
+#     if not access:
+#         raise HTTPException(status_code=401, detail="Overlay link or token is invalid or revoked")
+#     await handle_station_telemetry_sync(station_id, payload, access["workspace_id"])
+#     return {"ok": True, "message": "Telemetry synced"}
+# 
+# 
+# @app.post("/obs/{station_id}/submit-result", tags=["obs"], summary="Submit match result from authenticated station")
+# async def submit_obs_station_result(
+#     station_id: str,
+#     payload: dict = Body(...),
+#     x_overlay_token: str | None = Header(default=None),
+# ):
+#     """Receive final score from Station Agent and record it on aiTOB Platform."""
+#     from backend.core.overlay_access import resolve_overlay_access
+#     access = await resolve_overlay_access(x_overlay_token or "", station_id)
+#     if not access:
+#         raise HTTPException(status_code=401, detail="Overlay link or token is invalid or revoked")
+# 
+#     workspace_id = access["workspace_id"]
+#     from backend.core.database import get_active_matches, get_station, get_active_match, upsert_active_match
+#     station = await get_station(station_id, workspace_id)
+#     storage_id = station.get("storage_id") if station else station_id
+#     matches = await get_active_matches(workspace_id=workspace_id)
+#     active_match = next((m for m in matches if m.get("station_id") in {station_id, storage_id} and m.get("status") in ["not_started", "called", "in_progress"]), None)
+#     if not active_match and payload.get("set_id"):
+#         active_match = await get_active_match(str(payload["set_id"]), workspace_id)
+#     if not active_match:
+#         raise HTTPException(status_code=404, detail="No active match found for this station")
+# 
+#     p1_score = int(payload.get("p1_score", 0))
+#     p2_score = int(payload.get("p2_score", 0))
+#     auto_confirm = bool(payload.get("auto_confirm", False))
+#     set_id = str(active_match["set_id"])
+# 
+#     # If stream swapped players on overlay, match real entrants
+#     if active_match.get("swapped"):
+#         actual_p1_score = p2_score
+#         actual_p2_score = p1_score
+#     else:
+#         actual_p1_score = p1_score
+#         actual_p2_score = p2_score
+# 
+#     await upsert_active_match(set_id, workspace_id=workspace_id, p1_score=actual_p1_score, p2_score=actual_p2_score)
+# 
+#     best_of = int(active_match.get("best_of") or 3)
+#     target_wins = (best_of // 2) + 1
+#     is_set_complete = (actual_p1_score >= target_wins or actual_p2_score >= target_wins) and actual_p1_score != actual_p2_score
+# 
+#     if auto_confirm and is_set_complete:
+#         from backend.core.database import get_tournament
+#         from backend.core.match_state import transition_match
+#         from backend.core.provider_feature_flags import get_provider_feature_flags
+# 
+#         tournament = await get_tournament(active_match.get("tournament_slug") or "", workspace_id)
+#         is_challonge = tournament and tournament.get("provider_type") == "challonge"
+# 
+#         if is_challonge:
+#             if get_provider_feature_flags().challonge_score_commands_enabled:
+#                 from backend.core.match_commands import MatchCommandService, MatchCommandError
+#                 try:
+#                     await MatchCommandService(workspace_id=workspace_id).submit_score(
+#                         set_id, p1_score=actual_p1_score, p2_score=actual_p2_score
+#                     )
+#                     await ws_manager.broadcast({"type": "match_update", "_workspace_id": workspace_id})
+#                     await ws_manager.broadcast_to_slot(station_id, {"type": "match_update"}, workspace_id)
+#                     return {
+#                         "ok": True,
+#                         "message": f"Result {actual_p1_score} - {actual_p2_score} submitted to Challonge.",
+#                         "completed": True,
+#                     }
+#                 except MatchCommandError as exc:
+#                     await ws_manager.broadcast({"type": "match_update", "_workspace_id": workspace_id})
+#                     return {
+#                         "ok": True,
+#                         "message": f"Result {actual_p1_score} - {actual_p2_score} recorded, but Challonge report error: {exc}",
+#                         "completed": False,
+#                     }
+#         else:
+#             winner_id = active_match.get("p1_entrant_id") if actual_p1_score > actual_p2_score else active_match.get("p2_entrant_id")
+#             p1_id = str(active_match.get("p1_entrant_id", ""))
+#             p2_id = str(active_match.get("p2_entrant_id", ""))
+#             if winner_id:
+#                 from backend.core.score_reporting import report_score_to_provider
+#                 from backend.core.providers.registry import get_provider_for_tournament
+# 
+#                 provider = await get_provider_for_tournament(active_match.get("tournament_slug") or "", workspace_id)
+#                 report_kwargs = {
+#                     "set_id": set_id,
+#                     "winner_id": str(winner_id),
+#                     "p1_id": p1_id,
+#                     "p2_id": p2_id,
+#                     "p1_score": actual_p1_score,
+#                     "p2_score": actual_p2_score,
+#                     "provider": provider,
+#                     "workspace_id": workspace_id,
+#                 }
+#                 result = await report_score_to_provider(**report_kwargs)
+#                 if result.success:
+#                     await transition_match(set_id, "complete", workspace_id=workspace_id)
+#                     await ws_manager.broadcast({"type": "match_update", "_workspace_id": workspace_id})
+#                     await ws_manager.broadcast_to_slot(station_id, {"type": "match_update"}, workspace_id)
+#                     return {
+#                         "ok": True,
+#                         "message": f"Result {actual_p1_score} - {actual_p2_score} reported to Start.gg and match completed.",
+#                         "completed": True,
+#                     }
+#                 else:
+#                     await ws_manager.broadcast({"type": "match_update", "_workspace_id": workspace_id})
+#                     return {
+#                         "ok": True,
+#                         "message": f"Result {actual_p1_score} - {actual_p2_score} recorded, but Start.gg report returned: {result.error_message}",
+#                         "completed": False,
+#                     }
+# 
+#     await ws_manager.broadcast({"type": "match_update", "_workspace_id": workspace_id})
+#     return {"ok": True, "message": f"Result {actual_p1_score} - {actual_p2_score} recorded on aiTOB Platform", "completed": False}
 
 # Redirect root to docs or frontend
 @app.get("/", tags=["system"], summary="Get root landing details", operation_id="getRoot")
@@ -622,5 +913,4 @@ async def serve_frontend(catchall: str):
     if os.path.exists(index_file):
         return FileResponse(index_file)
     raise HTTPException(status_code=404, detail="Not Found")
-
 

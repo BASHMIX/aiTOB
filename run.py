@@ -74,14 +74,52 @@ def cprint(color: str, prefix: str, text: str):
     print(f"{color}{BOLD}[{prefix}]{RESET} {text}", flush=True)
 
 # ── Port Cleanup ─────────────────────────────────────────────────────────
+class PortInUseError(RuntimeError):
+    """A requested development port is owned by a non-aiTOB process."""
+
+
+def _is_project_process(proc) -> bool:
+    """Return True only when a process is rooted in this checkout.
+
+    Port ownership on Windows may be reported through Docker/WSL relay
+    processes. Those are host infrastructure, not stale aiTOB children, and
+    terminating them can take PostgreSQL down with the API port.
+    """
+    project_root = os.path.normcase(os.path.abspath(ROOT))
+    locations: list[str] = []
+    for getter in (getattr(proc, "cwd", None), getattr(proc, "exe", None)):
+        if callable(getter):
+            try:
+                locations.append(str(getter()))
+            except Exception:
+                pass
+    try:
+        command_line = " ".join(str(part) for part in proc.cmdline())
+    except Exception:
+        command_line = ""
+    if project_root in os.path.normcase(command_line):
+        return True
+    return any(
+        project_root in os.path.normcase(os.path.abspath(value))
+        for value in locations
+        if value
+    )
+
+
 def kill_port(port: int):
-    """Kill any process occupying the given port."""
+    """Terminate stale aiTOB children, but never foreign/system processes."""
     try:
         import psutil
     except ImportError:
         cprint(RED, "SYS", "psutil not installed — skipping port cleanup")
         return
 
+    foreign_owners: set[tuple[int, str]] = set()
+    killed_pids: set[int] = set()
+    protected_names = {
+        "com.docker.backend.exe", "docker desktop.exe", "wslrelay.exe",
+        "wslhost.exe", "system", "system idle process",
+    }
     for proc in psutil.process_iter(['pid', 'name']):
         try:
             # PID 0 is Windows' System Idle Process. It can appear in a socket
@@ -95,11 +133,22 @@ def kill_port(port: int):
             except (AttributeError, TypeError):
                 conns = proc.connections(kind='inet')
             for conn in conns:
-                if conn.laddr and conn.laddr.port == port:
+                if conn.laddr and conn.laddr.port == port and proc.pid not in killed_pids:
+                    proc_name = str(proc.info.get('name') or "unknown")
+                    if proc_name.lower() in protected_names or not _is_project_process(proc):
+                        foreign_owners.add((proc.pid, proc_name))
+                        continue
                     cprint(YELLOW, "SYS", f"Killing existing process {proc.info['name']} on port {port} (PID {proc.pid})")
                     proc.kill()
+                    killed_pids.add(proc.pid)
         except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError):
             pass
+    if foreign_owners:
+        owners = ", ".join(f"{name} (PID {pid})" for pid, name in sorted(foreign_owners))
+        raise PortInUseError(
+            f"Port {port} is owned by {owners}. Stop the owning service explicitly; "
+            "run.py will not terminate Docker, WSL, or unrelated applications."
+        )
 
 # ── Process Logging Thread ────────────────────────────────────────────────
 def stream_output(proc: subprocess.Popen, prefix: str, color: str):
@@ -188,8 +237,17 @@ if __name__ == "__main__":
     # Lightweight flag parsing — keep the script dependency-free.
     no_frontend = "--no-frontend" in sys.argv
     detached = "--detached" in sys.argv
-    # Both normal and detached desktop runs use the documented :8000 API.
-    api_port = 8000
+    # Default to the documented :8000 API while allowing an explicit local
+    # alternate port when Compose already owns :8000. Vite receives the same
+    # value and proxies API/WebSocket traffic to that process.
+    try:
+        api_port = int(os.getenv("AITOB_API_PORT", "8000"))
+    except ValueError:
+        cprint(RED, "SYS", "AITOB_API_PORT must be an integer")
+        sys.exit(2)
+    if not 1 <= api_port <= 65535:
+        cprint(RED, "SYS", "AITOB_API_PORT must be between 1 and 65535")
+        sys.exit(2)
     # Local API/Bot traffic must stay on the same process boundary as Vite.
     # Deployments that intentionally use an external Hub URL must opt in
     # explicitly; a stale external value must not produce a 530 on local WS.
@@ -209,9 +267,13 @@ if __name__ == "__main__":
     services = [s for s in SERVICES if not (no_frontend and s["name"] == "VITE")]
 
     # Free the ports we're about to bind.
-    kill_port(8000)
-    if not no_frontend:
-        kill_port(5173)
+    try:
+        kill_port(api_port)
+        if not no_frontend:
+            kill_port(5173)
+    except PortInUseError as exc:
+        cprint(RED, "SYS", str(exc))
+        sys.exit(3)
 
     pids = {}
     threads = []
@@ -221,8 +283,10 @@ if __name__ == "__main__":
         # Uvicorn's Windows reload supervisor creates a second process which
         # can outlive a detached launcher. Background desktop runs value a
         # stable lifecycle over hot reload; keep reload for normal `run.py`.
-        if detached and svc["name"] == "API":
-            cmd = [part for part in cmd if part != "--reload"]
+        if svc["name"] == "API":
+            cmd = list(cmd)
+            if detached:
+                cmd = [part for part in cmd if part != "--reload"]
             cmd[cmd.index("--port") + 1] = str(api_port)
         cprint(svc["color"], svc["name"], f"Starting: {' '.join(cmd[-2:])}")
         try:

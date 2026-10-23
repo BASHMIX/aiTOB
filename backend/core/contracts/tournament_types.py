@@ -122,6 +122,7 @@ class SnapshotScope(str, Enum):
     RESULT_VERIFICATION = "result_verification"
     ADVANCEMENT_NEIGHBORHOOD = "advancement_neighborhood"
     FULL_SNAPSHOT = "full_snapshot"
+    FINAL_STANDINGS = "final_standings"
 
 
 class SyncCostClass(str, Enum):
@@ -275,3 +276,49 @@ class MatchCompletionV2:
     reason: str
     winner_provider_id: Optional[str] = None
     provider_revision: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class ProviderStandingEntry:
+    """One standing entry within final or provisional event results."""
+    ordinal: int
+    placement: int
+    entrant_id: str
+    entrant_name: str
+    is_tied: bool = False
+    provider_user_id: Optional[str] = None
+    prefix: Optional[str] = None
+    country: Optional[str] = None
+    avatar_url: Optional[str] = None
+    character_id: Optional[str] = None
+    character_name: Optional[str] = None
+    character_image_url: Optional[str] = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ProviderPageMetadata:
+    """Pagination and completeness evidence for standings."""
+    number: int = 1
+    size: int = 16
+    total_entries: int = 0
+    has_more: bool = False
+    is_complete: bool = True
+
+
+@dataclass(frozen=True)
+class ProviderEventResults:
+    """Provider-authoritative standings and completion snapshot for one event."""
+    event_id: str
+    event_name: str
+    game_id: Optional[str] = None
+    game_name: Optional[str] = None
+    is_completed: bool = False
+    completion_state_raw: str = ""
+    standings: List[ProviderStandingEntry] = field(default_factory=list)
+    page: ProviderPageMetadata = field(default_factory=ProviderPageMetadata)
+    observed_at: Optional[str] = None
+    finalized_at: Optional[str] = None
+    revision: Optional[str] = None
+    raw_evidence: Optional[str] = None
+    warnings: List[str] = field(default_factory=list)

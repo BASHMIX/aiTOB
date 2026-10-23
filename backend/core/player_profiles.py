@@ -593,11 +593,12 @@ async def sync_entrant_presentation_to_profile(
         return None
 
     profile_updates: dict[str, Any] = {}
-    if "name" in data or "display_name" in data:
-        profile_updates["display_name"] = data.get("name", data.get("display_name"))
+    name_val = data.get("name") or data.get("display_name")
+    if name_val is not None and str(name_val).strip():
+        profile_updates["display_name"] = str(name_val).strip()
     for key in ("prefix", "country", "avatar_url"):
-        if key in data:
-            profile_updates[key] = data[key]
+        if key in data and data[key] is not None and str(data[key]).strip():
+            profile_updates[key] = str(data[key]).strip()
     if profile_updates:
         await update_player_profile(str(profile["id"]), workspace_id, profile_updates)
 
@@ -620,3 +621,64 @@ async def sync_entrant_presentation_to_profile(
                 is_primary=True,
             )
     return await get_player_profile(str(profile["id"]), workspace_id)
+
+
+async def promote_entrant_override_to_profile(
+    workspace_id: str,
+    tournament_slug: str,
+    event_id: str,
+    entrant_id: str,
+    provider: str = "startgg",
+    actor_id: str | None = None,
+) -> dict[str, Any]:
+    """Explicitly promote an event-scoped entrant override to the linked player profile.
+
+    Validates that the entrant has a scoped override and is linked to a player profile,
+    then updates the player profile and character defaults for the tournament game,
+    and logs an audit event with action='player_profile.promote_override'.
+    """
+    from backend.core import database
+
+    override = await get_tournament_entrant_override(
+        workspace_id=workspace_id,
+        provider=provider,
+        tournament_slug=tournament_slug,
+        event_id=event_id,
+        entrant_id=entrant_id,
+    )
+    if not override:
+        raise ValueError(f"No scoped override found for entrant '{entrant_id}' in event '{event_id}'")
+
+    profile = await get_entrant_linked_profile(workspace_id, tournament_slug, entrant_id)
+    if not profile:
+        raise ValueError(f"Entrant '{entrant_id}' is not linked to any Player Archive profile")
+
+    tourney = await database.get_tournament(tournament_slug, workspace_id)
+    game_id = (tourney or {}).get("game") or ""
+
+    updated_profile = await sync_entrant_presentation_to_profile(
+        workspace_id=workspace_id,
+        tournament_slug=tournament_slug,
+        entrant_id=entrant_id,
+        data=override,
+        game_id=game_id,
+    )
+
+    await database.record_audit_event(
+        workspace_id=workspace_id,
+        actor_id=actor_id or "system",
+        action="player_profile.promote_override",
+        outcome="success",
+        target_type="player_profile",
+        target_id=str(profile["id"]),
+        detail={
+            "tournament_slug": tournament_slug,
+            "event_id": event_id,
+            "entrant_id": entrant_id,
+            "provider": provider,
+            "game_id": game_id,
+            "promoted_fields": list(override.keys()),
+        },
+    )
+
+    return updated_profile or profile

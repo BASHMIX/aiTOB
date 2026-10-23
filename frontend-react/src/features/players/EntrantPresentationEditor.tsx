@@ -19,6 +19,7 @@ export interface EntrantPresentationEditorProps {
   override?: any;
   characters?: CharacterCatalogItem[];
   gameName?: string;
+  canManageResults?: boolean;
   onSave?: (savedOverride: any) => void;
   onReset?: () => void;
   onClose?: () => void;
@@ -32,6 +33,7 @@ export function EntrantPresentationEditor({
   override = {},
   characters = [],
   gameName = '',
+  canManageResults = true,
   onSave,
   onReset,
   onClose,
@@ -57,8 +59,10 @@ export function EntrantPresentationEditor({
   const [characterId, setCharacterId] = useState(override.character_id || link?.default_character_id || '');
   const [characterName, setCharacterName] = useState(override.character || override.character_name || link?.default_character_name || '');
   const [characterImageUrl, setCharacterImageUrl] = useState(override.character_image_url || link?.default_character_image_url || '');
+  const [scopeMode, setScopeMode] = useState<'event_only' | 'promote_profile'>('event_only');
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [refreshPrompt, setRefreshPrompt] = useState<string | null>(null);
 
   // Field provenance helpers
   const getNameProvenance = (): ProvenanceSource => {
@@ -120,6 +124,7 @@ export function EntrantPresentationEditor({
       country: normalizedCountry || '',
       tournament_slug: currentSlug,
       event_id: currentEventId || '',
+      promote_to_profile: scopeMode === 'promote_profile',
     };
 
     if (characterId) {
@@ -131,6 +136,15 @@ export function EntrantPresentationEditor({
 
     try {
       await axios.patch(`/api/players/overrides/${entrantId}`, payload);
+      if (scopeMode === 'promote_profile') {
+        await axios.post('/api/player-profiles/promote-override', {
+          tournament_slug: currentSlug,
+          event_id: currentEventId || '',
+          entrant_id: entrantId,
+          provider: 'startgg',
+        });
+      }
+      setRefreshPrompt('Presentation updated. Refresh or create a new Result Version to apply changes to media.');
       if (onSave) {
         onSave({ ...override, ...payload });
       }
@@ -191,6 +205,12 @@ export function EntrantPresentationEditor({
         {errorMessage && (
           <div className="bg-red-500/20 border border-red-500/40 text-red-300 text-xs p-3 rounded">
             {errorMessage}
+          </div>
+        )}
+
+        {refreshPrompt && (
+          <div className="bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs p-3 rounded font-medium">
+            {refreshPrompt}
           </div>
         )}
 
@@ -293,6 +313,46 @@ export function EntrantPresentationEditor({
               </div>
             ) : (
               <p className="text-xs text-textDim italic">No character catalog available for this event.</p>
+            )}
+          </div>
+
+          {/* Scope of Changes */}
+          <div className="bg-white/5 p-3 rounded-lg border border-white/10 space-y-2">
+            <label className="block text-xs font-semibold text-textDim uppercase">
+              Scope of Changes
+            </label>
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-sm text-white cursor-pointer">
+                <input
+                  type="radio"
+                  name="presentationScope"
+                  value="event_only"
+                  checked={scopeMode === 'event_only'}
+                  onChange={() => setScopeMode('event_only')}
+                  className="text-accentYellow focus:ring-0"
+                />
+                <span>Event-only override (Current tournament only)</span>
+              </label>
+
+              {canManageResults !== false && Boolean(link) && (
+                <label className="flex items-center gap-2 text-sm text-white cursor-pointer">
+                  <input
+                    type="radio"
+                    name="presentationScope"
+                    value="promote_profile"
+                    checked={scopeMode === 'promote_profile'}
+                    onChange={() => setScopeMode('promote_profile')}
+                    className="text-accentYellow focus:ring-0"
+                  />
+                  <span>Update Player Profile (Promote to Player Archive)</span>
+                </label>
+              )}
+            </div>
+
+            {scopeMode === 'promote_profile' && (
+              <div className="text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 p-2.5 rounded mt-2">
+                Notice: This will update the reusable player profile's default character for {gameName || 'this game'} across future events.
+              </div>
             )}
           </div>
 

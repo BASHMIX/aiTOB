@@ -9,7 +9,7 @@ from backend.core.contracts import (
 from backend.core.provider_feature_flags import get_provider_feature_flags
 from .client import ChallongeClient, ChallongeError
 from .locator import parse_locator
-from .mapper import map_tournament, map_match
+from .mapper import map_tournament, map_match, map_challonge_standings
 from .state_map import map_state
 from .forfeit_policy import ForfeitPolicy
 
@@ -91,6 +91,18 @@ class ChallongeProvider(ITournamentProvider):
             tournament = await self._client.get_tournament(tournament_id, community)
             return ProviderSnapshotV2(request=request, payload={"tournament": tournament}, observed_at=observed_at,
                                       covered_scopes=frozenset({SnapshotScope.TOURNAMENT_METADATA}), cost_class=SyncCostClass.CHEAP)
+        if request.scope is SnapshotScope.FINAL_STANDINGS:
+            tournament = await self._client.get_tournament(tournament_id, community)
+            participants_raw = await self._client.participants(tournament_id, community)
+            results = map_challonge_standings(tournament, participants_raw)
+            return ProviderSnapshotV2(
+                request=request,
+                payload={"event_results": results},
+                observed_at=observed_at,
+                covered_scopes=frozenset({SnapshotScope.FINAL_STANDINGS}),
+                covered_entity_ids=frozenset({results.event_id} if results and results.event_id else {tournament_id}),
+                cost_class=SyncCostClass.NORMAL,
+            )
         participants_raw = await self._participants(tournament_id, community)
         participants = [ProviderEntrant(id=str(p.get("id")), name=str((p.get("attributes") or {}).get("name") or (p.get("attributes") or {}).get("display_name") or f"Player {p.get('id')}")) for p in participants_raw]
         if request.scope is SnapshotScope.PARTICIPANTS:

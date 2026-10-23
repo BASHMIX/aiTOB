@@ -367,3 +367,128 @@ async def resolve_tournament_participants_presentation(
         results.append(resolved)
 
     return results
+
+
+async def batch_resolve_standings_presentation(
+    workspace_id: str,
+    tournament_slug: str,
+    event_id: str,
+    standings: list[Any],
+    provider_type: str = "startgg",
+    game_id: str | None = None,
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]], dict[str, str | None]]:
+    """Resolve presentation models for all standing entrants in one batch read."""
+    from backend.core import database, player_profiles
+
+    # Get confirmed links
+    links = await database.get_tournament_player_links(tournament_slug, workspace_id)
+
+    # Get scoped overrides
+    scoped_overrides = await player_profiles.list_tournament_entrant_overrides(
+        workspace_id=workspace_id,
+        tournament_slug=tournament_slug,
+        event_id=event_id,
+    )
+    overrides_by_entrant = {str(ov.get("entrant_id")): ov for ov in scoped_overrides}
+
+    # Fallback to legacy overrides
+    legacy_overrides = await database.get_all_player_overrides(workspace_id)
+
+    presentations: dict[str, dict[str, Any]] = {}
+    profile_ids: dict[str, str | None] = {}
+    warnings: list[dict[str, Any]] = []
+
+    for item in standings:
+        entrant_id = str(item.entrant_id)
+        entrant_scope = EntrantScope(
+            provider=provider_type,
+            tournament_slug=tournament_slug,
+            event_id=event_id,
+            entrant_id=entrant_id,
+        )
+
+        override = overrides_by_entrant.get(entrant_id)
+        if not override and entrant_id in legacy_overrides:
+            leg = legacy_overrides[entrant_id]
+            override = {
+                "display_name": leg.get("display_name") or leg.get("name"),
+                "prefix": leg.get("team") or leg.get("prefix"),
+                "country": leg.get("country"),
+                "avatar_url": leg.get("avatar_url"),
+                "character_id": leg.get("character_id"),
+                "character_name": leg.get("character_name") or leg.get("character"),
+                "character_image_url": leg.get("character_image_url"),
+            }
+
+        link = links.get(entrant_id)
+        linked = link is not None
+        profile = link if linked else None
+        game_profile: dict[str, Any] | None = None
+        profile_id = str((link or {}).get("player_profile_id") or "").strip()
+        profile_ids[entrant_id] = profile_id or None
+
+        if profile_id and game_id:
+            gp = await player_profiles.get_player_game_profile(
+                workspace_id, profile_id, game_id
+            )
+            if gp:
+                defaults = await player_profiles.get_player_character_defaults(workspace_id, gp["id"])
+                game_profile = next(
+                    (d for d in defaults if d.get("is_primary")),
+                    defaults[0] if defaults else None,
+                )
+
+        provider_snapshot = {
+            "name": getattr(item, "entrant_name", None),
+            "prefix": getattr(item, "prefix", None),
+            "country": getattr(item, "country", None),
+            "avatar_url": getattr(item, "avatar_url", None),
+            "character_id": getattr(item, "character_id", None),
+            "character_name": getattr(item, "character_name", None),
+            "character_image_url": getattr(item, "character_image_url", None),
+        }
+
+        resolved = resolve_presentation_v1(
+            entrant_scope,
+            override=override,
+            profile=profile,
+            game_profile=game_profile,
+            provider_snapshot=provider_snapshot,
+            linked=linked,
+            player_profile_id=profile_id or None,
+        )
+
+        p = resolved.presentation
+        pres_dict = {
+            "display_name": {"value": p.display_name.value, "source": p.display_name.source},
+            "prefix": {"value": p.prefix.value, "source": p.prefix.source},
+            "country": {"value": p.country.value, "source": p.country.source},
+            "avatar_url": {"value": p.avatar_url.value, "source": p.avatar_url.source},
+            "character": {
+                "value": {
+                    "id": p.character.value.id if p.character.value else None,
+                    "name": p.character.value.name if p.character.value else None,
+                    "image_url": p.character.value.image_url if p.character.value else None,
+                },
+                "source": p.character.source,
+            },
+        }
+        presentations[entrant_id] = pres_dict
+
+        # Bounded missing media warnings
+        if p.avatar_url.source == "placeholder":
+            warnings.append({
+                "code": "missing_avatar",
+                "severity": "warning",
+                "entrant_id": entrant_id,
+                "message": f"Entrant '{getattr(item, 'entrant_name', entrant_id)}' has no avatar image.",
+            })
+        if not (p.character.value and p.character.value.image_url):
+            warnings.append({
+                "code": "missing_character_image",
+                "severity": "info",
+                "entrant_id": entrant_id,
+                "message": f"Entrant '{getattr(item, 'entrant_name', entrant_id)}' has no featured character artwork.",
+            })
+
+    return presentations, warnings, profile_ids

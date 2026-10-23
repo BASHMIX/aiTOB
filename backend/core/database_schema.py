@@ -324,6 +324,9 @@ TABLE_SCHEMAS = [
         auto_dq_enabled BOOLEAN DEFAULT TRUE,
         bot_manage_limit TEXT DEFAULT 'off',
         bot_manage_finish TEXT DEFAULT 'off',
+        set_format_default TEXT DEFAULT 'ft2',
+        set_format_upgrade_rule TEXT DEFAULT 'finals_only',
+        set_format_upgraded TEXT DEFAULT 'ft3',
         registration_deadline TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
@@ -425,6 +428,7 @@ TABLE_SCHEMAS = [
         match_number TEXT,
         swapped BOOLEAN DEFAULT FALSE,
         bot_enabled BOOLEAN DEFAULT TRUE,
+        best_of INTEGER DEFAULT 3,
         status TEXT DEFAULT 'not_started',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
@@ -1166,6 +1170,84 @@ TABLE_SCHEMAS = [
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE (workspace_id, provider, tournament_slug, event_id, entrant_id)
     )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS tournament_result_versions (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+        tournament_slug TEXT NOT NULL,
+        provider_type TEXT NOT NULL CHECK(provider_type IN ('startgg', 'challonge')),
+        provider_account_id TEXT NOT NULL,
+        provider_tournament_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        event_name TEXT NOT NULL,
+        game_id TEXT,
+        game_name TEXT,
+        capture_status TEXT NOT NULL CHECK(capture_status IN ('provisional', 'final')),
+        provider_state_raw TEXT NOT NULL,
+        provider_revision TEXT,
+        provider_payload_hash TEXT NOT NULL,
+        presentation_hash TEXT NOT NULL,
+        observation_hash TEXT NOT NULL,
+        observed_at TIMESTAMPTZ NOT NULL,
+        finalized_at TIMESTAMPTZ,
+        warning_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        event_metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        entry_count INTEGER NOT NULL DEFAULT 0,
+        created_by TEXT NOT NULL REFERENCES users(id),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (workspace_id, tournament_slug, event_id, observation_hash)
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS tournament_result_entries (
+        version_id TEXT NOT NULL REFERENCES tournament_result_versions(id) ON DELETE RESTRICT,
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+        ordinal INTEGER NOT NULL,
+        placement INTEGER NOT NULL CHECK(placement > 0),
+        entrant_id TEXT NOT NULL,
+        entrant_name TEXT NOT NULL,
+        provider_user_id TEXT,
+        player_profile_id TEXT,
+        is_tied BOOLEAN NOT NULL DEFAULT FALSE,
+        presentation_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        provider_entry_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        PRIMARY KEY (version_id, entrant_id),
+        UNIQUE (version_id, ordinal)
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS results_media_outputs (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+        result_version_id TEXT NOT NULL REFERENCES tournament_result_versions(id),
+        output_kind TEXT NOT NULL CHECK(output_kind IN ('static', 'live')),
+        overlay_name TEXT,
+        scene_schema_version INTEGER NOT NULL DEFAULT 2,
+        scene_config_json JSONB NOT NULL,
+        scene_hash TEXT NOT NULL,
+        cutoff TEXT NOT NULL CHECK(cutoff IN ('top8', 'top16', 'all')),
+        page_number INTEGER NOT NULL DEFAULT 1 CHECK(page_number >= 1),
+        output_profile_json JSONB NOT NULL,
+        export_byte_size BIGINT,
+        export_sha256 TEXT,
+        created_by TEXT NOT NULL REFERENCES users(id),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS results_overlay_sessions (
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+        station_id TEXT NOT NULL REFERENCES stations(id),
+        media_output_id TEXT REFERENCES results_media_outputs(id),
+        state TEXT NOT NULL DEFAULT 'cleared' CHECK(state IN ('cleared', 'ready', 'live', 'held', 'complete', 'error')),
+        cue_index INTEGER NOT NULL DEFAULT -1,
+        session_revision BIGINT NOT NULL DEFAULT 0,
+        controller_user_id TEXT REFERENCES users(id),
+        error_code TEXT,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (workspace_id, station_id)
+    )
     '''
 ]
 
@@ -1206,6 +1288,10 @@ INDEXES = [
     ,"CREATE INDEX IF NOT EXISTS idx_player_game_profiles_profile ON player_game_profiles(workspace_id, player_profile_id)"
     ,"CREATE INDEX IF NOT EXISTS idx_player_character_defaults_game ON player_character_defaults(workspace_id, player_game_profile_id)"
     ,"CREATE INDEX IF NOT EXISTS idx_tournament_entrant_overrides_scope ON tournament_entrant_overrides(workspace_id, tournament_slug, event_id, entrant_id)"
+    ,"CREATE INDEX IF NOT EXISTS idx_trv_event ON tournament_result_versions(workspace_id, tournament_slug, event_id, created_at DESC)"
+    ,"CREATE INDEX IF NOT EXISTS idx_trv_status ON tournament_result_versions(workspace_id, capture_status, created_at DESC)"
+    ,"CREATE INDEX IF NOT EXISTS idx_tre_placement ON tournament_result_entries(workspace_id, version_id, placement, ordinal)"
+    ,"CREATE INDEX IF NOT EXISTS idx_rmo_version ON results_media_outputs(workspace_id, result_version_id, created_at DESC)"
 ]
 
 # ── Safe migrations (add new columns if missing) ─────────────────
@@ -1405,4 +1491,12 @@ MIGRATIONS = [
     "ALTER TABLE discord_oauth_states ADD COLUMN IF NOT EXISTS account_id TEXT",
     "ALTER TABLE discord_oauth_states ADD COLUMN IF NOT EXISTS consumed_at TIMESTAMP",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_player_profiles_workspace_discord ON player_profiles (workspace_id, discord_id) WHERE discord_id IS NOT NULL",
+    "CREATE TABLE IF NOT EXISTS tournament_result_versions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id), tournament_slug TEXT NOT NULL, provider_type TEXT NOT NULL CHECK(provider_type IN ('startgg', 'challonge')), provider_account_id TEXT NOT NULL, provider_tournament_id TEXT NOT NULL, event_id TEXT NOT NULL, event_name TEXT NOT NULL, game_id TEXT, game_name TEXT, capture_status TEXT NOT NULL CHECK(capture_status IN ('provisional', 'final')), provider_state_raw TEXT NOT NULL, provider_revision TEXT, provider_payload_hash TEXT NOT NULL, presentation_hash TEXT NOT NULL, observation_hash TEXT NOT NULL, observed_at TIMESTAMPTZ NOT NULL, finalized_at TIMESTAMPTZ, warning_json JSONB NOT NULL DEFAULT '[]'::jsonb, event_metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb, entry_count INTEGER NOT NULL DEFAULT 0, created_by TEXT NOT NULL REFERENCES users(id), created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE (workspace_id, tournament_slug, event_id, observation_hash))",
+    "CREATE TABLE IF NOT EXISTS tournament_result_entries (version_id TEXT NOT NULL REFERENCES tournament_result_versions(id) ON DELETE RESTRICT, workspace_id TEXT NOT NULL REFERENCES workspaces(id), ordinal INTEGER NOT NULL, placement INTEGER NOT NULL CHECK(placement > 0), entrant_id TEXT NOT NULL, entrant_name TEXT NOT NULL, provider_user_id TEXT, player_profile_id TEXT, is_tied BOOLEAN NOT NULL DEFAULT FALSE, presentation_json JSONB NOT NULL DEFAULT '{}'::jsonb, provider_entry_json JSONB NOT NULL DEFAULT '{}'::jsonb, PRIMARY KEY (version_id, entrant_id), UNIQUE (version_id, ordinal))",
+    "CREATE TABLE IF NOT EXISTS results_media_outputs (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id), result_version_id TEXT NOT NULL REFERENCES tournament_result_versions(id), output_kind TEXT NOT NULL CHECK(output_kind IN ('static', 'live')), overlay_name TEXT, scene_schema_version INTEGER NOT NULL DEFAULT 2, scene_config_json JSONB NOT NULL, scene_hash TEXT NOT NULL, cutoff TEXT NOT NULL CHECK(cutoff IN ('top8', 'top16', 'all')), page_number INTEGER NOT NULL DEFAULT 1 CHECK(page_number >= 1), output_profile_json JSONB NOT NULL, export_byte_size BIGINT, export_sha256 TEXT, created_by TEXT NOT NULL REFERENCES users(id), created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+    "CREATE TABLE IF NOT EXISTS results_overlay_sessions (workspace_id TEXT NOT NULL REFERENCES workspaces(id), station_id TEXT NOT NULL REFERENCES stations(id), media_output_id TEXT REFERENCES results_media_outputs(id), state TEXT NOT NULL DEFAULT 'cleared' CHECK(state IN ('cleared', 'ready', 'live', 'held', 'complete', 'error')), cue_index INTEGER NOT NULL DEFAULT -1, session_revision BIGINT NOT NULL DEFAULT 0, controller_user_id TEXT REFERENCES users(id), error_code TEXT, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (workspace_id, station_id))",
+    "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS set_format_default TEXT DEFAULT 'ft2'",
+    "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS set_format_upgrade_rule TEXT DEFAULT 'finals_only'",
+    "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS set_format_upgraded TEXT DEFAULT 'ft3'",
+    "ALTER TABLE active_matches ADD COLUMN IF NOT EXISTS best_of INTEGER DEFAULT 3",
 ]

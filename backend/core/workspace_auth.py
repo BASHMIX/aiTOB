@@ -33,17 +33,18 @@ ROLE_PERMISSIONS: Final[dict[str, frozenset[str]]] = {
         "match.call", "match.ready", "match.start", "match.stream", "stream.manage",
         "result.report", "dq.manual", "proposal.review",
         "station.manage", "overlay.manage", "conflict.manage",
+        "results.manage", "results.broadcast",
     }),
-    "tournament_organizer": frozenset({"workspace.read", "settings.manage", "tournament.manage", "assistant.use", "match.operate", "match.call", "match.ready", "match.start", "match.stream", "result.report", "dq.manual", "proposal.review", "conflict.manage"}),
-    "stream_operator": frozenset({"workspace.read", "station.manage", "overlay.manage", "match.stream", "stream.manage"}),
+    "tournament_organizer": frozenset({"workspace.read", "settings.manage", "tournament.manage", "assistant.use", "match.operate", "match.call", "match.ready", "match.start", "match.stream", "result.report", "dq.manual", "proposal.review", "conflict.manage", "results.manage"}),
+    "stream_operator": frozenset({"workspace.read", "station.manage", "overlay.manage", "match.stream", "stream.manage", "results.broadcast"}),
     # Moderators can coordinate attendance and review conflicts, but cannot
     # mutate match configuration, submit results, or perform DQ.
     "moderator": frozenset({"workspace.read", "match.call", "match.ready", "conflict.manage"}),
     "viewer": frozenset({"workspace.read"}),
     # Legacy rows are mapped explicitly during the staged ownership migration;
     # they remain aliases only until the final role normalization is applied.
-    "organizer": frozenset({"workspace.read", "settings.manage", "tournament.manage", "assistant.use", "match.operate", "match.call", "match.ready", "match.start", "match.stream", "result.report", "dq.manual", "proposal.review", "conflict.manage"}),
-    "operator": frozenset({"workspace.read", "station.manage", "overlay.manage", "match.stream", "stream.manage"}),
+    "organizer": frozenset({"workspace.read", "settings.manage", "tournament.manage", "assistant.use", "match.operate", "match.call", "match.ready", "match.start", "match.stream", "result.report", "dq.manual", "proposal.review", "conflict.manage", "results.manage"}),
+    "operator": frozenset({"workspace.read", "station.manage", "overlay.manage", "match.stream", "stream.manage", "results.broadcast"}),
 }
 
 
