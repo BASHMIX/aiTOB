@@ -4,7 +4,10 @@ import { countryFlagUrl } from '@/utils/country';
 import { prepareOverlayAssets } from '@/utils/overlayAssets';
 
 export function useOBSViewerData(slot: string) {
-  const [state, setState] = useState<any>({ elements: {} });
+  const [state, setState] = useState<any>({ elements: {}, font_library: [] });
+  const [projectionKind, setProjectionKind] = useState<'current-match' | 'tournament-results'>('current-match');
+  const [resultsProjection, setResultsProjection] = useState<any | null>(null);
+  const [sceneDoc, setSceneDoc] = useState<any | null>(null);
   const [transitionState, setTransitionState] = useState<'none' | 'in' | 'out' | 'run' | 'idle'>('idle');
   const [cascadeDelays, setCascadeDelays] = useState<Record<string, number>>({});
   const [glitchedElementIds, setGlitchedElementIds] = useState<Record<string, boolean>>({});
@@ -28,6 +31,18 @@ export function useOBSViewerData(slot: string) {
       if (!response.ok) throw new Error('Overlay access is unavailable');
       const projection = await response.json();
       const parsed = typeof projection.config === 'string' ? JSON.parse(projection.config) : (projection.config || {});
+
+      if (projection.projection_kind === 'tournament-results') {
+        setProjectionKind('tournament-results');
+        setResultsProjection(projection.results_projection || null);
+        setSceneDoc(parsed);
+        return;
+      }
+
+      setProjectionKind('current-match');
+      setResultsProjection(null);
+      setSceneDoc(null);
+
       let baseConfig: any = {
         elements: parsed.elements || {}, background_url: parsed.background_url || '',
         global_font_url: parsed.global_font_url || '', global_font_family: parsed.global_font_family || '',
@@ -61,6 +76,9 @@ export function useOBSViewerData(slot: string) {
       const hasNextMatchElements = elementKeys.some((k) =>
         k.startsWith('next_') || baseConfig.elements[k]?.sourceId?.startsWith('next_')
       );
+      const hasStandaloneBroadcastElements = elementKeys.some((k) =>
+        ['bracket-tree', 'results-cards', 'results-group', 'result-card'].includes(baseConfig.elements[k]?.type)
+      );
       const isDedicatedNextMatchSlide = hasNextMatchElements && !hasCurrentMatchElements;
 
       if (isDedicatedNextMatchSlide) {
@@ -70,7 +88,7 @@ export function useOBSViewerData(slot: string) {
           setState({ elements: {}, background_url: '', global_font_url: '', global_font_family: '', font_library: [], overlay_signature: '' });
           return;
         }
-      } else {
+      } else if (!hasStandaloneBroadcastElements) {
         // Normal or mixed scoreboard: if no active match connected, clear overlay (render transparent screen)
         if (!activeMatch) {
           if (assetRequest !== assetRequestRef.current) return;
@@ -80,6 +98,10 @@ export function useOBSViewerData(slot: string) {
       }
 
       // Merge match telemetry data into elements
+      baseConfig.activeMatch = activeMatch || (projection.tournament_slug ? { tournament_slug: projection.tournament_slug } : null);
+      if (baseConfig.activeMatch && projection.tournament_slug) {
+        baseConfig.activeMatch.tournament_slug = baseConfig.activeMatch.tournament_slug || projection.tournament_slug;
+      }
       if (baseConfig.elements) {
         if (activeMatch) {
           const isSwapped = activeMatch.swapped === true || activeMatch.swapped === 1 || activeMatch.swapped === '1';
@@ -124,6 +146,9 @@ export function useOBSViewerData(slot: string) {
             p2_character: { text: p2Character || '' },
             game_name: { text: activeMatch.game_name || '' },
             tournament_round: { text: activeMatch.round_name || '' },
+            match_format_badge: {
+              text: `FIRST TO ${Math.floor((Number(activeMatch.best_of) || 9) / 2) + 1} GAMES`
+            },
             tournament_name: { text: tournamentNameRef.current },
             p1_avatar: { src: p1Avatar || '/static/player_placeholder.jpg' },
             p2_avatar: { src: p2Avatar || '/static/player_placeholder.jpg' },
@@ -271,6 +296,7 @@ export function useOBSViewerData(slot: string) {
 
           setTimeout(() => {
             setTransitionState('run');
+            window.dispatchEvent(new Event('play-slide-preview'));
             setTimeout(() => {
               setTransitionState('idle');
             }, maxEntranceTime + 100);
@@ -290,6 +316,7 @@ export function useOBSViewerData(slot: string) {
 
         setTimeout(() => {
           setTransitionState('run');
+          window.dispatchEvent(new Event('play-slide-preview'));
           setTimeout(() => {
             setTransitionState('idle');
           }, maxEntranceTime + 100);
@@ -319,7 +346,29 @@ export function useOBSViewerData(slot: string) {
 
       ws.onmessage = (e) => {
         const data = JSON.parse(e.data);
-        if (data.type === 'match_update') {
+        if (data.type === 'results_session_update' && data.station_id === slot) {
+          setResultsProjection((prev: any) => {
+            if (!prev) {
+              fetchData();
+              return prev;
+            }
+            const currentRev = prev.session?.session_revision ?? -1;
+            const incomingRev = data.session?.session_revision ?? 0;
+            if (incomingRev <= currentRev) {
+              return prev;
+            }
+            if (data.session?.media_output_id && data.session.media_output_id !== prev.output_id) {
+              fetchData();
+            }
+            return {
+              ...prev,
+              session: {
+                ...prev.session,
+                ...data.session,
+              },
+            };
+          });
+        } else if (data.type === 'match_update') {
           // Match score/swap/status updated -> Refresh overlay
           fetchData();
         } else if (data.type === 'overlay_loaded') {
@@ -470,9 +519,10 @@ export function useOBSViewerData(slot: string) {
   // Dynamic Font Injection: load the global font and every saved library font
   // so per-element font selections work in OBS too.
   useEffect(() => {
+    const fontLibrary = Array.isArray(state?.font_library) ? state.font_library : [];
     const urls = Array.from(new Set([
-      state.global_font_url,
-      ...state.font_library.map((font: { url?: string }) => font.url || ''),
+      state?.global_font_url,
+      ...fontLibrary.map((font: { url?: string }) => font.url || ''),
     ].filter(Boolean)));
     urls.forEach((url, index) => {
       const id = `dyn-font-${index}`;
@@ -495,6 +545,9 @@ export function useOBSViewerData(slot: string) {
     state,
     transitionState,
     cascadeDelays,
-    glitchedElementIds
+    glitchedElementIds,
+    projectionKind,
+    resultsProjection,
+    sceneDoc,
   };
 }

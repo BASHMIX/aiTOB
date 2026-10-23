@@ -19,6 +19,9 @@ interface Tournament {
   accent_color?: string | null;
   challonge_sync_mode?: 'economy' | 'live';
   economy_sync_on_stale_open?: number | boolean;
+  set_format_default?: string;
+  set_format_upgrade_rule?: string;
+  set_format_upgraded?: string;
 }
 
 export interface ProviderActionProjection {
@@ -48,6 +51,7 @@ interface Match {
   p2_score: number;
   status: 'not_started' | 'in_progress' | 'called' | 'conflict' | 'complete' | 'dq';
   round_name: string;
+  best_of?: number;
   station_id?: string;
   match_number?: string;
   swapped?: boolean;

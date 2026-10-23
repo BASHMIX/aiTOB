@@ -1,23 +1,43 @@
 import React from 'react';
 import { getAnimationStyles } from '../utils';
 import { overlayImageLayout, overlayImagePlaceholder, resolveOverlayImageSource } from '@/utils/overlayAssets';
+import { MatchMatrixRenderer } from '@/features/editor/components/MatchMatrixRenderer';
+import { BracketTreeRenderer } from '@/features/editor/components/BracketTreeRenderer';
+import { VictoryPathRenderer } from '@/features/editor/components/VictoryPathRenderer';
+import { ResultsGroupRenderer } from '@/scene/ResultsGroupRenderer';
+import { ResultCardRenderer } from '@/scene/ResultCardRenderer';
+import { useLiveStandings } from '@/features/results/useLiveStandings';
+import type { SceneDocumentV2 } from '@/scene/types';
 
 interface OBSElementProps {
   id: string;
   el: any;
+  activeMatch?: any;
   cascadeDelay: number;
   transitionState: 'none' | 'in' | 'out' | 'run' | 'idle';
   isGlitched: boolean;
+  allElements?: Record<string, any>;
 }
 
 export const OBSElement: React.FC<OBSElementProps> = ({
   id,
   el,
+  activeMatch,
   cascadeDelay,
   transitionState,
-  isGlitched
+  isGlitched,
+  allElements,
 }) => {
   if (!el.visible) return null;
+
+  const tournamentSlug = activeMatch?.tournament_slug || undefined;
+  const eventId = activeMatch?.event_id || undefined;
+  const { standings: liveStandings } = useLiveStandings(
+    tournamentSlug,
+    eventId,
+    el.bracketTestMode ?? false,
+    el.preview?.dataset || 'normal'
+  );
 
   const animStyles = getAnimationStyles(el, cascadeDelay, transitionState);
 
@@ -182,6 +202,77 @@ export const OBSElement: React.FC<OBSElementProps> = ({
         }}
       />
     );
+  } else if (el.type === 'match-grid') {
+    content = (
+      <MatchMatrixRenderer
+        element={el}
+        activeMatch={activeMatch}
+        interactive={false}
+      />
+    );
+  } else if (el.type === 'bracket-tree') {
+    content = (
+      <BracketTreeRenderer
+        element={el}
+        activeMatch={activeMatch}
+      />
+    );
+  } else if (el.type === 'victory-path') {
+    content = (
+      <VictoryPathRenderer
+        element={el}
+        activeMatch={activeMatch}
+      />
+    );
+  } else if (el.type === 'results-group') {
+    const sceneDoc: SceneDocumentV2 = {
+      schemaVersion: 2,
+      canvas: { width: 1920, height: 1080 },
+      dataSource: { kind: 'tournament-results' },
+      rootIds: [el.id],
+      nodes: (allElements || {}) as any,
+    };
+    const normalizedNode = {
+      ...el,
+      x: 0,
+      y: 0,
+      customSlots: el.customSlots?.map((slot: any) => ({
+        ...slot,
+        x: slot.x - (el.x || 0),
+        y: slot.y - (el.y || 0),
+      })),
+    };
+    content = (
+      <ResultsGroupRenderer
+        scene={sceneDoc}
+        node={normalizedNode as any}
+        standings={liveStandings}
+      />
+    );
+  } else if (el.type === 'result-card') {
+    const sceneDoc: SceneDocumentV2 = {
+      schemaVersion: 2,
+      canvas: { width: 1920, height: 1080 },
+      dataSource: { kind: 'tournament-results' },
+      rootIds: [el.id],
+      nodes: (allElements || {}) as any,
+    };
+    const standing = liveStandings.find((entry) => entry.ordinal === (el.standingOrdinal || 1))
+      || liveStandings[Math.max(0, (el.standingOrdinal || 1) - 1)]
+      || liveStandings[0];
+    content = standing ? (
+      <ResultCardRenderer
+        scene={sceneDoc}
+        definitionId={el.definitionId || ''}
+        standing={standing}
+        width={el.width || 420}
+        height={el.height || 560}
+        variant={el.variant}
+        largeImageSource={el.largeImageSource}
+        showSmallImage={el.showSmallImage}
+        smallImageSource={el.smallImageSource}
+      />
+    ) : null;
   }
 
   return (

@@ -113,6 +113,13 @@ export function TopNavigation() {
         >
           <span>👥</span> Player Archive
         </a>
+        <a
+          href="/admin/results"
+          className="text-textDim hover:text-accentYellow transition-colors flex items-center gap-1.5 border-l border-white/20 pl-4 text-xs font-semibold"
+          data-testid="nav-results-studio"
+        >
+          <span>🏆</span> Results Studio
+        </a>
         <div className="flex items-center gap-2 border-l border-white/20 pl-4">
           <span>Tournament:</span>
           <select 

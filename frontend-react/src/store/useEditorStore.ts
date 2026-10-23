@@ -17,17 +17,40 @@ export interface AnimationSettings {
   idleIntensity?: number;
 }
 
+export interface ResultCardTransform {
+  x: number;
+  y: number;
+  scale: number;
+  opacity: number;
+  rotation: number;
+}
+
+export interface ResultCardLifecycle {
+  start: ResultCardTransform;
+  visible: ResultCardTransform;
+  exit: ResultCardTransform;
+  enterDurationMs: number;
+  visibleHoldMs: number;
+  exitDurationMs: number;
+  enterEasing: AnimationSettings['tweenType'];
+  exitEasing: AnimationSettings['tweenType'];
+}
+
 export interface OverlayElement {
   id: string;
+  name?: string;
+  parentId?: string | null;
   /** Optional live-data element id this visual instance mirrors. */
   sourceId?: string;
-  type: 'image' | 'text' | 'rect' | 'circle';
+  type: 'image' | 'text' | 'rect' | 'circle' | 'group' | 'result-card' | 'results-cards' | 'results-group' | 'match-grid' | 'bracket-tree' | 'victory-path';
   visible: boolean;
+  locked?: boolean;
   x: number;
   y: number;
   width?: number;
   height?: number;
   src?: string;
+  objectFit?: 'cover' | 'contain' | 'fill';
   text?: string;
   fontSize?: number;
   /** Optional per-element CSS font family; falls back to the global family. */
@@ -49,6 +72,94 @@ export interface OverlayElement {
   
   // Animation settings
   animation?: AnimationSettings;
+
+  // Scene v2 Group and Results Group properties
+  childIds?: string[];
+  templateRole?: 'player-card' | null;
+  definitionRole?: 'result-card' | null;
+  templateId?: string;
+  cardDefinitionId?: string;
+  definitionId?: string;
+  instanceRole?: 'stage' | 'linked';
+  standingOrdinal?: number;
+  variant?: 'champion' | 'podium' | 'standard';
+  outerAnimation?: ResultCardLifecycle;
+  animationOverride?: Partial<ResultCardLifecycle>;
+  schedule?: any;
+  autoSequence?: any;
+  rotation?: number;
+  opacity?: number;
+  mode?: 'board' | 'sequence';
+  cutoff?: 'top8' | 'top16' | 'all';
+  pageNumber?: number;
+  pageSize?: number;
+  layoutPresetId?: string;
+  customSlots?: any[];
+  variantRules?: any[];
+  variants?: Record<string, any>;
+  sequence?: any;
+  preview?: any;
+  themePreset?: string;
+  accentColor?: string;
+  cardAnimationPreset?: string;
+  largeImageSource?: 'character' | 'player';
+  showSmallImage?: boolean;
+  smallImageSource?: 'player' | 'character';
+  binding?: string;
+  formatMode?: 'auto' | 'ft2' | 'ft3' | 'ft5' | 'ft7';
+  winMarkerStyle?: 'check' | 'solid' | 'dot' | 'image';
+  customMarkerUrl?: string;
+  markerWidth?: number;
+  markerHeight?: number;
+  markerOffsetX?: number;
+  markerOffsetY?: number;
+  boxBorderColor?: string;
+  boxBgColor?: string;
+  wonColor?: string;
+  wonBgColor?: string;
+  currentHighlightColor?: string;
+  p1ScoreOverride?: number;
+  p2ScoreOverride?: number;
+  gamesHistoryOverride?: ('p1' | 'p2' | null)[];
+  matrixThemePreset?: 'crimson' | 'royal-blue' | 'cyber-gold' | 'emerald' | 'monochrome' | 'custom';
+  matrixCardAnimation?: 'none' | 'deal' | 'slam' | 'float' | 'flip' | 'hologram' | 'glow-pulse';
+
+  // Tournament Bracket Tree properties
+  bracketLayoutVariant?: 'top8-double-elim' | 'top4-showcase';
+  bracketThemePreset?: 'crimson' | 'royal-blue' | 'cyber-gold' | 'emerald' | 'monochrome' | 'custom';
+  bracketAccentColor?: string;
+  bracketHeaderColor?: string;
+  bracketSponsorText?: string;
+  bracketGameName?: string;
+  bracketTournamentName?: string;
+  bracketRoundBestOf?: string;
+  bracketShowBackground?: boolean;
+  bracketShowSponsors?: boolean;
+  bracketShowAvatars?: boolean;
+  bracketAvatarSize?: number;
+  bracketConnectorColor?: string;
+  bracketConnectorActiveColor?: string;
+  bracketConnectorWidth?: number;
+  bracketCardBgColor?: string;
+  bracketCardBorderColor?: string;
+  bracketWinnerColor?: string;
+  bracketTestMode?: boolean;
+  bracketSimulateReset?: boolean;
+  bracketBadgeStyle?: 'pill' | 'text';
+  top4StageMode?: 'auto' | 'opening_top8' | 'final4' | 'grand_finals';
+  bracketCardAnimation?: 'none' | 'deal' | 'slam' | 'float' | 'flip' | 'hologram' | 'glow-pulse';
+
+  // Victory Path properties
+  vpTargetPlayer?: 'p1' | 'p2' | 'custom';
+  vpCustomPlayerName?: string;
+  vpTestMode?: boolean;
+  vpThemePreset?: 'crimson' | 'royal-blue' | 'cyber-gold' | 'emerald' | 'monochrome' | 'custom';
+  vpAccentColor?: string;
+  vpBgColor?: string;
+  vpCardBgColor?: string;
+  vpBorderColor?: string;
+  vpFooterText?: string;
+  vpCardAnimation?: 'none' | 'deal' | 'slam' | 'float' | 'flip' | 'hologram' | 'glow-pulse';
 }
 
 export interface FontOption {
@@ -68,6 +179,8 @@ interface EditorState {
   clipboardStyle: Partial<OverlayElement> | null;
   clipboardPosition: { x: number, y: number } | null;
   activeMatch: any | null;
+  resultsPreviewCueIndex: Record<string, number>;
+  editingResultCardDefinitionId: string | null;
   
   // History states
   past: Record<string, OverlayElement>[];
@@ -87,10 +200,14 @@ interface EditorState {
   toggleSelectedId: (id: string) => void;
   setGlobalSettings: (bg: string, fontUrl: string, fontFamily: string) => void;
   setFontLibrary: (fonts: FontOption[]) => void;
+  removeFontFromLibrary: (family: string) => void;
   setStatusMsg: (msg: string) => void;
   setClipboardStyle: (style: Partial<OverlayElement> | null) => void;
   setClipboardPosition: (pos: { x: number, y: number } | null) => void;
   setActiveMatch: (match: any | null) => void;
+  setResultsPreviewCueIndex: (resultsGroupId: string, cueIndex: number) => void;
+  enterResultCardDesign: (definitionId: string) => void;
+  exitResultCardDesign: () => void;
 }
 
 export const useEditorStore = create<EditorState>((set) => ({
@@ -109,6 +226,8 @@ export const useEditorStore = create<EditorState>((set) => ({
   clipboardStyle: null,
   clipboardPosition: null,
   activeMatch: null,
+  resultsPreviewCueIndex: {},
+  editingResultCardDefinitionId: null,
   past: [],
   future: [],
 
@@ -125,7 +244,8 @@ export const useEditorStore = create<EditorState>((set) => ({
       future: [JSON.parse(JSON.stringify(state.elements)), ...state.future],
       elements: previous,
       selectedId: null,
-      selectedIds: []
+      selectedIds: [],
+      editingResultCardDefinitionId: null,
     };
   }),
   redo: () => set((state) => {
@@ -137,7 +257,8 @@ export const useEditorStore = create<EditorState>((set) => ({
       future: newFuture,
       elements: next,
       selectedId: null,
-      selectedIds: []
+      selectedIds: [],
+      editingResultCardDefinitionId: null,
     };
   }),
 
@@ -185,13 +306,63 @@ export const useEditorStore = create<EditorState>((set) => ({
   deleteElement: (id) => set((state) => {
     const currentClone = JSON.parse(JSON.stringify(state.elements));
     const newElements = { ...state.elements };
-    delete newElements[id];
+    const target = newElements[id];
+    if (target?.type === 'result-card' && target.instanceRole === 'stage' && target.parentId) {
+      const parent = newElements[target.parentId];
+      const replacement = (parent?.childIds || [])
+        .filter((childId) => childId !== id)
+        .map((childId) => newElements[childId])
+        .find((candidate) => candidate?.type === 'result-card');
+      if (replacement && target.definitionId) {
+        newElements[replacement.id] = { ...replacement, instanceRole: 'stage' };
+        const definition = newElements[target.definitionId];
+        if (definition) newElements[target.definitionId] = { ...definition, parentId: replacement.id };
+        if (parent) {
+          newElements[parent.id] = {
+            ...parent,
+            autoSequence: parent.autoSequence
+              ? { ...parent.autoSequence, stageInstanceId: replacement.id }
+              : parent.autoSequence,
+          };
+        }
+      }
+    }
+    const toDelete = new Set<string>([id]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      Object.values(newElements).forEach((el) => {
+        const referencedByDeletedGroup = Object.values(newElements).some(
+          (parent) => toDelete.has(parent.id)
+            && (parent.childIds?.includes(el.id)
+              || (parent.type === 'results-group' && (parent.cardDefinitionId === el.id || parent.templateId === el.id))
+              || (parent.type === 'result-card' && parent.definitionId === el.id)),
+        );
+        if (!toDelete.has(el.id) && ((el.parentId && toDelete.has(el.parentId)) || referencedByDeletedGroup)) {
+          toDelete.add(el.id);
+          changed = true;
+        }
+      });
+    }
+    toDelete.forEach((delId) => {
+      delete newElements[delId];
+    });
+    Object.entries(newElements).forEach(([elementId, element]) => {
+      if (!element.childIds?.some((childId) => toDelete.has(childId))) return;
+      newElements[elementId] = {
+        ...element,
+        childIds: element.childIds.filter((childId) => !toDelete.has(childId)),
+      };
+    });
     return {
       past: [...state.past, currentClone].slice(-50),
       future: [],
       elements: newElements,
-      selectedId: state.selectedId === id ? null : state.selectedId,
-      selectedIds: state.selectedIds.filter(selected => selected !== id)
+      selectedId: toDelete.has(state.selectedId || '') ? null : state.selectedId,
+      selectedIds: state.selectedIds.filter((selected) => !toDelete.has(selected)),
+      editingResultCardDefinitionId: toDelete.has(state.editingResultCardDefinitionId || '')
+        ? null
+        : state.editingResultCardDefinitionId,
     };
   }),
   restoreElement: (id) => set((state) => {
@@ -266,8 +437,29 @@ export const useEditorStore = create<EditorState>((set) => ({
     const unique = merged.filter((font, index) => merged.findIndex(item => item.family === font.family) === index);
     return { font_library: unique };
   }),
+  removeFontFromLibrary: (family) => set((state) => {
+    const nextLibrary = state.font_library.filter(font => font.family !== family);
+    const updates: Partial<EditorState> = { font_library: nextLibrary };
+    if (state.global_font_family === family) {
+      updates.global_font_family = '';
+      updates.global_font_url = '';
+    }
+    return updates as any;
+  }),
   setStatusMsg: (statusMsg) => set({ statusMsg }),
   setClipboardStyle: (style) => set({ clipboardStyle: style }),
   setClipboardPosition: (pos) => set({ clipboardPosition: pos }),
-  setActiveMatch: (activeMatch) => set({ activeMatch })
+  setActiveMatch: (activeMatch) => set({ activeMatch }),
+  setResultsPreviewCueIndex: (resultsGroupId, cueIndex) => set((state) => ({
+    resultsPreviewCueIndex: {
+      ...state.resultsPreviewCueIndex,
+      [resultsGroupId]: cueIndex,
+    },
+  })),
+  enterResultCardDesign: (editingResultCardDefinitionId) => set({
+    editingResultCardDefinitionId,
+    selectedId: editingResultCardDefinitionId,
+    selectedIds: [editingResultCardDefinitionId],
+  }),
+  exitResultCardDesign: () => set({ editingResultCardDefinitionId: null }),
 }));

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Save, Edit3, Check, X, Image as ImageIcon, Type, Link as LinkIcon, Undo, Redo, Plus } from 'lucide-react';
+import { Save, Edit3, Check, X, Image as ImageIcon, Link as LinkIcon, Undo, Redo } from 'lucide-react';
 import axios from 'axios';
 import { useEditorStore } from '@/store/useEditorStore';
 import { waitForOverlayCanvasAssets } from '@/utils/overlayAssets';
@@ -17,7 +17,6 @@ export function TopBar({ slot, stationId, onRename, onSave, onLoadClick, status 
   const [isEditing, setIsEditing] = useState(false);
   const [newName, setNewName] = useState(slot);
   const [isPreparingSlide, setIsPreparingSlide] = useState(false);
-  const [fontDraft, setFontDraft] = useState('');
   const store = useEditorStore();
 
   const handleRename = () => {
@@ -50,7 +49,7 @@ export function TopBar({ slot, stationId, onRename, onSave, onLoadClick, status 
 
   return (
     <div className="h-16 bg-[#2a2a2a] border-b border-white/10 flex items-center justify-between px-6 z-50">
-      <div className="flex items-center gap-6">
+      <div className="flex items-center gap-3">
         <div className="flex items-center gap-2">
           {isEditing ? (
             <div className="flex items-center gap-1">
@@ -64,7 +63,7 @@ export function TopBar({ slot, stationId, onRename, onSave, onLoadClick, status 
               <button onClick={() => { setIsEditing(false); setNewName(slot); }} className="p-1 hover:text-red-400"><X size={16} /></button>
             </div>
           ) : (
-            <div className="flex items-center gap-2 group min-w-[200px]">
+            <div className="flex items-center gap-2 group min-w-[180px]">
               <h1 className="text-lg font-bold tracking-tight text-white/90">
                 Overlay: <span className="text-accentYellow">{slot}</span>
               </h1>
@@ -77,75 +76,9 @@ export function TopBar({ slot, stationId, onRename, onSave, onLoadClick, status 
             </div>
           )}
         </div>
-        
-        <div className="h-6 w-px bg-white/10" />
-        
-        {/* Global Settings */}
-        <div className="flex items-center gap-3 text-xs">
-          <div className="flex items-center gap-2 bg-[#1a1a1a] rounded px-3 py-1.5 border border-white/5 focus-within:border-accentYellow/50 transition-colors" title="Background Image URL">
-            <ImageIcon size={14} className="text-white/40" />
-            <input 
-              className="bg-transparent border-none outline-none w-48 placeholder-white/30 text-white" 
-              placeholder="Background URL..." 
-              value={store.background_url} 
-              onChange={e => store.setGlobalSettings(e.target.value, store.global_font_url, store.global_font_family)} 
-            />
-          </div>
 
-          <div className="flex items-center gap-2 bg-[#1a1a1a] rounded px-3 py-1.5 border border-white/5 focus-within:border-accentYellow/50 transition-colors" title="Google Font URL">
-            <LinkIcon size={14} className="text-white/40" />
-            <input 
-              className="bg-transparent border-none outline-none w-48 placeholder-white/30 text-white" 
-              placeholder="Google Font URL..." 
-              value={store.global_font_url} 
-              onChange={e => store.setGlobalSettings(store.background_url, e.target.value, store.global_font_family)} 
-            />
-          </div>
+        <div className="h-6 w-px bg-white/10 mx-1" />
 
-          <div className="flex items-center gap-2 bg-[#1a1a1a] rounded px-3 py-1.5 border border-white/5 focus-within:border-accentYellow/50 transition-colors" title="Global Font Family">
-            <Type size={14} className="text-white/40" />
-            <select
-              className="bg-transparent border-none outline-none w-36 text-white text-xs"
-              value={store.global_font_family || ''}
-              onChange={e => {
-                const selected = store.font_library.find(font => font.family === e.target.value);
-                store.setGlobalSettings(store.background_url, selected?.url || store.global_font_url, e.target.value);
-              }}
-              title="Choose a saved global font"
-            >
-              <option className="bg-white text-black" value="">System Default</option>
-              {store.font_library.map(font => <option className="bg-white text-black" key={font.family} value={font.family}>{font.family}</option>)}
-              {store.global_font_family && !store.font_library.some(font => font.family === store.global_font_family) && (
-                <option className="bg-white text-black" value={store.global_font_family}>{store.global_font_family}</option>
-              )}
-            </select>
-            <input
-              className="bg-transparent border-l border-white/10 pl-2 outline-none w-36 placeholder-white/30 text-white text-xs"
-              placeholder="Custom CSS family"
-              value={fontDraft}
-              onChange={e => setFontDraft(e.target.value)}
-              onBlur={() => { if (fontDraft.trim()) store.setGlobalSettings(store.background_url, store.global_font_url, fontDraft.trim()); }}
-            />
-            <button
-              type="button"
-              className="text-accentYellow hover:text-white"
-              title="Add current family and Google Font URL to saved list"
-              onClick={() => {
-                const family = (fontDraft.trim() || store.global_font_family).trim();
-                if (!family) return;
-                const next = [...store.font_library.filter(font => font.family !== family), { family, url: store.global_font_url.trim() }];
-                store.setFontLibrary(next);
-                store.setGlobalSettings(store.background_url, store.global_font_url, family);
-                setFontDraft('');
-              }}
-            ><Plus size={13} /></button>
-          </div>
-        </div>
-      </div>
-
-      <div className="flex items-center gap-4 flex-shrink-0">
-        <span className="text-xs text-textDim font-medium animate-pulse">{status}</span>
-        
         {/* Undo / Redo controls */}
         <div className="flex items-center gap-1 bg-[#1a1a1a] rounded-full p-1 border border-white/5">
           <button 
@@ -169,7 +102,7 @@ export function TopBar({ slot, stationId, onRename, onSave, onLoadClick, status 
         <button 
           onClick={playSlide}
           disabled={isPreparingSlide}
-          className="flex items-center gap-2 bg-[#00ffcc]/20 hover:bg-[#00ffcc]/30 text-[#00ffcc] border border-[#00ffcc]/40 px-4 py-1.5 rounded-full text-sm font-bold transition-all hover:scale-105 active:scale-95"
+          className="flex items-center gap-2 bg-[#00ffcc]/20 hover:bg-[#00ffcc]/30 text-[#00ffcc] border border-[#00ffcc]/40 px-4 py-1.5 rounded-full text-sm font-bold transition-all hover:scale-105 active:scale-95 whitespace-nowrap"
           title="Play PowerPoint slide animation sequence for all elements"
         >
           {isPreparingSlide ? 'Preparing Images…' : '▶ Play Slide'}
@@ -177,7 +110,7 @@ export function TopBar({ slot, stationId, onRename, onSave, onLoadClick, status 
 
         <button 
           onClick={copyOBSLink}
-          className="flex items-center gap-2 bg-accentYellow/20 hover:bg-accentYellow/30 text-accentYellow border border-accentYellow/40 px-4 py-1.5 rounded-full text-sm font-bold transition-all hover:scale-105 active:scale-95"
+          className="flex items-center gap-2 bg-accentYellow/20 hover:bg-accentYellow/30 text-accentYellow border border-accentYellow/40 px-4 py-1.5 rounded-full text-sm font-bold transition-all hover:scale-105 active:scale-95 whitespace-nowrap"
           title="Copy revocable Browser Source link for the full station slideshow"
         >
           <LinkIcon size={16} />
@@ -186,7 +119,7 @@ export function TopBar({ slot, stationId, onRename, onSave, onLoadClick, status 
 
         <button 
           onClick={onLoadClick}
-          className="flex items-center gap-2 bg-[#333] hover:bg-[#444] text-white border border-white/20 px-4 py-1.5 rounded-full text-sm font-bold transition-all hover:scale-105 active:scale-95"
+          className="flex items-center gap-2 bg-[#333] hover:bg-[#444] text-white border border-white/20 px-4 py-1.5 rounded-full text-sm font-bold transition-all hover:scale-105 active:scale-95 whitespace-nowrap"
           title="Load a saved overlay template onto this station"
         >
           <ImageIcon size={16} />
@@ -195,11 +128,15 @@ export function TopBar({ slot, stationId, onRename, onSave, onLoadClick, status 
 
         <button 
           onClick={onSave}
-          className="flex items-center gap-2 bg-statusGreen/20 hover:bg-statusGreen/30 text-statusGreen border border-statusGreen/40 px-4 py-1.5 rounded-full text-sm font-bold transition-all hover:scale-105 active:scale-95"
+          className="flex items-center gap-2 bg-statusGreen/20 hover:bg-statusGreen/30 text-statusGreen border border-statusGreen/40 px-4 py-1.5 rounded-full text-sm font-bold transition-all hover:scale-105 active:scale-95 whitespace-nowrap"
         >
           <Save size={16} />
           Save Overlay
         </button>
+      </div>
+
+      <div className="flex items-center gap-4 flex-shrink-0">
+        <span className="text-xs text-textDim font-medium animate-pulse">{status}</span>
       </div>
     </div>
   );

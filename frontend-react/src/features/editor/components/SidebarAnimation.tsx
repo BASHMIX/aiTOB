@@ -9,6 +9,8 @@ export function SidebarAnimation() {
   if (!selEl || !selId) {
     return null;
   }
+  const isPlayerCardTemplate = selEl.type === 'group' && selEl.templateRole === 'player-card';
+  const isResultCard = selEl.type === 'result-card';
 
   // Animation configuration fallback & helper
   const anim = selEl?.animation || {
@@ -45,7 +47,7 @@ export function SidebarAnimation() {
   return (
     <div className="mb-3 p-2 bg-[#333] rounded border border-[#444]">
       <div className="flex justify-between items-center mb-2">
-        <h4 className="text-[11px] text-[#00ffcc] uppercase tracking-wider font-bold">Animation {selectedIds.length > 1 && <span className="text-white/60 normal-case">({selectedIds.length} selected)</span>}</h4>
+        <h4 className="text-[11px] text-[#00ffcc] uppercase tracking-wider font-bold">{isPlayerCardTemplate ? 'Player Card Entrance' : 'Animation'} {selectedIds.length > 1 && <span className="text-white/60 normal-case">({selectedIds.length} selected)</span>}</h4>
         <button
           onClick={triggerPreview}
           className="bg-[#00ffcc] text-[#111] hover:bg-[#00d4aa] px-2 py-0.5 rounded text-[10px] font-bold flex items-center gap-1 transition-all"
@@ -54,6 +56,17 @@ export function SidebarAnimation() {
           ▶ Play Preview
         </button>
       </div>
+
+      {isPlayerCardTemplate && (
+        <p className="mb-2 rounded border border-[#00ffcc]/15 bg-[#00ffcc]/5 p-2 text-[10px] leading-relaxed text-white/65">
+          Applied once to every generated player card. Reveal order and timing are configured on the parent Results Group.
+        </p>
+      )}
+      {isResultCard && (
+        <p className="mb-2 rounded border border-sky-400/15 bg-sky-400/5 p-2 text-[10px] leading-relaxed text-white/65">
+          This is the same animation system used by text, images, and shapes. The parent Results Cards group controls only the order and delay between cards.
+        </p>
+      )}
 
       {/* Row 1: Animation type & Direction */}
       <div className="grid grid-cols-2 gap-2 mb-2">

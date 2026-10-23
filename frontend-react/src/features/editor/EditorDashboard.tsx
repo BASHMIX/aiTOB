@@ -13,6 +13,8 @@ import { useEditorData } from './hooks/useEditorData';
 import { useEditorWebSocket } from './hooks/useEditorWebSocket';
 import { useEditorScale } from './hooks/useEditorScale';
 import { useContextMenuActions } from './hooks/useContextMenuActions';
+import { ResultCardDesignView } from './components/ResultCardDesignView';
+import { AutoSequencePreviewLayer } from './components/AutoSequencePreviewLayer';
 
 export function EditorDashboard() {
   const [searchParams] = useSearchParams();
@@ -213,7 +215,8 @@ export function EditorDashboard() {
                   />
                 )}
                 
-                {scale !== null && Object.entries(store.elements)
+                {scale !== null && store.editingResultCardDefinitionId && <ResultCardDesignView scale={scale} />}
+                {scale !== null && !store.editingResultCardDefinitionId && Object.entries(store.elements)
                   .sort((a, b) => (a[1].zIndex || 1) - (b[1].zIndex || 1))
                   .map(([id, el]) => (
                     <DraggableElement 
@@ -228,6 +231,7 @@ export function EditorDashboard() {
                       }}
                     />
                     ))}
+                {scale !== null && !store.editingResultCardDefinitionId && <AutoSequencePreviewLayer />}
                 {selectionBox && (
                   <div
                     className="absolute pointer-events-none border border-[#00ffcc] bg-[#00ffcc]/10 z-[999]"

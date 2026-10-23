@@ -3,6 +3,10 @@ import { useEditorStore } from '@/store/useEditorStore';
 import { SidebarAddElements } from './SidebarAddElements';
 import { SidebarProperties } from './SidebarProperties';
 import { SidebarAnimation } from './SidebarAnimation';
+import { ResultsGroupInspector } from './ResultsGroupInspector';
+import { findResultCardDefinitionContext } from '../resultsTemplateContext';
+import { PlayerCardFieldsPanel } from './PlayerCardFieldsPanel';
+import { ResultsCardsInspector } from './ResultsCardsInspector';
 
 export function Sidebar({ onPush }: { onPush: () => void }) {
   const store = useEditorStore();
@@ -10,6 +14,7 @@ export function Sidebar({ onPush }: { onPush: () => void }) {
 
   const selId = store.selectedId;
   const selEl = selId ? store.elements[selId] : null;
+  const resultCardContext = findResultCardDefinitionContext(store.elements, store.editingResultCardDefinitionId);
 
   // Handle global keydown for delete
   useEffect(() => {
@@ -55,15 +60,39 @@ export function Sidebar({ onPush }: { onPush: () => void }) {
       {/* EXPANDED VIEW: Full Form */}
       <div className={`flex flex-col w-full transition-opacity duration-300 ${isCollapsed ? 'opacity-0 hidden' : 'opacity-100'}`}>
         
-        <SidebarAddElements />
+        {resultCardContext ? <PlayerCardFieldsPanel /> : <SidebarAddElements />}
 
         <h2 className="text-[#00ffcc] uppercase tracking-wide mb-3 font-bold">Element Properties</h2>
         {!selEl || !selId ? (
           <p className="text-[#666] text-[12px]">Click an element on the canvas to edit properties.</p>
         ) : (
           <div className="flex flex-col">
-            <SidebarProperties />
-            <SidebarAnimation />
+            {resultCardContext && (
+              <div className="mb-3 rounded-lg border border-amber-400/25 bg-amber-400/5 p-3">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300">Result Card Design</div>
+                <p className="mt-1 text-[10px] leading-relaxed text-white/55">You are editing the shared internal layers. Changes update freeform cards, Results Groups, exports, and OBS.</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    store.exitResultCardDesign();
+                    if (resultCardContext.owner) store.setSelectedId(resultCardContext.owner.id);
+                  }}
+                  className="mt-2 w-full rounded border border-amber-300/30 bg-amber-300/10 px-2 py-1.5 text-[11px] font-bold text-amber-200 hover:bg-amber-300/20"
+                >
+                  ← Done Editing Card
+                </button>
+              </div>
+            )}
+            {selEl.type === 'results-group' ? (
+              <ResultsGroupInspector />
+            ) : selEl.type === 'results-cards' ? (
+              <ResultsCardsInspector />
+            ) : (
+              <>
+                <SidebarProperties />
+                <SidebarAnimation />
+              </>
+            )}
             <button className="bg-[#ff4444] text-white font-bold py-2 rounded hover:bg-[#cc2222]" onClick={() => store.deleteElement(selId)}>🗑️ Remove Element</button>
           </div>
         )}

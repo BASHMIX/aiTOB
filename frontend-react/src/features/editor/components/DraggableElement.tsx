@@ -5,6 +5,14 @@ import { countryFlagUrl } from '@/utils/country';
 import { overlayImageLayout, overlayImagePlaceholder, resolveOverlayImageSource } from '@/utils/overlayAssets';
 import type { OverlayElement } from '@/store/useEditorStore';
 import { useDraggable } from '../hooks/useDraggable';
+import { ResultsGroupRenderer } from '@/scene/ResultsGroupRenderer';
+import { ResultCardRenderer } from '@/scene/ResultCardRenderer';
+import { MatchMatrixRenderer } from './MatchMatrixRenderer';
+import { BracketTreeRenderer } from './BracketTreeRenderer';
+import { VictoryPathRenderer } from './VictoryPathRenderer';
+import { useHubStore } from '@/store/useHubStore';
+import { useLiveStandings } from '@/features/results/useLiveStandings';
+import type { SceneDocumentV2 } from '@/scene/types';
 
 function resolveCascadeDelays(elements: Record<string, any>) {
   const sorted = Object.entries(elements).sort(
@@ -59,7 +67,29 @@ export function DraggableElement({ id, element, scale, onContextMenu }: Props) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLooping, setIsLooping] = useState(false);
   const [useCascade, setUseCascade] = useState(false);
+  const [hiddenForAutoSequence, setHiddenForAutoSequence] = useState(false);
   const groupDragOrigin = useRef<Record<string, { x: number; y: number }> | null>(null);
+
+  const currentSlug = useHubStore((s) => s.currentSlug);
+  const currentEventId = useHubStore((s) => s.currentEventId);
+  const tournaments = useHubStore((s) => s.tournaments);
+  const activeTournament = tournaments.find((t) => t.slug === currentSlug) || tournaments[0] || null;
+  const tournamentSlug = activeTournament?.slug || currentSlug || undefined;
+  const eventId = activeTournament?.event_id || currentEventId || undefined;
+
+  const datasetKey = element.type === 'results-group'
+    ? (element.preview?.dataset || 'normal')
+    : element.type === 'result-card'
+    ? (store.elements[element.parentId || '']?.preview?.dataset || 'normal')
+    : 'normal';
+
+  const isTestMode = element.bracketTestMode ?? false;
+  const { standings: liveStandings } = useLiveStandings(
+    tournamentSlug,
+    eventId,
+    isTestMode,
+    datasetKey
+  );
 
   const beginGroupDrag = () => {
     if (!selectedIds.includes(id)) setSelectedId(id);
@@ -135,6 +165,45 @@ export function DraggableElement({ id, element, scale, onContextMenu }: Props) {
     };
   }, [id, element.animation, store.elements]);
 
+  useEffect(() => {
+    if (element.type !== 'result-card' || !element.parentId) return;
+    const handleSequenceControl = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      if (detail?.groupId !== element.parentId) return;
+      if (detail.action === 'play' || detail.action === 'restart' || detail.action === 'next' || detail.action === 'previous') {
+        setHiddenForAutoSequence(true);
+      } else if (detail.action === 'clear') {
+        setHiddenForAutoSequence(false);
+      }
+    };
+    const handleSequenceEnded = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      if (detail?.groupId === element.parentId) setHiddenForAutoSequence(false);
+    };
+    window.addEventListener('result-sequence-control', handleSequenceControl);
+    window.addEventListener('result-sequence-preview-ended', handleSequenceEnded);
+    return () => {
+      window.removeEventListener('result-sequence-control', handleSequenceControl);
+      window.removeEventListener('result-sequence-preview-ended', handleSequenceEnded);
+    };
+  }, [element.type, element.parentId]);
+
+  const belongsToCardDefinition = (() => {
+    let currentId: string | undefined = id;
+    const visited = new Set<string>();
+    while (currentId && !visited.has(currentId)) {
+      visited.add(currentId);
+      const current = store.elements[currentId];
+      if (current?.type === 'group' && (current.definitionRole === 'result-card' || current.templateRole === 'player-card')) return true;
+      currentId = store.elements[currentId]?.parentId || undefined;
+    }
+    return false;
+  })();
+
+  // Player Card templates are authored through the Layers tree but rendered
+  // only through their Results Group. Drawing them independently duplicates
+  // the master and its children on top of the generated preview cards.
+  if (belongsToCardDefinition || element.type === 'results-cards') return null;
   if (!element.visible) return null;
 
   const isImg = element.type === 'image';
@@ -186,6 +255,11 @@ export function DraggableElement({ id, element, scale, onContextMenu }: Props) {
     else if (hookKey === 'p2_character') textToRender = p2Character || '';
     else if (hookKey === 'game_name') textToRender = activeMatch.game_name || '';
     else if (hookKey === 'tournament_round') textToRender = activeMatch.round_name || '';
+    else if (hookKey === 'match_format_badge') {
+      const bestOf = Number(activeMatch.best_of) || 9;
+      const targetWins = Math.floor(bestOf / 2) + 1;
+      textToRender = `FIRST TO ${targetWins} GAMES`;
+    }
     else if (hookKey === 'p1_avatar') srcToRender = p1Avatar || '/static/player_placeholder.jpg';
     else if (hookKey === 'p2_avatar') srcToRender = p2Avatar || '/static/player_placeholder.jpg';
     else if (hookKey === 'p1_character_image') srcToRender = p1CharacterImage || '/static/player_placeholder.jpg';
@@ -239,6 +313,91 @@ export function DraggableElement({ id, element, scale, onContextMenu }: Props) {
         className="block pointer-events-none"
         style={{ ...imageLayout, filter: imgShadow }}
       />
+    );
+  } else if (element.type === 'result-card') {
+    const sceneDoc: SceneDocumentV2 = {
+      schemaVersion: 2,
+      canvas: { width: 1920, height: 1080 },
+      dataSource: { kind: 'tournament-results' },
+      rootIds: [element.id],
+      nodes: store.elements as any,
+    };
+    const standing = liveStandings.find((entry) => entry.ordinal === (element.standingOrdinal || 1))
+      || liveStandings[Math.max(0, (element.standingOrdinal || 1) - 1)]
+      || liveStandings[0];
+    content = standing ? (
+      <ResultCardRenderer
+        scene={sceneDoc}
+        definitionId={element.definitionId || ''}
+        standing={standing}
+        width={element.width || 420}
+        height={element.height || 560}
+        variant={element.variant}
+        largeImageSource={element.largeImageSource}
+        showSmallImage={element.showSmallImage}
+        smallImageSource={element.smallImageSource}
+      />
+    ) : null;
+  } else if (element.type === 'results-group') {
+    const sceneDoc: SceneDocumentV2 = {
+      schemaVersion: 2,
+      canvas: { width: 1920, height: 1080 },
+      dataSource: { kind: 'tournament-results' },
+      rootIds: [element.id],
+      nodes: store.elements as any,
+    };
+    const previewNode = {
+      ...element,
+      x: 0,
+      y: 0,
+      customSlots: element.customSlots?.map((slot) => ({
+        ...slot,
+        x: slot.x - (element.x || 0),
+        y: slot.y - (element.y || 0),
+      })),
+    };
+    content = (
+      <div className="w-full h-full border border-dashed border-[#00ffcc]/40 relative pointer-events-none select-none">
+        <ResultsGroupRenderer
+          scene={sceneDoc}
+          node={previewNode as any}
+          standings={liveStandings}
+          activeCueIndex={store.resultsPreviewCueIndex[element.id]}
+        />
+      </div>
+    );
+  } else if (element.type === 'match-grid') {
+    content = (
+      <MatchMatrixRenderer
+        element={element}
+        activeMatch={activeMatch}
+        interactive={true}
+        onUpdateHistory={(newHistory) => {
+          store.updateElement(id, { gamesHistoryOverride: newHistory });
+        }}
+      />
+    );
+  } else if (element.type === 'bracket-tree') {
+    content = (
+      <BracketTreeRenderer
+        element={element}
+        activeMatch={activeMatch}
+      />
+    );
+  } else if (element.type === 'victory-path') {
+    content = (
+      <VictoryPathRenderer
+        element={element}
+        activeMatch={activeMatch}
+      />
+    );
+  } else if (element.type === 'group') {
+    content = (
+      <div className="w-full h-full border-2 border-dashed border-amber-400/50 rounded bg-amber-500/5 p-2 pointer-events-none select-none">
+        <span className="text-[10px] font-bold text-amber-300 uppercase tracking-wider bg-black/60 px-1.5 py-0.5 rounded border border-amber-500/30">
+          {element.definitionRole === 'result-card' || element.templateRole === 'player-card' ? 'Result Card Design' : 'Group'}
+        </span>
+      </div>
     );
   } else if (isShape) {
     const shapeShadow = element.shadowColor
@@ -467,7 +626,7 @@ export function DraggableElement({ id, element, scale, onContextMenu }: Props) {
         else setSelectedId(id);
       }}
       className={`select-none text-center box-border ${isSelected ? 'outline-dashed outline-2 outline-[#00ffcc]' : ''}`}
-      bounds="parent"
+      bounds={element.type === 'result-card' ? undefined : 'parent'}
       dragGrid={[1, 1]}
       resizeGrid={[1, 1]}
     >
@@ -475,6 +634,9 @@ export function DraggableElement({ id, element, scale, onContextMenu }: Props) {
         className={`w-full h-full ${loopClass}`} 
         style={{
           ...animStyles,
+          visibility: hiddenForAutoSequence ? 'hidden' : 'visible',
+          opacity: (animStyles as any).opacity ?? element.opacity ?? 1,
+          rotate: element.rotation ? `${element.rotation}deg` : undefined,
           ['--idle-intensity' as any]: element.animation?.idleIntensity ?? 1.0,
         }} 
         onContextMenu={onContextMenu}

@@ -4,6 +4,7 @@ import { EditorDashboard } from './features/editor/EditorDashboard';
 import { OBSViewer } from './features/obs/OBSViewer';
 import { TournamentSetupPage } from './features/tournament-setup';
 import { PlayerArchivePage } from './features/players/PlayerArchivePage';
+import { ResultsStudioPage } from './features/results/ResultsStudioPage';
 
 import { LoginPage } from './features/auth/LoginPage';
 import { AccountActionPage } from './features/auth/AccountActionPage';
@@ -23,6 +24,7 @@ function App() {
         <Route path="/admin/editor" element={<AuthGuard><EditorDashboard /></AuthGuard>} />
         <Route path="/admin/players" element={<AuthGuard><PlayerArchivePage /></AuthGuard>} />
         <Route path="/players" element={<Navigate to="/admin/players" replace />} />
+        <Route path="/admin/results" element={<AuthGuard><ResultsStudioPage /></AuthGuard>} />
         <Route path="/admin/tournaments/new" element={<AuthGuard><TournamentSetupPage /></AuthGuard>} />
         <Route path="/admin/tournaments/setup/:draftId" element={<AuthGuard><TournamentSetupPage /></AuthGuard>} />
         <Route path="/admin/tournaments/setup/:draftId/:step" element={<AuthGuard><TournamentSetupPage /></AuthGuard>} />

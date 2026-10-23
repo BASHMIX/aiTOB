@@ -1,6 +1,8 @@
 import { useState, useCallback } from 'react';
 import axios from 'axios';
 import { useEditorStore } from '@/store/useEditorStore';
+import { normalizeScene } from '@/scene/normalizeScene';
+import type { SceneDocumentV2 } from '@/scene/types';
 
 export function useEditorData(stationId: string, wsRef: React.MutableRefObject<WebSocket | null>) {
 
@@ -79,7 +81,8 @@ export function useEditorData(stationId: string, wsRef: React.MutableRefObject<W
       if (loadedOverlayName) {
         const currentPreset = parsed.find((p: any) => p.name === loadedOverlayName);
         if (currentPreset && currentPreset.config) {
-          useEditorStore.getState().setElements(currentPreset.config.elements || {});
+          const normalized = normalizeScene(currentPreset.config);
+          useEditorStore.getState().setElements(normalized.nodes as any);
           useEditorStore.getState().setGlobalSettings(
             currentPreset.config.background_url || '',
             currentPreset.config.global_font_url || '',
@@ -121,7 +124,29 @@ export function useEditorData(stationId: string, wsRef: React.MutableRefObject<W
         };
       }
 
+      const sceneDoc: SceneDocumentV2 = {
+        schemaVersion: 2,
+        canvas: {
+          width: 1920,
+          height: 1080,
+          backgroundUrl: currentStore.background_url,
+          globalFontUrl: currentStore.global_font_url,
+          globalFontFamily: currentStore.global_font_family,
+          fontLibrary: currentStore.font_library,
+        },
+        dataSource: {
+          kind: Object.values(roundedElements).some((el) => ['results-group', 'results-cards', 'result-card'].includes(el.type))
+            ? 'tournament-results'
+            : 'current-match',
+        },
+        rootIds: Object.values(roundedElements)
+          .filter((el) => !el.parentId)
+          .map((el) => el.id),
+        nodes: roundedElements as any,
+      };
+
       const config = {
+        ...sceneDoc,
         elements: roundedElements,
         background_url: currentStore.background_url,
         global_font_url: currentStore.global_font_url,
