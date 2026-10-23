@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import axios from 'axios';
 import { useHubStore } from '@/store/useHubStore';
 
@@ -107,7 +107,16 @@ export function LoginPage() {
             </button>
           </form>
 
-          <div className="mt-8 pt-6 border-t border-white/5 text-center">
+          <div className="mt-8 pt-6 border-t border-white/5 text-center space-y-3">
+            <div className="flex items-center justify-center gap-4 text-xs font-medium text-gray-400">
+              <Link to="/terms" className="hover:text-accentYellow transition-colors">
+                شروط الخدمة (Terms)
+              </Link>
+              <span className="text-gray-600">•</span>
+              <Link to="/privacy" className="hover:text-accentYellow transition-colors">
+                سياسة الخصوصية (Privacy)
+              </Link>
+            </div>
             <p className="text-[10px] text-gray-600 font-mono uppercase tracking-[0.2em]">
               AI Tournament Organizer v1.0
             </p>

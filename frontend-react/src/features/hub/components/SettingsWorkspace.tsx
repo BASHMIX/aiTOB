@@ -10,9 +10,10 @@ import { ActionProposalReview } from './ActionProposalReview';
 import { AISettings } from './AISettings';
 import { AccountSettings } from './AccountSettings';
 import { RolesPermissions } from './RolesPermissions';
+import { LegalSettingsSection } from './LegalSettingsSection';
 import { usePermission } from '@/hooks/usePermission';
 
-type SettingsSection = 'overview' | 'account' | 'roles' | 'connections' | 'tournament' | 'match_operations' | 'bot' | 'ai_automation' | 'system';
+type SettingsSection = 'overview' | 'account' | 'roles' | 'connections' | 'tournament' | 'match_operations' | 'bot' | 'ai_automation' | 'legal' | 'system';
 
 const sections: Array<{ id: SettingsSection; icon: string; label: string; hint: string; permission?: string }> = [
   { id: 'overview', icon: '◉', label: 'Overview', hint: 'Health & attention' },
@@ -23,6 +24,7 @@ const sections: Array<{ id: SettingsSection; icon: string; label: string; hint: 
   { id: 'match_operations', icon: '◈', label: 'Match operations', hint: 'Check-in, dispatch & timing', permission: 'tournament.manage' },
   { id: 'bot', icon: '✦', label: 'Bot experience', hint: 'Messages & instructions', permission: 'settings.manage' },
   { id: 'ai_automation', icon: '◌', label: 'AI & Automation', hint: 'Assistant provider & safety', permission: 'assistant.use' },
+  { id: 'legal', icon: '⚖', label: 'Legal & Compliance', hint: 'Terms, privacy & player waiver' },
   { id: 'system', icon: '⚙', label: 'System', hint: 'Service configuration', permission: 'settings.manage' },
 ];
 
@@ -197,6 +199,7 @@ export function SettingsWorkspace() {
         {activeSection === 'match_operations' && <TournamentWorkflowSettings />}
         {activeSection === 'bot' && <GeneralSettings section="bot" embedded />}
         {activeSection === 'ai_automation' && <AISettings />}
+        {activeSection === 'legal' && <LegalSettingsSection />}
         {activeSection === 'system' && <GeneralSettings section="system" embedded />}
       </div>
     </section>

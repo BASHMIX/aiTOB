@@ -175,6 +175,17 @@ export function IntegrationAccounts() {
 
       {showAccountControls && <section className="rounded-xl border border-white/10 bg-cardDark p-4 shadow-sm sm:p-5">
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-sm font-bold text-white">Connect your provider account</h2><p className="mt-1 max-w-2xl text-xs text-textDim">Bring your own credential. aiTOB verifies it with the provider, reads the real account identity, and stores the credential encrypted for this Workspace only.</p></div><button type="button" onClick={() => void connectDiscord()} disabled={busy === 'oauth:discord'} className="rounded-lg border border-indigo-300/30 bg-indigo-300/10 px-3 py-2 text-xs font-bold text-indigo-100 transition-colors hover:bg-indigo-300/20 disabled:opacity-50">{busy === 'oauth:discord' ? 'Opening…' : 'Connect Discord'}</button></div>
+        
+        {/* BYOC Compliance Notice */}
+        <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200/90 leading-relaxed space-y-1">
+          <div className="font-bold flex items-center gap-1.5 text-amber-300 text-xs uppercase tracking-wide">
+            <span>⚖️</span> إشعار سياسة المفاتيح الخاصة (BYOC Responsibility Notice)
+          </div>
+          <p className="text-[11px] text-gray-300">
+            أنت تُدخل وتستخدم مفتاح الـ API الخاص بحسابك. تقع على عاتقك وحدك مسؤولية الالتزام بشروط خدمة المزود (Start.gg / Challonge) ومراقبة معدلات الاستخدام والحصص المسموحة (Rate Limits). تضمن aiTOB تشفير المفتاح وعدم مشاركته مع أي طرف خارجي.
+          </p>
+        </div>
+
         <div className="grid gap-3 md:grid-cols-[minmax(12rem,0.45fr)_minmax(0,1fr)]">
           <label className="space-y-1.5"><span className="text-[10px] font-mono uppercase tracking-wider text-textDim">Provider</span><select className="w-full rounded-lg border border-white/10 bg-appDark px-3 py-2 text-sm text-white outline-none focus:border-accentYellow/60" value={draft.provider_type} onChange={(event) => setDraft({ ...draft, provider_type: event.target.value as 'challonge' | 'startgg' })}><option value="challonge">Challonge</option><option value="startgg">Start.gg</option></select></label>
           <label className="space-y-1.5"><span className="text-[10px] font-mono uppercase tracking-wider text-textDim">{providerMeta[draft.provider_type].credential}</span><input type="password" autoComplete="new-password" className="w-full rounded-lg border border-white/10 bg-appDark px-3 py-2 text-sm text-white outline-none focus:border-accentYellow/60" placeholder={draft.provider_type === 'startgg' ? 'Paste your Start.gg API token' : 'Paste your Challonge API key'} value={draft.credential} onChange={(event) => setDraft({ ...draft, credential: event.target.value })} /></label>

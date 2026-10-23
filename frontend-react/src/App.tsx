@@ -9,6 +9,8 @@ import { ResultsStudioPage } from './features/results/ResultsStudioPage';
 import { LoginPage } from './features/auth/LoginPage';
 import { AccountActionPage } from './features/auth/AccountActionPage';
 import { AuthGuard } from './components/auth/AuthGuard';
+import { TermsPage } from './features/legal/TermsPage';
+import { PrivacyPage } from './features/legal/PrivacyPage';
 
 function App() {
   return (
@@ -16,6 +18,8 @@ function App() {
       <Routes>
         <Route path="/" element={<Navigate to="/admin/hub" replace />} />
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/terms" element={<TermsPage />} />
+        <Route path="/privacy" element={<PrivacyPage />} />
         <Route path="/verify-email" element={<AccountActionPage kind="verify" />} />
         <Route path="/reset-password" element={<AccountActionPage kind="reset" />} />
         <Route path="/accept-invitation" element={<AccountActionPage kind="invite" />} />

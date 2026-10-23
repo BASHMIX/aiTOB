@@ -185,7 +185,16 @@ export const SetupGuideModal: React.FC<SetupGuideModalProps> = ({ isOpen, onClos
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-3 border-t border-gray-800 bg-[#090d14] flex justify-end">
+        <div className="px-6 py-3 border-t border-gray-800 bg-[#090d14] flex items-center justify-between text-[11px] text-gray-500">
+          <div className="flex items-center gap-3">
+            <a href="https://aitob.bashtech.xyz/terms#station-agent" target="_blank" rel="noopener noreferrer" className="hover:text-cyan-400 underline">
+              Station Agent EULA
+            </a>
+            <span>•</span>
+            <a href="https://aitob.bashtech.xyz/privacy" target="_blank" rel="noopener noreferrer" className="hover:text-cyan-400 underline">
+              Privacy Policy
+            </a>
+          </div>
           <button
             onClick={onClose}
             className="px-5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition"

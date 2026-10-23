@@ -253,6 +253,30 @@ export const TopMenuBar: React.FC<TopMenuBarProps> = ({
               
               <div className="h-px bg-gray-800 my-1 mx-2" />
 
+              <a 
+                href="https://aitob.bashtech.xyz/terms" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                onClick={closeMenu}
+                className="w-full text-left px-3.5 py-1.5 hover:bg-gray-800 flex items-center justify-between text-xs text-gray-300 transition-colors"
+              >
+                <span>Terms of Service & EULA</span>
+                <span className="text-[10px] text-gray-500">↗</span>
+              </a>
+
+              <a 
+                href="https://aitob.bashtech.xyz/privacy" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                onClick={closeMenu}
+                className="w-full text-left px-3.5 py-1.5 hover:bg-gray-800 flex items-center justify-between text-xs text-gray-300 transition-colors"
+              >
+                <span>Privacy Policy</span>
+                <span className="text-[10px] text-gray-500">↗</span>
+              </a>
+
+              <div className="h-px bg-gray-800 my-1 mx-2" />
+
               <div className="px-3.5 py-2 text-[11px] text-gray-400 leading-normal">
                 <span className="font-semibold text-gray-200 block">aiTOB Station Agent</span>
                 Version 1.0.0

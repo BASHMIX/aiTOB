@@ -73,6 +73,15 @@ export function AISettings({ connectionOnly = false }: { connectionOnly?: boolea
     const connection = config.connections?.[connectionProvider];
     return <section className="rounded-xl border border-white/10 bg-cardDark p-4 shadow-sm sm:p-5">
       <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-sm font-bold text-white">AI provider credentials</h2><p className="mt-1 max-w-2xl text-xs text-textDim">Bring your own Gemini or OpenAI key. It is encrypted for this Workspace and provider usage is billed directly to its owner.</p></div><span className={`rounded-full border px-2 py-1 text-[10px] font-bold uppercase ${connection?.configured ? 'border-statusGreen/30 text-statusGreen' : 'border-amber-300/30 text-amber-200'}`}>{connection?.configured ? 'Configured' : 'Credential required'}</span></div>
+      <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200/90 leading-relaxed space-y-1">
+        <p className="font-semibold text-amber-300">⚖️ تنبيه استهلاك مفاتيح الذكاء الاصطناعي (AI BYOC Notice):</p>
+        <p>
+          مفاتيح Google Gemini و OpenAI تُحفظ مشفرة وتُستخدم حصرياً لمساحة العمل الخاصة بك. جميع تكاليف وحصص الاستهلاك تُحسب مباشرة على حسابك لدى المزود دون أي وساطة مالية من aiTOB.
+        </p>
+        <p className="text-[11px] text-amber-300/80">
+          اقتراحات الذكاء الاصطناعي استشارية بحتة. للمزيد، راجع <a href="/terms#ai-usage" target="_blank" rel="noopener noreferrer" className="underline hover:text-white">شروط الخدمة</a> و <a href="/privacy" target="_blank" rel="noopener noreferrer" className="underline hover:text-white">سياسة الخصوصية</a>.
+        </p>
+      </div>
       <div className="mt-4 grid gap-3 md:grid-cols-[minmax(12rem,0.45fr)_minmax(0,1fr)]"><label className="space-y-1.5"><span className="text-[10px] font-mono uppercase tracking-wider text-textDim">AI provider</span><select value={connectionProvider} onChange={(event) => setConnectionProvider(event.target.value as 'gemini' | 'openai')} className="w-full rounded-lg border border-white/10 bg-appDark px-3 py-2 text-sm text-white"><option value="gemini">Google Gemini</option><option value="openai">OpenAI</option></select></label><label className="space-y-1.5"><span className="text-[10px] font-mono uppercase tracking-wider text-textDim">Workspace API key</span><input type="password" autoComplete="new-password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="Enter a replacement key; leave empty to retain" className="w-full rounded-lg border border-white/10 bg-appDark px-3 py-2 text-sm text-white" /></label></div>
       <div className="mt-4 flex flex-wrap items-center gap-3"><button type="button" onClick={saveConnection} disabled={busy} className="rounded-lg bg-accentYellow px-3 py-2 text-xs font-bold text-black disabled:opacity-40">Save encrypted credential</button><button type="button" onClick={testConnection} disabled={busy || !connection?.configured} className="rounded-lg border border-white/15 px-3 py-2 text-xs font-bold text-white disabled:opacity-40">Test connection</button>{connection?.last_tested_at && <span className="text-[11px] text-textDim">Last tested: {new Date(connection.last_tested_at).toLocaleString()}</span>}</div>
       {message && <p className="mt-3 text-xs text-textDim">{message}</p>}
@@ -81,7 +90,7 @@ export function AISettings({ connectionOnly = false }: { connectionOnly?: boolea
   return <section className="space-y-5 animate-fadeIn">
     <div className="rounded-xl border border-accentYellow/20 bg-accentYellow/5 p-4 text-xs text-textDim">
       <b className="text-accentYellow">Organizer Assistant policy</b>
-      <p className="mt-1">The Assistant is API-owned, tournament-scoped, and never executes or approves actions. In propose-only mode it can create a pending Call or announcement proposal only.</p>
+      <p className="mt-1">The Assistant is API-owned, tournament-scoped, and never executes or approves actions. In propose-only mode it can create a pending Call or announcement proposal only. Organizers retain sole authority and responsibility for all bracket decisions (<a href="/terms#ai-usage" target="_blank" rel="noopener noreferrer" className="underline hover:text-white">AI Terms</a>).</p>
     </div>
     <div className="grid gap-4 md:grid-cols-2">
       <label className="flex flex-col gap-1.5 text-xs text-textDim">Provider

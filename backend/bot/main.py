@@ -682,6 +682,44 @@ async def avatar_command(interaction: discord.Interaction):
     )
 
 
+def create_legal_embed() -> discord.Embed:
+    embed = discord.Embed(
+        title="⚖️ aiTOB Legal, Privacy & Compliance",
+        description="aiTOB is an AI-assisted tournament operations platform operated by Bashtech Systems. By using this bot or participating in integrated events, you agree to the policies below:",
+        color=discord.Color.gold(),
+    )
+    embed.add_field(
+        name="📜 Terms of Service",
+        value="[View Terms of Service](https://aitob.bashtech.xyz/terms)\nRules of use, organizer responsibility, BYOC policies, and dispute terms.",
+        inline=False,
+    )
+    embed.add_field(
+        name="🔒 Privacy Policy & Data Erasure",
+        value="[View Privacy Policy](https://aitob.bashtech.xyz/privacy)\nDiscord ID handling, encrypted credentials, and GDPR data erasure requests via `privacy@bashtech.xyz`.",
+        inline=False,
+    )
+    embed.add_field(
+        name="📷 Player Media & Broadcast Consent",
+        value="Tournament organizers retain non-exclusive rights to feature participant gamertags, stream matches, and generate result cards.",
+        inline=False,
+    )
+    embed.set_footer(text="Bashtech Systems · https://aitob.bashtech.xyz")
+    return embed
+
+
+@bot.tree.command(name="legal", description="View aiTOB Terms of Service, Privacy Policy, and Compliance")
+async def legal_command(interaction: discord.Interaction):
+    embed = create_legal_embed()
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@bot.command(name="legal")
+async def legal_prefix_command(ctx):
+    """Display aiTOB legal terms and privacy links."""
+    embed = create_legal_embed()
+    await ctx.send(embed=embed)
+
+
 # ── Gap B: LLM-driven entrant disambiguation ───────────────────────────
 # When /verify is called without a profile URL, pull the entrant list from
 # every tracked tournament, ask Gemini to rank candidates by likelihood of
