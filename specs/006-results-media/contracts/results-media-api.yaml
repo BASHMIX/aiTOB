@@ -1,0 +1,428 @@
+openapi: 3.1.0
+info:
+  title: aiTOB Tournament Results Media API
+  version: 0.1.0
+  description: >-
+    Workspace-scoped contracts for provider-authoritative result versions,
+    frozen media outputs, and station results playback. Browser authentication
+    uses the existing HttpOnly session and CSRF boundary.
+paths:
+  /api/tournaments/{tournament_slug}/events/{event_id}/results/latest:
+    get:
+      summary: Read the latest locally stored result version without provider I/O
+      x-permission: workspace.read
+      parameters:
+        - $ref: '#/components/parameters/TournamentSlug'
+        - $ref: '#/components/parameters/EventId'
+      responses:
+        '200':
+          description: Latest observed result version and readiness
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultVersion'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/tournaments/{tournament_slug}/events/{event_id}/results/refresh:
+    post:
+      summary: Fetch provider standings and create or reuse an immutable result version
+      x-permission: results.manage
+      parameters:
+        - $ref: '#/components/parameters/TournamentSlug'
+        - $ref: '#/components/parameters/EventId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                force:
+                  type: boolean
+                  default: false
+                  description: Bypass only the bounded snapshot freshness window, never provider rate limits.
+                presentation_mode:
+                  type: string
+                  enum: [current]
+                  default: current
+      responses:
+        '200':
+          description: Created or reused observation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefreshResult'
+        '409':
+          description: Provider observation conflicted with scoped tournament/event identity
+        '422':
+          description: Provider response could not form a usable result observation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefreshFailure'
+        '429':
+          description: Provider refresh admission or account rate limit refused the request
+
+  /api/results-media/versions/{version_id}:
+    get:
+      summary: Read one immutable result version and its paged entries
+      x-permission: workspace.read
+      parameters:
+        - $ref: '#/components/parameters/VersionId'
+        - name: cutoff
+          in: query
+          schema:
+            type: string
+            enum: [top8, top16, all]
+            default: top8
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 32
+            default: 16
+      responses:
+        '200':
+          description: Frozen metadata and presentation entries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultVersion'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/results-media/versions/{version_id}/outputs:
+    post:
+      summary: Freeze a normalized scene and result binding for static or live use
+      x-permission: results.manage for static; results.broadcast for live
+      parameters:
+        - $ref: '#/components/parameters/VersionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMediaOutput'
+      responses:
+        '201':
+          description: Immutable media output receipt
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaOutput'
+        '409':
+          description: Final-labelled output requested from a non-Final version
+        '422':
+          description: Invalid scene, generated instances present, or asset preflight not satisfied
+
+  /api/results-media/outputs/{output_id}/export-receipt:
+    post:
+      summary: Record a successful client-side PNG rasterization before download
+      x-permission: results.manage
+      parameters:
+        - $ref: '#/components/parameters/OutputId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [byte_size, sha256]
+              properties:
+                byte_size:
+                  type: integer
+                  minimum: 1
+                  maximum: 52428800
+                sha256:
+                  type: string
+                  pattern: '^[a-f0-9]{64}$'
+      responses:
+        '200':
+          description: Export action recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [output_id, recorded]
+                properties:
+                  output_id: { type: string }
+                  recorded: { type: boolean, const: true }
+        '409':
+          description: Receipt already recorded with different metadata
+
+  /api/stations/{station_id}/results-session:
+    get:
+      summary: Read persisted results playback state
+      x-permission: workspace.read
+      parameters:
+        - $ref: '#/components/parameters/StationId'
+      responses:
+        '200':
+          description: Station results session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultsSession'
+    put:
+      summary: Bind a frozen live output to the station in ready state
+      x-permission: results.broadcast
+      parameters:
+        - $ref: '#/components/parameters/StationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [media_output_id, expected_revision]
+              properties:
+                media_output_id: { type: string }
+                expected_revision: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: Bound ready session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultsSession'
+        '409':
+          $ref: '#/components/responses/RevisionConflict'
+
+  /api/stations/{station_id}/results-session/commands:
+    post:
+      summary: Apply one idempotent playback command
+      x-permission: results.broadcast
+      parameters:
+        - $ref: '#/components/parameters/StationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [command, expected_revision]
+              properties:
+                command:
+                  type: string
+                  enum: [take_live, play_all, next, previous, hold, restart, clear]
+                expected_revision:
+                  type: integer
+                  minimum: 0
+      responses:
+        '200':
+          description: Updated session; broadcast occurs only after commit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultsSession'
+        '409':
+          $ref: '#/components/responses/RevisionConflict'
+        '422':
+          description: Command is invalid for the current state or binding
+
+components:
+  parameters:
+    TournamentSlug:
+      name: tournament_slug
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+    EventId:
+      name: event_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+    VersionId:
+      name: version_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    OutputId:
+      name: output_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    StationId:
+      name: station_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+
+  responses:
+    NotFound:
+      description: Resource does not exist in the authenticated Workspace
+    RevisionConflict:
+      description: expected_revision is stale; caller must reload session state
+
+  schemas:
+    RefreshResult:
+      type: object
+      required: [version, reused, readiness_state]
+      properties:
+        version: { $ref: '#/components/schemas/ResultVersion' }
+        reused: { type: boolean }
+        readiness_state: { type: string, enum: [provisional, final, stale] }
+
+    RefreshFailure:
+      type: object
+      required: [readiness_state, code, message]
+      properties:
+        readiness_state: { type: string, const: failed }
+        code: { type: string }
+        message: { type: string }
+        warnings:
+          type: array
+          items: { $ref: '#/components/schemas/ReadinessWarning' }
+
+    ResultVersion:
+      type: object
+      required:
+        - id
+        - tournament_slug
+        - event_id
+        - event_name
+        - provider_type
+        - capture_status
+        - readiness_state
+        - provider_state_raw
+        - observed_at
+        - entry_count
+        - entries
+        - warnings
+      properties:
+        id: { type: string, format: uuid }
+        tournament_slug: { type: string }
+        provider_type: { type: string, enum: [startgg, challonge] }
+        event_id: { type: string }
+        event_name: { type: string }
+        game_id: { type: [string, 'null'] }
+        game_name: { type: [string, 'null'] }
+        capture_status: { type: string, enum: [provisional, final] }
+        readiness_state: { type: string, enum: [provisional, final, stale] }
+        provider_state_raw: { type: string }
+        provider_revision: { type: [string, 'null'] }
+        observed_at: { type: string, format: date-time }
+        finalized_at: { type: [string, 'null'], format: date-time }
+        entry_count: { type: integer, minimum: 0 }
+        warnings:
+          type: array
+          items: { $ref: '#/components/schemas/ReadinessWarning' }
+        page:
+          type: object
+          properties:
+            number: { type: integer, minimum: 1 }
+            size: { type: integer, minimum: 1 }
+            total_entries: { type: integer, minimum: 0 }
+            has_more: { type: boolean }
+        entries:
+          type: array
+          items: { $ref: '#/components/schemas/StandingEntry' }
+
+    StandingEntry:
+      type: object
+      required: [ordinal, placement, entrant_id, entrant_name, is_tied, presentation]
+      properties:
+        ordinal: { type: integer, minimum: 1 }
+        placement: { type: integer, minimum: 1, readOnly: true }
+        entrant_id: { type: string, readOnly: true }
+        entrant_name: { type: string }
+        provider_user_id: { type: [string, 'null'] }
+        player_profile_id: { type: [string, 'null'] }
+        is_tied: { type: boolean }
+        presentation:
+          $ref: '#/components/schemas/FrozenPresentation'
+
+    FrozenPresentation:
+      type: object
+      required: [display_name, prefix, country, avatar_url, character]
+      properties:
+        display_name: { $ref: '#/components/schemas/PresentationField' }
+        prefix: { $ref: '#/components/schemas/PresentationField' }
+        country: { $ref: '#/components/schemas/PresentationField' }
+        avatar_url: { $ref: '#/components/schemas/PresentationField' }
+        character:
+          allOf:
+            - $ref: '#/components/schemas/PresentationField'
+            - type: object
+              properties:
+                value:
+                  type: object
+                  properties:
+                    id: { type: [string, 'null'] }
+                    name: { type: [string, 'null'] }
+                    image_url: { type: [string, 'null'] }
+
+    PresentationField:
+      type: object
+      required: [value, source]
+      properties:
+        value: {}
+        source:
+          type: string
+          enum: [entrant_override, player_profile, provider_snapshot, placeholder]
+
+    ReadinessWarning:
+      type: object
+      required: [code, severity, message]
+      properties:
+        code: { type: string }
+        severity: { type: string, enum: [info, warning, blocking] }
+        entrant_id: { type: [string, 'null'] }
+        message: { type: string }
+
+    CreateMediaOutput:
+      type: object
+      additionalProperties: false
+      required: [output_kind, scene, cutoff, page_number, output_profile]
+      properties:
+        output_kind: { type: string, enum: [static, live] }
+        overlay_name: { type: [string, 'null'] }
+        scene:
+          type: object
+          description: Normalized Scene Document v2; generated instances are forbidden.
+        cutoff: { type: string, enum: [top8, top16, all] }
+        page_number: { type: integer, minimum: 1 }
+        output_profile:
+          type: object
+          required: [width, height]
+          properties:
+            width: { type: integer, minimum: 320, maximum: 7680 }
+            height: { type: integer, minimum: 320, maximum: 7680 }
+            transparent: { type: boolean, default: false }
+
+    MediaOutput:
+      type: object
+      required: [id, result_version_id, output_kind, scene_hash, cutoff, page_number, output_profile, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        result_version_id: { type: string, format: uuid }
+        output_kind: { type: string, enum: [static, live] }
+        scene_hash: { type: string, pattern: '^[a-f0-9]{64}$' }
+        cutoff: { type: string, enum: [top8, top16, all] }
+        page_number: { type: integer, minimum: 1 }
+        output_profile: { type: object }
+        created_at: { type: string, format: date-time }
+
+    ResultsSession:
+      type: object
+      required: [station_id, state, cue_index, session_revision, updated_at]
+      properties:
+        station_id: { type: string }
+        media_output_id: { type: [string, 'null'], format: uuid }
+        state: { type: string, enum: [cleared, ready, live, held, complete, error] }
+        cue_index: { type: integer, minimum: -1 }
+        session_revision: { type: integer, minimum: 0 }
+        error_code: { type: [string, 'null'] }
+        updated_at: { type: string, format: date-time }
