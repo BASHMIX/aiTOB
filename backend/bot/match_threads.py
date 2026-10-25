@@ -55,13 +55,23 @@ async def create_match_thread(bot, tournament, set_data):
         )
         return
 
+    from backend.core.database import get_workspace_bot_settings
+    bot_settings = await get_workspace_bot_settings(workspace_id)
+    enable_threads = bot_settings.get("enable_match_threads", True)
+
     p1_name = set_data.get('p1_name', 'TBD')
     p2_name = set_data.get('p2_name', 'TBD')
     round_name = set_data.get('round_name', 'Unknown Round')
     set_id = str(set_data.get('set_id') or set_data.get('id'))
 
-    thread_name = f"{round_name}: {p1_name} vs {p2_name}"
-    thread = await channel.create_thread(name=thread_name, type=discord.ChannelType.public_thread)
+    if enable_threads:
+        thread_name = f"{round_name}: {p1_name} vs {p2_name}"
+        thread = await channel.create_thread(name=thread_name, type=discord.ChannelType.public_thread)
+        thread_id_val = str(thread.id)
+    else:
+        # Match threads disabled: dispatch call directly in the match channel without deadlocking
+        thread = channel
+        thread_id_val = None
 
     is_stream = set_data.get("is_stream_match", False)
 
@@ -119,7 +129,7 @@ async def create_match_thread(bot, tournament, set_data):
     await update_active_match(
         set_id,
         workspace_id=set_data.get("workspace_id"),
-        discord_thread_id=str(thread.id),
+        discord_thread_id=thread_id_val,
         status="called",
         hub_status="called",
         hub_status_origin="local_workflow",
@@ -178,25 +188,26 @@ async def create_match_thread(bot, tournament, set_data):
     # referee does NOT accept results until both players check in. Stream coverage
     # is the `on_stream` overlay of `in_progress` (realized at that transition),
     # never a separate check-in state.
-    try:
-        from backend.bot.agent.graph import app as _referee_app
-        _cfg = {"configurable": {"thread_id": str(thread.id)}}
-        _referee_app.update_state(_cfg, {
-            "set_id": set_id,
-            "thread_id": thread.id,
-            "player1_discord": p1_discord,
-            "player2_discord": p2_discord,
-            "player1_name": p1_name,
-            "player2_name": p2_name,
-            "player1_ready": False,
-            "player2_ready": False,
-            "chat_history": [],
-            "match_status": "waiting_for_checkin",
-            "winner_id": None,
-            "score_string": None,
-        })
-    except Exception as e:
-        await add_bot_feed(f"Referee state init failed for {set_id}: {e}", "warn")
+    if thread_id_val:
+        try:
+            from backend.bot.agent.graph import app as _referee_app
+            _cfg = {"configurable": {"thread_id": thread_id_val}}
+            _referee_app.update_state(_cfg, {
+                "set_id": set_id,
+                "thread_id": thread.id,
+                "player1_discord": p1_discord,
+                "player2_discord": p2_discord,
+                "player1_name": p1_name,
+                "player2_name": p2_name,
+                "player1_ready": False,
+                "player2_ready": False,
+                "chat_history": [],
+                "match_status": "waiting_for_checkin",
+                "winner_id": None,
+                "score_string": None,
+            })
+        except Exception as e:
+            await add_bot_feed(f"Referee state init failed for {set_id}: {e}", "warn")
 
     mentions = []
     if p1_discord: mentions.append(f"<@{p1_discord}>")
@@ -236,7 +247,7 @@ async def create_match_thread(bot, tournament, set_data):
         set_id,
         workspace_id=set_data.get("workspace_id"),
         call_message_id=str(call_message.id),
-        thread_id=str(thread.id),
+        thread_id=thread_id_val,
     )
 
     if fully_unreachable:
@@ -278,7 +289,7 @@ async def _create_startgg_checkin_thread(
     await update_active_match(
         set_id,
         workspace_id=set_data.get("workspace_id"),
-        discord_thread_id=str(thread.id),
+        discord_thread_id=thread_id_val,
         status="called",
         p1_discord=p1_discord,
         p2_discord=p2_discord,

@@ -3270,6 +3270,8 @@ async def clear_settings_prefix(prefix: str):
 
 
 # ── Workspace Bot Settings ────────────────────────────────────────────────
+import time as _time
+
 DEFAULT_WORKSPACE_BOT_SETTINGS = {
     "custom_rules_markdown": "",
     "welcome_message": "",
@@ -3281,10 +3283,27 @@ DEFAULT_WORKSPACE_BOT_SETTINGS = {
     "language_mode": "auto",
 }
 
+_WORKSPACE_BOT_SETTINGS_CACHE: dict[str, tuple[float, dict]] = {}
+_WORKSPACE_BOT_SETTINGS_TTL: float = 60.0  # seconds
+
+
+def clear_workspace_bot_settings_cache(workspace_id: str | None = None) -> None:
+    """Invalidate bot settings cache for a single workspace or completely."""
+    if workspace_id is None:
+        _WORKSPACE_BOT_SETTINGS_CACHE.clear()
+    else:
+        _WORKSPACE_BOT_SETTINGS_CACHE.pop(workspace_id, None)
+
 
 async def get_workspace_bot_settings(workspace_id: str) -> dict:
     if not workspace_id:
         return dict(DEFAULT_WORKSPACE_BOT_SETTINGS)
+
+    now = _time.monotonic()
+    cached = _WORKSPACE_BOT_SETTINGS_CACHE.get(workspace_id)
+    if cached and (now - cached[0] < _WORKSPACE_BOT_SETTINGS_TTL):
+        return dict(cached[1])
+
     async with dbapi.connect(DATABASE_DSN) as db:
         async with db.execute(
             """
@@ -3300,8 +3319,9 @@ async def get_workspace_bot_settings(workspace_id: str) -> dict:
             if not row:
                 res = dict(DEFAULT_WORKSPACE_BOT_SETTINGS)
                 res["workspace_id"] = workspace_id
+                _WORKSPACE_BOT_SETTINGS_CACHE[workspace_id] = (now, dict(res))
                 return res
-            return {
+            res = {
                 "workspace_id": workspace_id,
                 "custom_rules_markdown": row[0] or "",
                 "welcome_message": row[1] or "",
@@ -3312,6 +3332,8 @@ async def get_workspace_bot_settings(workspace_id: str) -> dict:
                 "response_mode": row[6] or "direct_template",
                 "language_mode": row[7] or "auto",
             }
+            _WORKSPACE_BOT_SETTINGS_CACHE[workspace_id] = (now, dict(res))
+            return res
 
 
 async def upsert_workspace_bot_settings(workspace_id: str, **fields) -> dict:
@@ -3351,7 +3373,9 @@ async def upsert_workspace_bot_settings(workspace_id: str, **fields) -> dict:
             ),
         )
         await db.commit()
+    clear_workspace_bot_settings_cache(workspace_id)
     return updated
+
 
 
 # ── Conflicts ──────────────────────────────────────────────────────────────

@@ -190,7 +190,7 @@ export function BotSettingsWorkspace() {
               <label className="flex items-center justify-between gap-3 p-2.5 rounded-lg border border-white/5 bg-appDark/40 hover:bg-white/[0.02] cursor-pointer">
                 <div>
                   <span className="text-xs font-semibold text-white block">Enable /rules Command</span>
-                  <span className="text-[11px] text-textDim">Allow players to view tournament rules and guidelines with `/rules`.</span>
+                  <span className="text-[11px] text-textDim">Allow players to view tournament rules and guidelines with `/rules` in the server.</span>
                 </div>
                 <input
                   type="checkbox"
@@ -203,7 +203,7 @@ export function BotSettingsWorkspace() {
               <label className="flex items-center justify-between gap-3 p-2.5 rounded-lg border border-white/5 bg-appDark/40 hover:bg-white/[0.02] cursor-pointer">
                 <div>
                   <span className="text-xs font-semibold text-white block">Enable Player Avatar Uploads</span>
-                  <span className="text-[11px] text-textDim">Permit entrants to upload photo avatars with `/avatar` for stream overlays.</span>
+                  <span className="text-[11px] text-textDim">Permit entrants to upload photo avatars with `/avatar`. When disabled, registration completes immediately and audit tools skip avatar checks.</span>
                 </div>
                 <input
                   type="checkbox"
@@ -216,7 +216,7 @@ export function BotSettingsWorkspace() {
               <label className="flex items-center justify-between gap-3 p-2.5 rounded-lg border border-white/5 bg-appDark/40 hover:bg-white/[0.02] cursor-pointer">
                 <div>
                   <span className="text-xs font-semibold text-white block">Enable Match Discussion Threads</span>
-                  <span className="text-[11px] text-textDim">Auto-create private Discord threads for players when their match is called.</span>
+                  <span className="text-[11px] text-textDim">Auto-create Discord threads for called matches. When disabled, the bot calls matches directly in the match channel without creating threads.</span>
                 </div>
                 <input
                   type="checkbox"

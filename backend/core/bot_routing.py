@@ -230,14 +230,37 @@ async def resolve_dm_workspace(discord_user_id: str) -> str:
                     WHERE p.discord_id=?
                       AND p.workspace_id IS NOT NULL
                       AND COALESCE(p.registration_step, '') NOT IN ('', 'verified')
+                   UNION
+                   SELECT v.workspace_id
+                     FROM pending_verifications AS v
+                    WHERE v.discord_id=?
+                      AND v.workspace_id IS NOT NULL
+                   UNION
+                   SELECT p2.workspace_id
+                     FROM players AS p2
+                    WHERE p2.discord_id=?
+                      AND p2.workspace_id IS NOT NULL
+                      AND p2.registration_step = 'avatar_upload'
                ) AS candidates""",
-            (user_id, user_id),
+            (user_id, user_id, user_id, user_id),
         )).fetchall()
     if not rows:
+        async with dbapi.connect(database.DATABASE_DSN) as db:
+            rows = await (await db.execute(
+                "SELECT DISTINCT workspace_id FROM players WHERE discord_id=? AND workspace_id IS NOT NULL",
+                (user_id,),
+            )).fetchall()
+    if not rows:
+        # Fallback to single managed workspace if only one exists
+        from backend.core.bot_routing import list_managed_discord_workspaces
+        managed = await list_managed_discord_workspaces()
+        if len(managed) == 1:
+            return managed[0]
         raise DiscordRouteMissing("No active tournament registration is waiting for this DM.")
     if len(rows) != 1:
         raise DiscordRouteAmbiguous("This DM could belong to more than one tournament workspace.")
     return str(rows[0][0])
+
 
 
 async def resolve_inbound_discord_route(

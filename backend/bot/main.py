@@ -71,6 +71,21 @@ async def _workspace_for_interaction(interaction: discord.Interaction) -> str:
         raise RuntimeError(str(exc)) from exc
 
 
+async def _workspace_for_player_interaction(interaction: discord.Interaction) -> str:
+    """Resolve workspace for player interaction, supporting both Guild interactions and DM contexts."""
+    guild_id = getattr(interaction, "guild_id", None)
+    if guild_id is None and getattr(interaction, "guild", None) is not None:
+        guild_id = interaction.guild.id
+    if guild_id is not None:
+        return await _workspace_for_interaction(interaction)
+
+    from backend.core.bot_routing import DiscordRoutingError, resolve_dm_workspace
+    try:
+        return await resolve_dm_workspace(str(interaction.user.id))
+    except DiscordRoutingError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
 async def _workspace_for_context(ctx) -> str:
     guild = getattr(ctx, "guild", None)
     if guild is None:
@@ -489,7 +504,7 @@ async def verify_confirm_command(interaction: discord.Interaction):
 
     discord_id = str(interaction.user.id)
     try:
-        workspace_id = await _workspace_for_interaction(interaction)
+        workspace_id = await _workspace_for_player_interaction(interaction)
     except RuntimeError as exc:
         await interaction.response.send_message(str(exc), ephemeral=True)
         return
@@ -609,6 +624,25 @@ async def verify_confirm_command(interaction: discord.Interaction):
         "info",
     )
 
+    from backend.core.database import get_workspace_bot_settings
+    bot_settings = await get_workspace_bot_settings(workspace_id)
+    if not bot_settings.get("enable_avatar_uploads", True):
+        # Deep toggle enforcement: skip NewAvatarPromptView and BroadcastAvatarView
+        # and proceed directly to cfn_pending or finalize_verification
+        await _finalize_or_request_cfn(
+            discord_id,
+            gamer_tag,
+            lang_pref,
+            followup=interaction.followup,
+            done_msg=(
+                get_msg("avatar_skipped", lang_pref)
+                or f"✅ Verification complete! You are verified as **{gamer_tag or 'Participant'}**."
+            ),
+            avatar_path=existing_avatar,
+            workspace_id=workspace_id,
+        )
+        return
+
     if existing_avatar:
         # Returning player — confirm or replace their on-file avatar.
         display_url = await _avatar_display_url(existing_avatar)
@@ -651,7 +685,7 @@ async def avatar_command(interaction: discord.Interaction):
     from core.database import get_player, create_or_update_player
     discord_id = str(interaction.user.id)
     try:
-        workspace_id = await _workspace_for_interaction(interaction)
+        workspace_id = await _workspace_for_player_interaction(interaction)
     except RuntimeError as exc:
         await interaction.response.send_message(str(exc), ephemeral=True)
         return
@@ -731,6 +765,7 @@ async def legal_prefix_command(ctx):
 
 
 @bot.tree.command(name="rules", description="View the official tournament rules and schedule")
+@discord.app_commands.guild_only()
 async def rules_slash_command(interaction: discord.Interaction):
     """View tournament rules configured by the organizer for this workspace."""
     from backend.core.database import get_workspace_bot_settings
@@ -802,8 +837,12 @@ async def rules_prefix_command(ctx):
     await ctx.send(embed=embed)
 
 
+_HELP_LLM_COOLDOWNS: dict[str, float] = {}
+
 @bot.tree.command(name="help", description="Get tournament assistance and FAQ")
-async def help_slash_command(interaction: discord.Interaction):
+@discord.app_commands.guild_only()
+@discord.app_commands.describe(question="Optional question for tournament rules and schedule assistant")
+async def help_slash_command(interaction: discord.Interaction, question: str | None = None):
     """View tournament FAQ or ask the assistant."""
     from backend.core.database import get_workspace_bot_settings
     try:
@@ -823,6 +862,76 @@ async def help_slash_command(interaction: discord.Interaction):
         "ℹ️ If you need referee assistance, notify a tournament organizer in this server."
     )
     faq_body = f"{faq_custom}\n\n{default_faq}" if faq_custom else default_faq
+
+    # Check if question was asked and response_mode is llm_assistant
+    if question and question.strip() and settings.get("response_mode") == "llm_assistant":
+        import time as _time
+        user_id = str(interaction.user.id)
+        now = _time.time()
+        last_time = _HELP_LLM_COOLDOWNS.get(user_id, 0.0)
+        if (now - last_time) < 30.0:
+            remaining = int(30.0 - (now - last_time))
+            await interaction.response.send_message(
+                f"⏳ Please wait {remaining}s before asking the tournament assistant again.",
+                ephemeral=True,
+            )
+            return
+        _HELP_LLM_COOLDOWNS[user_id] = now
+
+        clean_q = question.strip()[:300]
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        try:
+            from backend.core.database import get_tournaments
+            tournaments = await get_tournaments(workspace_id)
+            active_t = tournaments[0] if tournaments else {}
+            tournament_meta = f"Name: {active_t.get('name', 'Tournament')}, Format: {active_t.get('format', 'Bracket')}, Status: {active_t.get('status', 'Active')}"
+            rules_context = settings.get("custom_rules_markdown") or "Standard tournament rules apply."
+
+            prompt = (
+                "You are the aiTOB Tournament Information Concierge. Answer the participant's question using ONLY the official tournament rules and FAQ provided below. "
+                "Do NOT assume, hallucinate, or extrapolate facts beyond what is written. If the question cannot be answered from the rules, politely direct the player to a referee or tournament organizer. "
+                "Do NOT attempt to execute tools or commands.\n\n"
+                f"TOURNAMENT: {tournament_meta}\n"
+                f"OFFICIAL RULES:\n{rules_context}\n\n"
+                f"FAQ:\n{faq_body}\n\n"
+                f"PLAYER QUESTION: {clean_q}\n\n"
+                "Answer concisely in the language of the question (Arabic or English):"
+            )
+
+            from backend.core.ai_service import get_workspace_ai_config, _workspace_api_key, AIService
+            ai_config = await get_workspace_ai_config(workspace_id)
+            if ai_config.get("mode") != "disabled":
+                ai_service = AIService()
+                provider = ai_service.providers.get(ai_config.get("provider_type", "gemini"))
+                if provider:
+                    api_key = await _workspace_api_key(workspace_id, ai_config)
+                    completion = await provider.complete(
+                        api_key=api_key,
+                        model=ai_config.get("model", "gemini-2.5-flash"),
+                        prompt=prompt,
+                        timeout_seconds=15,
+                    )
+                    answer_text = completion.text.strip()
+                    embed = discord.Embed(
+                        title="🤖 Tournament Assistant",
+                        description=f"**Q:** {clean_q}\n\n**A:** {answer_text[:3500]}",
+                        color=discord.Color.gold(),
+                    )
+                    embed.set_footer(text="Grounded in official tournament rules · Bashtech Systems")
+                    await interaction.followup.send(embed=embed, ephemeral=True)
+                    return
+        except Exception:
+            pass  # Fallback to standard FAQ embed on any AI error or missing credential
+
+        embed = discord.Embed(
+            title="ℹ️ Tournament Assistance & FAQ",
+            description=f"**Your Question:** {clean_q}\n\n*(Assistant unavailable; showing tournament FAQ:)*\n\n{faq_body[:3500]}",
+            color=discord.Color.green(),
+        )
+        embed.set_footer(text="aiTOB Assistant · Organizer Support")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        return
 
     embed = discord.Embed(
         title="ℹ️ Tournament Assistance & FAQ",
@@ -1636,7 +1745,13 @@ async def audit_registration_tool(tournament_slug: str = None):
 
     from core.database import get_tournament_workspace_id
     workspace_id = await get_tournament_workspace_id(tournament_slug) if tournament_slug else None
+    from backend.core.database import get_workspace_bot_settings
+    bot_settings = await get_workspace_bot_settings(workspace_id) if workspace_id else {}
+    avatar_uploads_enabled = bot_settings.get("enable_avatar_uploads", True)
+
     players = await get_verified_players_missing_profile(workspace_id)
+    if not avatar_uploads_enabled and players:
+        players = [p for p in players if not (p.get("cfn_id") or "")]
     if not players:
         return "All verified players have a complete profile (avatar + CFN ID) — nobody to remind."
 
@@ -1657,7 +1772,7 @@ async def audit_registration_tool(tournament_slug: str = None):
         lang = p.get("preferred_language") or "en"
         if not did:
             continue
-        missing_avatar = not (p.get("avatar_path") or "")
+        missing_avatar = not (p.get("avatar_path") or "") if avatar_uploads_enabled else False
         missing_cfn = not (p.get("cfn_id") or "")
         try:
             member = await bot.fetch_user(int(did))
