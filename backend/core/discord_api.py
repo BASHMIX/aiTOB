@@ -169,7 +169,18 @@ async def send_test_message(channel_id: str) -> str:
     return str(message.get("id") or "")
 
 
+async def send_channel_embed(channel_id: str, embed: dict) -> str:
+    token = _required_env("DISCORD_BOT_TOKEN")
+    message = await _request(
+        "POST",
+        f"/channels/{channel_id}/messages",
+        token=token,
+        json={"embeds": [embed]},
+    )
+    return str(message.get("id") or "")
+
+
 __all__ = [
     "BOT_PERMISSION_BITS", "DiscordAPIError", "authorization_url", "oauth_redirect_uri",
-    "exchange_code", "authorize_installer", "discover_guild", "send_test_message",
+    "exchange_code", "authorize_installer", "discover_guild", "send_test_message", "send_channel_embed",
 ]

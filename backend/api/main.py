@@ -39,6 +39,7 @@ from backend.api.routers.provider_oauth import router as provider_oauth_router
 from backend.api.routers.tournament_setup import router as tournament_setup_router
 from backend.api.routers.player_registration import router as player_registration_router
 from backend.api.routers.results_media import router as results_media_router
+from backend.api.routers.bot_settings import router as bot_settings_router
 
 load_dotenv()
 logger = logging.getLogger("aitob.api")
@@ -231,6 +232,7 @@ app.include_router(organizer_console_router, prefix="/api")
 app.include_router(ai_service_router, prefix="/api")
 app.include_router(entitlements_router, prefix="/api")
 app.include_router(player_profiles_router, prefix="/api/player-profiles")
+app.include_router(bot_settings_router, prefix="/api")
 
 
 # Static files

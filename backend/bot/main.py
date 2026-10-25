@@ -655,6 +655,16 @@ async def avatar_command(interaction: discord.Interaction):
     except RuntimeError as exc:
         await interaction.response.send_message(str(exc), ephemeral=True)
         return
+
+    from backend.core.database import get_workspace_bot_settings
+    bot_settings = await get_workspace_bot_settings(workspace_id)
+    if not bot_settings.get("enable_avatar_uploads", True):
+        await interaction.response.send_message(
+            "📸 Player avatar uploads are currently disabled for this tournament by the organizer.",
+            ephemeral=True,
+        )
+        return
+
     player = await get_player(discord_id, workspace_id)
 
     # Prefer the player's stored language; otherwise derive (and persist) it.
@@ -718,6 +728,109 @@ async def legal_prefix_command(ctx):
     """Display aiTOB legal terms and privacy links."""
     embed = create_legal_embed()
     await ctx.send(embed=embed)
+
+
+@bot.tree.command(name="rules", description="View the official tournament rules and schedule")
+async def rules_slash_command(interaction: discord.Interaction):
+    """View tournament rules configured by the organizer for this workspace."""
+    from backend.core.database import get_workspace_bot_settings
+    try:
+        workspace_id = await _workspace_for_interaction(interaction)
+    except RuntimeError as exc:
+        await interaction.response.send_message(str(exc), ephemeral=True)
+        return
+
+    settings = await get_workspace_bot_settings(workspace_id)
+    if not settings.get("enable_rules_command", True):
+        await interaction.response.send_message(
+            "📋 Tournament rules command is disabled for this server. Please consult the tournament organizer or official bracket page.",
+            ephemeral=True,
+        )
+        return
+
+    rules_text = (settings.get("custom_rules_markdown") or "").strip()
+    if not rules_text:
+        rules_text = (
+            "📋 **Official Tournament Rules**\n\n"
+            "• **Check-in:** Report promptly when your match is called.\n"
+            "• **Station Assignment:** Play at your assigned station or stream setup.\n"
+            "• **Fair Play:** Respect referee decisions, station rules, and opponents.\n"
+            "• **Scores:** Report scores directly to the bracket manager or official desk.\n\n"
+            "*(The organizer has not published custom detailed rules yet)*"
+        )
+
+    embed = discord.Embed(
+        title="📋 Tournament Rules & Guidelines",
+        description=rules_text[:4000],
+        color=discord.Color.blue(),
+    )
+    embed.set_footer(text="aiTOB Tournament Organizer · Fair Play Guaranteed")
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.command(name="rules")
+async def rules_prefix_command(ctx):
+    """View tournament rules configured by the organizer for this workspace."""
+    from backend.core.database import get_workspace_bot_settings
+    try:
+        workspace_id = await _workspace_for_context(ctx)
+    except RuntimeError as exc:
+        await ctx.send(str(exc))
+        return
+
+    settings = await get_workspace_bot_settings(workspace_id)
+    if not settings.get("enable_rules_command", True):
+        await ctx.send("📋 Tournament rules command is disabled for this server.")
+        return
+
+    rules_text = (settings.get("custom_rules_markdown") or "").strip()
+    if not rules_text:
+        rules_text = (
+            "📋 **Official Tournament Rules**\n\n"
+            "• **Check-in:** Report promptly when your match is called.\n"
+            "• **Station Assignment:** Play at your assigned station or stream setup.\n"
+            "• **Fair Play:** Respect referee decisions, station rules, and opponents.\n"
+            "• **Scores:** Report scores directly to the bracket manager or official desk."
+        )
+
+    embed = discord.Embed(
+        title="📋 Tournament Rules & Guidelines",
+        description=rules_text[:4000],
+        color=discord.Color.blue(),
+    )
+    embed.set_footer(text="aiTOB Tournament Organizer · Fair Play Guaranteed")
+    await ctx.send(embed=embed)
+
+
+@bot.tree.command(name="help", description="Get tournament assistance and FAQ")
+async def help_slash_command(interaction: discord.Interaction):
+    """View tournament FAQ or ask the assistant."""
+    from backend.core.database import get_workspace_bot_settings
+    try:
+        workspace_id = await _workspace_for_interaction(interaction)
+    except RuntimeError as exc:
+        await interaction.response.send_message(str(exc), ephemeral=True)
+        return
+
+    settings = await get_workspace_bot_settings(workspace_id)
+    faq_custom = (settings.get("faq_help_text") or "").strip()
+    default_faq = (
+        "🎮 **Tournament Bot Quick Commands:**\n"
+        "• `/register` - Link your Discord and start.gg profile\n"
+        "• `/avatar` - Upload or update your broadcast player avatar\n"
+        "• `/rules` - View tournament schedule and rules\n"
+        "• `/legal` - View Terms of Service and Privacy Policy\n\n"
+        "ℹ️ If you need referee assistance, notify a tournament organizer in this server."
+    )
+    faq_body = f"{faq_custom}\n\n{default_faq}" if faq_custom else default_faq
+
+    embed = discord.Embed(
+        title="ℹ️ Tournament Assistance & FAQ",
+        description=faq_body[:4000],
+        color=discord.Color.green(),
+    )
+    embed.set_footer(text="aiTOB Assistant · Organizer Support")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 # ── Gap B: LLM-driven entrant disambiguation ───────────────────────────
@@ -1111,11 +1224,16 @@ async def setup_registration(ctx):
     """Sets up the registration button in the current channel."""
     try:
         await _require_organizer_tournament_channel(ctx)
+        workspace_id = await _workspace_for_context(ctx)
     except RuntimeError as exc:
         await ctx.send(str(exc))
         return
-    from core.database import get_setting
-    welcome_msg = await get_setting("registration_msg", "Welcome to the AI Tournament Organizer! Click the button below to register.")
+    from core.database import get_setting, get_workspace_bot_settings
+    bot_settings = await get_workspace_bot_settings(workspace_id)
+    welcome_msg = (
+        bot_settings.get("welcome_message")
+        or await get_setting("registration_msg", "Welcome to the AI Tournament Organizer! Click the button below to register.")
+    )
     view = RegistrationView()
     await ctx.send(welcome_msg, view=view)
 

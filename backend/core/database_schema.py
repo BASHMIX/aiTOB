@@ -1248,6 +1248,21 @@ TABLE_SCHEMAS = [
         updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (workspace_id, station_id)
     )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS workspace_bot_settings (
+        workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id),
+        custom_rules_markdown TEXT DEFAULT '',
+        welcome_message TEXT DEFAULT '',
+        faq_help_text TEXT DEFAULT '',
+        enable_avatar_uploads BOOLEAN NOT NULL DEFAULT TRUE,
+        enable_match_threads BOOLEAN NOT NULL DEFAULT TRUE,
+        enable_rules_command BOOLEAN NOT NULL DEFAULT TRUE,
+        response_mode TEXT NOT NULL DEFAULT 'direct_template' CHECK(response_mode IN ('direct_template', 'llm_assistant', 'disabled')),
+        language_mode TEXT NOT NULL DEFAULT 'auto' CHECK(language_mode IN ('auto', 'ar', 'en', 'both')),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
     '''
 ]
 
@@ -1499,4 +1514,5 @@ MIGRATIONS = [
     "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS set_format_upgrade_rule TEXT DEFAULT 'finals_only'",
     "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS set_format_upgraded TEXT DEFAULT 'ft3'",
     "ALTER TABLE active_matches ADD COLUMN IF NOT EXISTS best_of INTEGER DEFAULT 3",
+    "CREATE TABLE IF NOT EXISTS workspace_bot_settings (workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id), custom_rules_markdown TEXT DEFAULT '', welcome_message TEXT DEFAULT '', faq_help_text TEXT DEFAULT '', enable_avatar_uploads BOOLEAN NOT NULL DEFAULT TRUE, enable_match_threads BOOLEAN NOT NULL DEFAULT TRUE, enable_rules_command BOOLEAN NOT NULL DEFAULT TRUE, response_mode TEXT NOT NULL DEFAULT 'direct_template' CHECK(response_mode IN ('direct_template', 'llm_assistant', 'disabled')), language_mode TEXT NOT NULL DEFAULT 'auto' CHECK(language_mode IN ('auto', 'ar', 'en', 'both')), created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
 ]

@@ -11,6 +11,7 @@ import { AISettings } from './AISettings';
 import { AccountSettings } from './AccountSettings';
 import { RolesPermissions } from './RolesPermissions';
 import { LegalSettingsSection } from './LegalSettingsSection';
+import { BotSettingsWorkspace } from './BotSettingsWorkspace';
 import { usePermission } from '@/hooks/usePermission';
 
 type SettingsSection = 'overview' | 'account' | 'roles' | 'connections' | 'tournament' | 'match_operations' | 'bot' | 'ai_automation' | 'legal' | 'system';
@@ -197,7 +198,7 @@ export function SettingsWorkspace() {
         )}
         {activeSection === 'tournament' && <TournamentSettings />}
         {activeSection === 'match_operations' && <TournamentWorkflowSettings />}
-        {activeSection === 'bot' && <GeneralSettings section="bot" embedded />}
+        {activeSection === 'bot' && <BotSettingsWorkspace />}
         {activeSection === 'ai_automation' && <AISettings />}
         {activeSection === 'legal' && <LegalSettingsSection />}
         {activeSection === 'system' && <GeneralSettings section="system" embedded />}

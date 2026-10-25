@@ -3269,6 +3269,91 @@ async def clear_settings_prefix(prefix: str):
         await db.commit()
 
 
+# ── Workspace Bot Settings ────────────────────────────────────────────────
+DEFAULT_WORKSPACE_BOT_SETTINGS = {
+    "custom_rules_markdown": "",
+    "welcome_message": "",
+    "faq_help_text": "",
+    "enable_avatar_uploads": True,
+    "enable_match_threads": True,
+    "enable_rules_command": True,
+    "response_mode": "direct_template",
+    "language_mode": "auto",
+}
+
+
+async def get_workspace_bot_settings(workspace_id: str) -> dict:
+    if not workspace_id:
+        return dict(DEFAULT_WORKSPACE_BOT_SETTINGS)
+    async with dbapi.connect(DATABASE_DSN) as db:
+        async with db.execute(
+            """
+            SELECT custom_rules_markdown, welcome_message, faq_help_text,
+                   enable_avatar_uploads, enable_match_threads, enable_rules_command,
+                   response_mode, language_mode
+            FROM workspace_bot_settings
+            WHERE workspace_id = ?
+            """,
+            (workspace_id,),
+        ) as c:
+            row = await c.fetchone()
+            if not row:
+                res = dict(DEFAULT_WORKSPACE_BOT_SETTINGS)
+                res["workspace_id"] = workspace_id
+                return res
+            return {
+                "workspace_id": workspace_id,
+                "custom_rules_markdown": row[0] or "",
+                "welcome_message": row[1] or "",
+                "faq_help_text": row[2] or "",
+                "enable_avatar_uploads": bool(row[3]),
+                "enable_match_threads": bool(row[4]),
+                "enable_rules_command": bool(row[5]),
+                "response_mode": row[6] or "direct_template",
+                "language_mode": row[7] or "auto",
+            }
+
+
+async def upsert_workspace_bot_settings(workspace_id: str, **fields) -> dict:
+    if not workspace_id:
+        raise ValueError("workspace_id is required")
+    current = await get_workspace_bot_settings(workspace_id)
+    updated = {**current, **fields, "workspace_id": workspace_id}
+    async with dbapi.connect(DATABASE_DSN) as db:
+        await db.execute(
+            """
+            INSERT INTO workspace_bot_settings (
+                workspace_id, custom_rules_markdown, welcome_message, faq_help_text,
+                enable_avatar_uploads, enable_match_threads, enable_rules_command,
+                response_mode, language_mode, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT (workspace_id) DO UPDATE SET
+                custom_rules_markdown = EXCLUDED.custom_rules_markdown,
+                welcome_message = EXCLUDED.welcome_message,
+                faq_help_text = EXCLUDED.faq_help_text,
+                enable_avatar_uploads = EXCLUDED.enable_avatar_uploads,
+                enable_match_threads = EXCLUDED.enable_match_threads,
+                enable_rules_command = EXCLUDED.enable_rules_command,
+                response_mode = EXCLUDED.response_mode,
+                language_mode = EXCLUDED.language_mode,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                workspace_id,
+                updated.get("custom_rules_markdown", ""),
+                updated.get("welcome_message", ""),
+                updated.get("faq_help_text", ""),
+                bool(updated.get("enable_avatar_uploads", True)),
+                bool(updated.get("enable_match_threads", True)),
+                bool(updated.get("enable_rules_command", True)),
+                updated.get("response_mode", "direct_template"),
+                updated.get("language_mode", "auto"),
+            ),
+        )
+        await db.commit()
+    return updated
+
+
 # ── Conflicts ──────────────────────────────────────────────────────────────
 async def add_conflict(set_id: str, p1_claim: str, p2_claim: str):
     async with dbapi.connect(DATABASE_DSN) as db:
