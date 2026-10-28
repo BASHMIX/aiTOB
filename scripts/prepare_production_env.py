@@ -47,6 +47,8 @@ PRESERVE_NONEMPTY_KEYS = set(GENERATED_KEYS) | {
     "DISCORD_OAUTH_REDIRECT_URI",
     "APP_PUBLIC_URL",
     "FRONTEND_BASE_URL",
+    "DOMAIN",
+    "APP_DOMAIN",
 }
 
 
@@ -115,7 +117,19 @@ def prepare(path: Path) -> dict[str, list[str]]:
 
     api_base = values.get("API_BASE_URL", "").strip().rstrip("/")
     app_public = values.get("APP_PUBLIC_URL", "").strip().rstrip("/")
+    domain = values.get("DOMAIN", "").strip() or values.get("APP_DOMAIN", "").strip()
+    if domain:
+        values.setdefault("DOMAIN", domain)
+        values.setdefault("APP_DOMAIN", domain)
+        if not api_base:
+            api_base = f"https://{domain}"
+            values["API_BASE_URL"] = api_base
+        if not app_public:
+            app_public = f"https://{domain}"
+            values["APP_PUBLIC_URL"] = app_public
     public_base = app_public if app_public.startswith("https://") else api_base
+    if not public_base and domain:
+        public_base = f"https://{domain}"
     if public_base.startswith("https://"):
         values["APP_PUBLIC_URL"] = public_base
         values["FRONTEND_BASE_URL"] = public_base

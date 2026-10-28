@@ -65,7 +65,12 @@ export function BotSettingsWorkspace() {
       }
       showMsg('Bot experience settings saved successfully.');
     } catch (err: any) {
-      showMsg(err.response?.data?.detail || 'Failed to save bot settings.', false);
+      const errorMsg = err.response?.data?.message || err.response?.data?.detail;
+      if (err.response?.status === 401) {
+        showMsg('Your session has expired or authentication is required. Please log in again.', false);
+      } else {
+        showMsg(errorMsg || 'Failed to save bot settings.', false);
+      }
     } finally {
       setSaving(false);
     }
@@ -77,7 +82,12 @@ export function BotSettingsWorkspace() {
       const res = await axios.post('/api/workspace/bot-settings/preview-test');
       showMsg(res.data?.message || 'Test message sent to Discord.', res.data?.ok !== false);
     } catch (err: any) {
-      showMsg(err.response?.data?.detail || 'Failed to send preview test to Discord.', false);
+      const errorMsg = err.response?.data?.message || err.response?.data?.detail;
+      if (err.response?.status === 401) {
+        showMsg('Your session has expired or authentication is required. Please log in again.', false);
+      } else {
+        showMsg(errorMsg || 'Failed to send preview test to Discord.', false);
+      }
     } finally {
       setTesting(false);
     }

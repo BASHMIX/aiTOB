@@ -21,6 +21,9 @@ from bot.agent.graph import app
 from bot.runtime_logging import console_message, ready_message
 
 load_dotenv()
+_prod_env_path = os.path.join(root, ".env.production")
+if os.path.exists(_prod_env_path) and os.getenv("AITOB_SKIP_ENV_FILES", "").strip() != "1":
+    load_dotenv(_prod_env_path, override=True)
 
 TOKEN = None
 # One platform-managed bot serves every connected guild. Tenant routing is

@@ -105,7 +105,7 @@ export function GeneralSettings({ section = 'all', embedded = false }: { section
     } finally { setEmailTestBusy(false); }
   };
 
-  const showConnections = section === 'all' || section === 'connections';
+  const showConnections = section === 'all' || section === 'connections' || section === 'system';
   const showSystem = section === 'all' || section === 'system';
   const showBot = section === 'all' || section === 'bot';
 

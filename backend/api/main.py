@@ -42,6 +42,9 @@ from backend.api.routers.results_media import router as results_media_router
 from backend.api.routers.bot_settings import router as bot_settings_router
 
 load_dotenv()
+_prod_env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), ".env.production")
+if os.path.exists(_prod_env_path) and os.getenv("AITOB_SKIP_ENV_FILES", "").strip() != "1":
+    load_dotenv(_prod_env_path, override=True)
 logger = logging.getLogger("aitob.api")
 _background_tasks: set[asyncio.Task] = set()
 

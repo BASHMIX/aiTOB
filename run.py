@@ -22,6 +22,16 @@ if os.getenv("AITOB_SKIP_ENV_FILES", "").strip() != "1":
     load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
     load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env.production"), override=True)
 
+domain = os.getenv("DOMAIN", "").strip() or os.getenv("APP_DOMAIN", "").strip()
+if domain:
+    os.environ.setdefault("DOMAIN", domain)
+    os.environ.setdefault("APP_DOMAIN", domain)
+    os.environ.setdefault("API_BASE_URL", f"https://{domain}")
+    os.environ.setdefault("APP_PUBLIC_URL", f"https://{domain}")
+    os.environ.setdefault("FRONTEND_BASE_URL", f"https://{domain}")
+    os.environ.setdefault("ALLOWED_ORIGINS", f"https://{domain}")
+    os.environ.setdefault("DISCORD_OAUTH_REDIRECT_URI", f"https://{domain}/api/integrations/discord/callback")
+
 runtime_database_name = os.getenv("AITOB_POSTGRES_DB", "").strip()
 database_url = os.getenv("DATABASE_URL", "").strip()
 if runtime_database_name and database_url.lower().startswith(("postgres://", "postgresql://")):

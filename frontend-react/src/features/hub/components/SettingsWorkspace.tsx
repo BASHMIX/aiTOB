@@ -193,7 +193,6 @@ export function SettingsWorkspace() {
           <div className="space-y-5">
             <IntegrationAccounts />
             <AISettings connectionOnly />
-            <GeneralSettings section="connections" embedded />
           </div>
         )}
         {activeSection === 'tournament' && <TournamentSettings />}
