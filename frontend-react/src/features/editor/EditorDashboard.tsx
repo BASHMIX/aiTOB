@@ -13,6 +13,7 @@ import { useEditorData } from './hooks/useEditorData';
 import { useEditorWebSocket } from './hooks/useEditorWebSocket';
 import { useEditorScale } from './hooks/useEditorScale';
 import { useContextMenuActions } from './hooks/useContextMenuActions';
+import { exportSingleOverlaySlide } from '@/utils/overlayBundle';
 import { ResultCardDesignView } from './components/ResultCardDesignView';
 import { AutoSequencePreviewLayer } from './components/AutoSequencePreviewLayer';
 
@@ -47,7 +48,11 @@ export function EditorDashboard() {
     handlePush,
     handleLoadGlobalOverlay,
     handleDeletePreset,
-    handleRename
+    handleRename,
+    handleExportCurrentSlide,
+    handleExportAllStationSlides,
+    handleImportFile,
+    handleLoadStarterTemplate,
   } = useEditorData(stationId, wsRef);
 
   useEditorWebSocket(stationId, wsRef, fetchActiveMatch, fetchPresets);
@@ -158,7 +163,10 @@ export function EditorDashboard() {
           fetchGlobalOverlays();
           setIsLoadModalOpen(true);
         }}
-        status={store.statusMsg} 
+        status={store.statusMsg}
+        onExportSlide={handleExportCurrentSlide}
+        onExportPackage={handleExportAllStationSlides}
+        onImportFile={handleImportFile}
       />
 
       <div className="flex flex-grow overflow-hidden">
@@ -284,6 +292,12 @@ export function EditorDashboard() {
         stationId={stationId}
         allSavedOverlays={allSavedOverlays}
         onLoad={handleLoadGlobalOverlay}
+        onImportFile={handleImportFile}
+        onExportCurrentStationPackage={handleExportAllStationSlides}
+        onExportSingleSlide={(name, config) => {
+          void exportSingleOverlaySlide(name, config, (msg) => store.setStatusMsg(msg));
+        }}
+        onLoadStarterTemplate={handleLoadStarterTemplate}
       />
 
       {contextMenu && (

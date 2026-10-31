@@ -46,9 +46,10 @@ services:
       # Cutover/recovery can pause all API-owned workers before resuming them.
       AITOB_DISABLE_BACKGROUND_WORKERS: ${AITOB_DISABLE_BACKGROUND_WORKERS:-false}
     volumes:
-      # Persist only mutable avatar uploads. The React dist directory remains
-      # image-owned so every deployment serves the newly built frontend.
+      # Persist mutable avatars and uploaded overlay assets. The React dist
+      # directory remains image-owned so every deployment serves the newly built frontend.
       - avatars_data:/app/backend/api/static/avatars
+      - assets_data:/app/backend/api/static/assets
     restart: always
     depends_on:
       postgres:
@@ -99,3 +100,4 @@ services:
 volumes:
   postgres_data:
   avatars_data:
+  assets_data:

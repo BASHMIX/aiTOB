@@ -3,6 +3,8 @@ import axios from 'axios';
 import { useEditorStore } from '@/store/useEditorStore';
 import { normalizeScene } from '@/scene/normalizeScene';
 import type { SceneDocumentV2 } from '@/scene/types';
+import { exportSingleOverlaySlide, exportStationOverlayPackage, importOverlayPackageFile } from '@/utils/overlayBundle';
+import type { EditorStarterTemplate } from '../starterTemplates';
 
 export function useEditorData(stationId: string, wsRef: React.MutableRefObject<WebSocket | null>) {
 
@@ -214,6 +216,118 @@ export function useEditorData(stationId: string, wsRef: React.MutableRefObject<W
     }
   }, [stationId, activeOverlayName, fetchPresets]);
 
+  const handleExportCurrentSlide = useCallback(async () => {
+    if (!activeOverlayName) {
+      alert('No active overlay slide to export.');
+      return;
+    }
+    const currentStore = useEditorStore.getState();
+    const roundedElements = { ...currentStore.elements };
+    for (const id in roundedElements) {
+      roundedElements[id] = {
+        ...roundedElements[id],
+        x: Math.round(roundedElements[id].x),
+        y: Math.round(roundedElements[id].y),
+        width: roundedElements[id].width ? Math.round(roundedElements[id].width) : undefined,
+        height: roundedElements[id].height ? Math.round(roundedElements[id].height) : undefined,
+      };
+    }
+
+    const config = {
+      schemaVersion: 2,
+      canvas: {
+        width: 1920,
+        height: 1080,
+        backgroundUrl: currentStore.background_url,
+        globalFontUrl: currentStore.global_font_url,
+        globalFontFamily: currentStore.global_font_family,
+        fontLibrary: currentStore.font_library,
+      },
+      dataSource: {
+        kind: Object.values(roundedElements).some((el) => ['results-group', 'results-cards', 'result-card'].includes(el.type))
+          ? 'tournament-results'
+          : 'current-match',
+      },
+      rootIds: Object.values(roundedElements).filter((el) => !el.parentId).map((el) => el.id),
+      nodes: roundedElements as any,
+      elements: roundedElements,
+      background_url: currentStore.background_url,
+      global_font_url: currentStore.global_font_url,
+      global_font_family: currentStore.global_font_family,
+      font_library: currentStore.font_library,
+    };
+
+    try {
+      currentStore.setStatusMsg('Exporting slide…');
+      await exportSingleOverlaySlide(activeOverlayName, config, (msg) => currentStore.setStatusMsg(msg));
+      currentStore.setStatusMsg('Slide exported');
+    } catch (e) {
+      console.error('Export failed:', e);
+      currentStore.setStatusMsg('Export failed');
+      alert('Failed to export slide');
+    }
+  }, [activeOverlayName]);
+
+  const handleExportAllStationSlides = useCallback(async () => {
+    const currentStore = useEditorStore.getState();
+    if (!presets || presets.length === 0) {
+      alert('No overlay slides found on this station to export.');
+      return;
+    }
+    try {
+      currentStore.setStatusMsg('Exporting package…');
+      await exportStationOverlayPackage(stationId, stationId, presets, (msg) => currentStore.setStatusMsg(msg));
+      currentStore.setStatusMsg('Package exported');
+    } catch (e) {
+      console.error('Export package failed:', e);
+      currentStore.setStatusMsg('Package export failed');
+      alert('Failed to export station package');
+    }
+  }, [stationId, presets]);
+
+  const handleImportFile = useCallback(async (file: File) => {
+    const currentStore = useEditorStore.getState();
+    try {
+      currentStore.setStatusMsg('Importing package…');
+      const result = await importOverlayPackageFile(file, stationId, (msg) => currentStore.setStatusMsg(msg));
+      await fetchGlobalOverlays();
+      await fetchPresets();
+      currentStore.setStatusMsg(`Imported ${result.importedCount} slide(s)`);
+      alert(`Successfully imported ${result.importedCount} slide(s): ${result.names.join(', ')}`);
+    } catch (e: any) {
+      console.error('Import failed:', e);
+      currentStore.setStatusMsg('Import failed');
+      alert(`Import failed: ${e?.message || 'Unknown error'}`);
+    }
+  }, [stationId, fetchPresets, fetchGlobalOverlays]);
+
+  const handleLoadStarterTemplate = useCallback(async (template: EditorStarterTemplate) => {
+    const currentStore = useEditorStore.getState();
+    try {
+      currentStore.setStatusMsg('Applying template…');
+      const baseName = template.name;
+      let targetName = baseName;
+      let counter = 1;
+      const existingNames = new Set(allSavedOverlays.map((o) => o.name));
+      while (existingNames.has(targetName)) {
+        targetName = `${baseName} (${counter++})`;
+      }
+
+      await axios.post('/api/overlays', { name: targetName, config: template.config });
+      await axios.post(`/api/stations/${stationId}/overlays`, { overlay_name: targetName });
+      await axios.post(`/api/stations/${stationId}/active-overlay`, { overlay_name: targetName });
+
+      setIsLoadModalOpen(false);
+      await fetchGlobalOverlays();
+      await fetchPresets();
+      currentStore.setStatusMsg(`Template loaded: ${targetName}`);
+    } catch (e) {
+      console.error('Failed to load starter template:', e);
+      currentStore.setStatusMsg('Template load failed');
+      alert('Failed to load starter template');
+    }
+  }, [stationId, allSavedOverlays, fetchPresets, fetchGlobalOverlays]);
+
   return {
     presets,
     setPresets,
@@ -229,6 +343,10 @@ export function useEditorData(stationId: string, wsRef: React.MutableRefObject<W
     handlePush,
     handleLoadGlobalOverlay,
     handleDeletePreset,
-    handleRename
+    handleRename,
+    handleExportCurrentSlide,
+    handleExportAllStationSlides,
+    handleImportFile,
+    handleLoadStarterTemplate,
   };
 }

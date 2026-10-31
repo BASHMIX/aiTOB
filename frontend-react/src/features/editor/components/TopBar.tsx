@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Save, Edit3, Check, X, Image as ImageIcon, Link as LinkIcon, Undo, Redo } from 'lucide-react';
+import { useState, useRef } from 'react';
+import { Save, Edit3, Check, X, Image as ImageIcon, Link as LinkIcon, Undo, Redo, Download, Upload, ChevronDown } from 'lucide-react';
 import axios from 'axios';
 import { useEditorStore } from '@/store/useEditorStore';
 import { waitForOverlayCanvasAssets } from '@/utils/overlayAssets';
@@ -11,12 +11,27 @@ interface TopBarProps {
   onSave: () => void;
   onLoadClick: () => void;
   status: string;
+  onExportSlide?: () => void;
+  onExportPackage?: () => void;
+  onImportFile?: (file: File) => void;
 }
 
-export function TopBar({ slot, stationId, onRename, onSave, onLoadClick, status }: TopBarProps) {
+export function TopBar({
+  slot,
+  stationId,
+  onRename,
+  onSave,
+  onLoadClick,
+  status,
+  onExportSlide,
+  onExportPackage,
+  onImportFile,
+}: TopBarProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [newName, setNewName] = useState(slot);
   const [isPreparingSlide, setIsPreparingSlide] = useState(false);
+  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const store = useEditorStore();
 
   const handleRename = () => {
@@ -47,8 +62,25 @@ export function TopBar({ slot, stationId, onRename, onSave, onLoadClick, status 
     }
   };
 
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && onImportFile) {
+      onImportFile(file);
+      e.target.value = '';
+    }
+  };
+
   return (
     <div className="h-16 bg-[#2a2a2a] border-b border-white/10 flex items-center justify-between px-6 z-50">
+      {/* Hidden file input for quick import */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".json,.aitob-overlay.json,.aitob-package.json"
+        className="hidden"
+        onChange={handleFileInputChange}
+      />
+
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-2">
           {isEditing ? (
@@ -120,11 +152,80 @@ export function TopBar({ slot, stationId, onRename, onSave, onLoadClick, status 
         <button 
           onClick={onLoadClick}
           className="flex items-center gap-2 bg-[#333] hover:bg-[#444] text-white border border-white/20 px-4 py-1.5 rounded-full text-sm font-bold transition-all hover:scale-105 active:scale-95 whitespace-nowrap"
-          title="Load a saved overlay template onto this station"
+          title="Load saved slides or browse template gallery"
         >
           <ImageIcon size={16} />
           Load Slide
         </button>
+
+        {/* Quick Import Button */}
+        {onImportFile && (
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="flex items-center gap-2 bg-[#1a1a1a] hover:bg-[#333] text-white/90 hover:text-white border border-white/20 px-3.5 py-1.5 rounded-full text-sm font-bold transition-all hover:scale-105 active:scale-95 whitespace-nowrap"
+            title="Import overlay or package from a JSON file"
+          >
+            <Upload size={15} className="text-[#00ffcc]" />
+            Import
+          </button>
+        )}
+
+        {/* Quick Export Dropdown */}
+        {(onExportSlide || onExportPackage) && (
+          <div className="relative">
+            <button
+              onClick={() => setIsExportMenuOpen((prev) => !prev)}
+              className="flex items-center gap-1.5 bg-[#1a1a1a] hover:bg-[#333] text-white/90 hover:text-white border border-white/20 px-3.5 py-1.5 rounded-full text-sm font-bold transition-all hover:scale-105 active:scale-95 whitespace-nowrap"
+              title="Export overlay or station package"
+            >
+              <Download size={15} className="text-accentYellow" />
+              Export
+              <ChevronDown size={14} className="text-white/50" />
+            </button>
+
+            {isExportMenuOpen && (
+              <>
+                <div
+                  className="fixed inset-0 z-40"
+                  onClick={() => setIsExportMenuOpen(false)}
+                />
+                <div className="absolute top-full left-0 mt-2 w-56 bg-[#1f1f1f] border border-white/10 rounded-xl shadow-2xl py-1.5 z-50 animate-fadeIn">
+                  {onExportSlide && (
+                    <button
+                      onClick={() => {
+                        setIsExportMenuOpen(false);
+                        onExportSlide();
+                      }}
+                      className="w-full text-left px-4 py-2 text-xs font-semibold text-white/90 hover:text-[#00ffcc] hover:bg-white/5 flex items-center gap-2 transition-colors"
+                    >
+                      <Download size={14} className="text-[#00ffcc]" />
+                      <div>
+                        <div>Export Current Slide</div>
+                        <div className="text-[10px] text-white/40">Includes local fonts & images</div>
+                      </div>
+                    </button>
+                  )}
+
+                  {onExportPackage && (
+                    <button
+                      onClick={() => {
+                        setIsExportMenuOpen(false);
+                        onExportPackage();
+                      }}
+                      className="w-full text-left px-4 py-2 text-xs font-semibold text-white/90 hover:text-accentYellow hover:bg-white/5 flex items-center gap-2 transition-colors border-t border-white/5"
+                    >
+                      <Download size={14} className="text-accentYellow" />
+                      <div>
+                        <div>Export Station Package</div>
+                        <div className="text-[10px] text-white/40">All slides & all assets</div>
+                      </div>
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        )}
 
         <button 
           onClick={onSave}
