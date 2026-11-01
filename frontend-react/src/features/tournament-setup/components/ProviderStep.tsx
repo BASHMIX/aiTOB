@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { IntegrationAccount, ProviderOAuthAvailability, ProviderResolution, ProviderScope, ProviderType } from '../types';
 
 export interface ProviderStepValue {
@@ -56,6 +56,12 @@ export function ProviderStep({
   const resolution = value.resolution;
   const scopes = resolution?.scopes || [];
   const selectedScope = value.selected_scope_id || resolution?.selected_scope?.external_id || '';
+
+  useEffect(() => {
+    if (!value.provider_account_id && providerAccounts.length > 0) {
+      onChange({ ...value, provider_account_id: providerAccounts[0].id });
+    }
+  }, [providerAccounts, value.provider_account_id]);
 
   const setProvider = (next: ProviderType) => {
     setLocalError(null);

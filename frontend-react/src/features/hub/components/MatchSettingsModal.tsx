@@ -19,6 +19,7 @@ interface MatchOperationsSettingsProps {
   initialSetFormatDefault?: string;
   initialSetFormatUpgradeRule?: string;
   initialSetFormatUpgraded?: string;
+  initialDefaultStreamUrl?: string;
   onSave: () => void;
 }
 
@@ -40,6 +41,7 @@ export function MatchOperationsSettings({
   initialSetFormatDefault = 'ft2',
   initialSetFormatUpgradeRule = 'finals_only',
   initialSetFormatUpgraded = 'ft3',
+  initialDefaultStreamUrl = "",
   onSave,
 }: MatchOperationsSettingsProps) {
   const [autoDqEnabled, setAutoDqEnabled] = useState(initialAutoDqEnabled);
@@ -57,6 +59,7 @@ export function MatchOperationsSettings({
   const [setFormatDefault, setSetFormatDefault] = useState(initialSetFormatDefault);
   const [setFormatUpgradeRule, setSetFormatUpgradeRule] = useState(initialSetFormatUpgradeRule);
   const [setFormatUpgraded, setSetFormatUpgraded] = useState(initialSetFormatUpgraded);
+  const [defaultStreamUrl, setDefaultStreamUrl] = useState(initialDefaultStreamUrl);
   const [saving, setSaving] = useState(false);
   const [dispatcherStatus, setDispatcherStatus] = useState<{
     state: 'running' | 'paused_tournament' | 'paused_global' | 'service_offline';
@@ -98,6 +101,7 @@ export function MatchOperationsSettings({
         set_format_default: setFormatDefault,
         set_format_upgrade_rule: setFormatUpgradeRule,
         set_format_upgraded: setFormatUpgraded,
+        default_stream_url: defaultStreamUrl.trim() || null,
       });
       await refreshDispatcherStatus();
       onSave();
@@ -271,6 +275,23 @@ export function MatchOperationsSettings({
 
             <span className="text-[11px] text-textDim leading-snug">
               Rules apply automatically when sets are imported or updated. Organizers can also manually override individual match formats directly from the match card.
+            </span>
+          </div>
+
+          {/* ── Default Stream Channel ── */}
+          <div className="flex flex-col gap-2 p-3 rounded-lg bg-black/40 border border-white/10">
+            <span className="text-sm font-bold text-white flex items-center gap-1.5">
+              📺 Default Stream Channel
+            </span>
+            <input
+              type="text"
+              value={defaultStreamUrl}
+              onChange={e => setDefaultStreamUrl(e.target.value)}
+              placeholder="e.g. https://twitch.tv/my_channel"
+              className="w-full bg-black/40 border border-white/10 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-accentYellow/50 placeholder:text-textDim"
+            />
+            <span className="text-[11px] text-textDim leading-snug">
+              Default public stream channel inherited by all stations. Individual stations can override this in Station Settings.
             </span>
           </div>
 

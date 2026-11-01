@@ -184,7 +184,11 @@ function PlayersBlock({
               {p.avatar ? (
                 <img src={p.avatar} alt="" className="w-full h-full object-cover" onError={(e) => (e.currentTarget.style.display = 'none')} />
               ) : (
-                <div className="w-full h-full flex items-center justify-center text-xs text-[var(--muted-foreground)]">?</div>
+                <div className="w-full h-full flex items-center justify-center text-[var(--muted-foreground)] bg-white/5">
+                  <svg viewBox="0 0 24 24" fill="currentColor" className="w-3.5 h-3.5 opacity-60">
+                    <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
+                  </svg>
+                </div>
               )}
             </div>
             <span className="truncate">{p.name}</span>
@@ -230,19 +234,6 @@ interface MatchCardProps {
   // overlays/routing/green-room still work; only the public 📺 won't render).
   streamUnlinked?: boolean;
   can?: (permission: string) => boolean;
-}
-
-// Compact amber chip shown beside the "For Stream" button when the start.gg
-// stream isn't linked. Tooltip carries the full explanation.
-function StreamUnlinkedBadge() {
-  return (
-    <span
-      title="No Hub stream station is linked to a live start.gg stream. You can still flag this match — local overlays, station routing and lobby DMs work — but the public 📺 won't appear on the start.gg bracket until a stream is linked in start.gg admin."
-      className="inline-flex items-center gap-0.5 rounded border border-amber-500/40 bg-amber-500/10 px-1 py-0.5 text-[8px] font-bold uppercase tracking-wider text-amber-300/90 leading-none cursor-help select-none shrink-0"
-    >
-      ⚠ 📺
-    </span>
-  );
 }
 
 function StationMenu({ match, stations, onAction, onOpenChange }: { match: MatchData; stations: any[]; onAction: MatchCardProps['onAction']; onOpenChange?: (open: boolean) => void }) {
@@ -334,7 +325,7 @@ function StationMenu({ match, stations, onAction, onOpenChange }: { match: Match
   );
 }
 
-export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onToggleStream, stations, streamUnlinked, can = () => true }: MatchCardProps) {
+export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onToggleStream, stations, can = () => true }: MatchCardProps) {
   const meta = STATUS_META[match.status];
   const showTimer = match.status === "live" || match.status === "called";
   // Legacy Start.gg rows do not carry an action projection. New provider rows
@@ -556,7 +547,6 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
               >
                 Awaiting bracket
               </span>
-              {streamUnlinked && !match.isStreamMatch && <StreamUnlinkedBadge />}
               {can('stream.manage') && <button
                 type="button"
                 onClick={() => onToggleStream(rawSetId, !!match.isStreamMatch)}
@@ -584,7 +574,6 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
                   {match.isLocal && (
                     can('match.call') && <ActionButton tone="activate" label="Call Match" icon={<IconCall />} onClick={() => onAction("callMatch", match)} />
                   )}
-                  {streamUnlinked && !match.isStreamMatch && <StreamUnlinkedBadge />}
                   {can('stream.manage') && <button
                     type="button"
                     onClick={() => onToggleStream(rawSetId, !!match.isStreamMatch)}
@@ -601,7 +590,7 @@ export function MatchCard({ match, dqTimerSeconds, autoDqEnabled, onAction, onTo
                 </>
               )}
 
-              {can('station.manage') && match.isLocal && match.status !== "done" && match.status !== "dq" && (
+              {can('station.manage') && match.status !== "done" && match.status !== "dq" && (
                 <StationMenu match={match} stations={stations || []} onAction={onAction} onOpenChange={setStationMenuOpen} />
               )}
 

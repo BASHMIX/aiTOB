@@ -57,6 +57,18 @@ async def validate_avatar_safety(image_bytes: bytes) -> tuple[bool, str]:
     """
     api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
     if not api_key:
+        try:
+            from backend.core import integrations, database
+            from backend.core.storage import dbapi
+            async with dbapi.connect(database.DATABASE_DSN) as db:
+                row = await (await db.execute(
+                    "SELECT id FROM integration_accounts WHERE provider_type='gemini' AND status='active' ORDER BY created_at ASC LIMIT 1"
+                )).fetchone()
+                if row:
+                    api_key = await integrations.get_integration_secret(row[0], "api_key")
+        except Exception:
+            pass
+    if not api_key:
         return True, "Safety check skipped (no API key)"
         
     # 'gemini-1.5-flash' 404s on the current v1beta API. Default to the model the

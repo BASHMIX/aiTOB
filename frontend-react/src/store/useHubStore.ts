@@ -22,6 +22,7 @@ interface Tournament {
   set_format_default?: string;
   set_format_upgrade_rule?: string;
   set_format_upgraded?: string;
+  default_stream_url?: string | null;
 }
 
 export interface ProviderActionProjection {
@@ -180,6 +181,7 @@ interface HubState {
   removePinnedTournament: (slug: string) => void;
   setEvents: (events: EventOpt[]) => void;
   setCurrentEventId: (id: string | null) => void;
+  selectTournamentEvent: (slug: string, eventId?: string | null) => void;
   setMatches: (matches: Match[]) => void;
   setStations: (stations: Station[]) => void;
   setStatus: (status: {
@@ -250,6 +252,27 @@ export const useHubStore = create<HubState>((set) => ({
     if (currentEventId) localStorage.setItem('hub_current_event', currentEventId);
     else localStorage.removeItem('hub_current_event');
     set({ currentEventId });
+  },
+  selectTournamentEvent: (slug, eventId = null) => {
+    localStorage.setItem('hub_current_slug', slug);
+    if (eventId) localStorage.setItem('hub_current_event', eventId);
+    else localStorage.removeItem('hub_current_event');
+    set((state) => {
+      const slugChanged = slug !== state.currentSlug;
+      const pinnedTournamentSlugs = !state.pinnedTournamentSlugs.includes(slug)
+        ? [...state.pinnedTournamentSlugs, slug]
+        : state.pinnedTournamentSlugs;
+      if (pinnedTournamentSlugs !== state.pinnedTournamentSlugs) {
+        localStorage.setItem('hub_pinned_tournaments', JSON.stringify(pinnedTournamentSlugs));
+      }
+      return {
+        currentSlug: slug,
+        currentEventId: eventId,
+        pinnedTournamentSlugs,
+        matches: state.matches,
+        events: slugChanged ? [] : state.events,
+      };
+    });
   },
   setMatches: (matches) => set({ matches }),
   setStations: (stations) => set({ stations }),

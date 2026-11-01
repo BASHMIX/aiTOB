@@ -2265,34 +2265,54 @@ async def upsert_active_match(set_id: str | dict, workspace_id: str | None = Non
     async with dbapi.connect(DATABASE_DSN) as db:
         valid_cols = await _table_columns(db, "active_matches")
         
-        # Filter kwargs
-        if workspace_id is not None and "workspace_id" in valid_cols:
-            kwargs["workspace_id"] = workspace_id
-        filtered_kwargs = {k: _database_value(k, v) for k, v in kwargs.items() if k in valid_cols}
-        
-        existing = None
-        query = "SELECT set_id FROM active_matches WHERE set_id = ?"
-        params: tuple = (set_id,)
-        if workspace_id is not None:
-            query += " AND workspace_id = ?"
-            params += (workspace_id,)
-        async with db.execute(query, params) as c:
-            existing = await c.fetchone()
+        # Security: Never allow workspace_id or set_id to be injected or changed via kwargs
+        kwargs.pop("workspace_id", None)
+        kwargs.pop("set_id", None)
 
-        if existing:
-            if filtered_kwargs:
-                set_clause = ', '.join([f'"{k}" = ?' for k in filtered_kwargs.keys()])
-                values = list(filtered_kwargs.values()) + [set_id]
-                where = "set_id = ?"
-                if workspace_id is not None:
-                    where += " AND workspace_id = ?"
-                    values.append(workspace_id)
-                await db.execute(f'UPDATE active_matches SET {set_clause} WHERE {where}', values)
-        else:
-            filtered_kwargs['set_id'] = set_id
-            cols = ', '.join([f'"{k}"' for k in filtered_kwargs.keys()])
+        filtered_kwargs = {k: _database_value(k, v) for k, v in kwargs.items() if k in valid_cols}
+        filtered_kwargs["set_id"] = str(set_id)
+
+        if workspace_id is None and "workspace_id" in valid_cols:
+            slug = kwargs.get("tournament_slug")
+            if slug:
+                async with db.execute("SELECT workspace_id FROM tournaments WHERE slug = ? AND workspace_id IS NOT NULL", (slug,)) as c:
+                    t_row = await c.fetchone()
+                    if t_row and t_row[0]:
+                        workspace_id = t_row[0]
+            if not workspace_id:
+                async with db.execute("SELECT id FROM workspaces ORDER BY created_at LIMIT 1") as c:
+                    w_row = await c.fetchone()
+                    if w_row and w_row[0]:
+                        workspace_id = w_row[0]
+                    else:
+                        workspace_id = "default"
+
+        if workspace_id is not None and "workspace_id" in valid_cols:
+            filtered_kwargs["workspace_id"] = str(workspace_id)
+
+        # Atomic PostgreSQL upsert on composite key (workspace_id, set_id)
+        if "workspace_id" in filtered_kwargs:
+            update_cols = [k for k in filtered_kwargs.keys() if k not in ("workspace_id", "set_id")]
+            cols_str = ', '.join([f'"{k}"' for k in filtered_kwargs.keys()])
             placeholders = ', '.join(['?'] * len(filtered_kwargs))
-            await db.execute(f"INSERT INTO active_matches ({cols}) VALUES ({placeholders})", list(filtered_kwargs.values()))
+            if update_cols:
+                set_clauses = [f'"{k}" = EXCLUDED."{k}"' for k in update_cols]
+                update_str = f"DO UPDATE SET {', '.join(set_clauses)}"
+            else:
+                update_str = "DO NOTHING"
+
+            query = f"""
+                INSERT INTO active_matches ({cols_str})
+                VALUES ({placeholders})
+                ON CONFLICT (workspace_id, set_id)
+                {update_str}
+            """
+            await db.execute(query, list(filtered_kwargs.values()))
+        else:
+            cols_str = ', '.join([f'"{k}"' for k in filtered_kwargs.keys()])
+            placeholders = ', '.join(['?'] * len(filtered_kwargs))
+            await db.execute(f"INSERT INTO active_matches ({cols_str}) VALUES ({placeholders})", list(filtered_kwargs.values()))
+
         await db.commit()
 
 async def delete_active_match(set_id: str, workspace_id: str | None = None):
@@ -2534,13 +2554,29 @@ async def _insert_new_match(
 
         workspace_column = ", workspace_id" if workspace_id is not None else ""
         workspace_value = ", ?" if workspace_id is not None else ""
+        on_conflict = """
+            ON CONFLICT (workspace_id, set_id) DO UPDATE SET
+                p1_name = EXCLUDED.p1_name,
+                p2_name = EXCLUDED.p2_name,
+                p1_avatar = EXCLUDED.p1_avatar,
+                p2_avatar = EXCLUDED.p2_avatar,
+                p1_entrant_id = EXCLUDED.p1_entrant_id,
+                p2_entrant_id = EXCLUDED.p2_entrant_id,
+                round_name = EXCLUDED.round_name,
+                match_number = EXCLUDED.match_number,
+                phase_group = EXCLUDED.phase_group,
+                best_of = EXCLUDED.best_of,
+                provider_set_id = EXCLUDED.provider_set_id,
+                provider_state = EXCLUDED.provider_state
+        """ if workspace_id is not None else ""
         await db.execute(f"""
             INSERT INTO active_matches (
                 set_id, tournament_slug, event_id, event_name, p1_name, p2_name, p1_avatar, p2_avatar,
                 p1_entrant_id, p2_entrant_id, p1_discord, p2_discord,
                 round_name, match_number, phase_group, best_of,
                 status, bot_enabled, is_stream_match, station_id, provider_set_id, provider_state{workspace_column}
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?{workspace_value})
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?{workspace_value})
+            {on_conflict}
         """, (sid, tournament_slug, ps.event_id or "", ps.event_name or "", p1_name, p2_name, p1_avatar, p2_avatar,
                p1_eid, p2_eid, p1_discord, p2_discord,
                round_name, match_num, str(phase_group), resolve_match_best_of(round_name, set_format_default, set_format_upgrade_rule, set_format_upgraded),

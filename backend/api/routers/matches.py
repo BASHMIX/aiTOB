@@ -636,6 +636,8 @@ async def api_patch_active_match(set_id: str, body: PatchActiveMatchRequest, pri
     # client didn't send are still omitted.
     d = body.model_dump(exclude_unset=True)
     existing_match = await get_active_match(set_id, _ws(principal))
+    if not existing_match:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found")
     if "station_id" in d and d.get("station_id") and await _local_challonge_enabled(existing_match, _ws(principal)):
         try:
             await MatchCommandService(workspace_id=_ws(principal)).assign_station(set_id, d["station_id"])

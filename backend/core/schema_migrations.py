@@ -147,6 +147,26 @@ async def apply_workspace_constraint_migrations(db):
         "ON overlays (workspace_id, name)"
     )
 
+    # Upgrade active_matches to composite primary key (workspace_id, set_id)
+    async with db.execute(
+        "SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint "
+        "WHERE conrelid = 'active_matches'::regclass AND contype = 'p'"
+    ) as cursor:
+        match_pks = await cursor.fetchall()
+    legacy_match_pk = False
+    for row in match_pks:
+        definition = str(row[1]).lower().replace(' ', '')
+        if definition == 'primarykey(set_id)':
+            legacy_match_pk = True
+            await db.execute(f'ALTER TABLE active_matches DROP CONSTRAINT "{row[0]}"')
+    if legacy_match_pk:
+        await db.execute("UPDATE active_matches SET workspace_id = 'default' WHERE workspace_id IS NULL")
+        await db.execute("ALTER TABLE active_matches ALTER COLUMN workspace_id SET NOT NULL")
+        await db.execute(
+            "ALTER TABLE active_matches ADD CONSTRAINT active_matches_pkey "
+            "PRIMARY KEY (workspace_id, set_id)"
+        )
+
 
 async def _ensure_named_constraint(db, table: str, name: str, definition: str) -> None:
     exists = await (await db.execute(

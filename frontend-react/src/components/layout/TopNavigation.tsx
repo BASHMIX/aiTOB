@@ -6,7 +6,7 @@ import { removeTournamentFromHub, tournamentRemovalConfirmation } from '@/featur
 export function TopNavigation() {
   const {
     tournaments, setTournaments, currentSlug, setCurrentSlug, removePinnedTournament, status, setMatches,
-    events, setEvents, currentEventId, setCurrentEventId, session,
+    events, setEvents, currentEventId, setCurrentEventId, selectTournamentEvent, session,
   } = useHubStore();
   const [isRefreshing, setIsRefreshing] = useState(false);
   const currentTournament = tournaments.find((tournament) => tournament.slug === currentSlug);
@@ -26,7 +26,7 @@ export function TopNavigation() {
       try {
         const res = await axios.get(`/api/tournaments/${encodeURIComponent(currentSlug)}/events`);
         if (cancelled) return;
-        const evs = res.data.events || [];
+        const evs = res?.data?.events || [];
         setEvents(evs);
         if (evs.length === 1) {
           setCurrentEventId(evs[0].id);
@@ -38,7 +38,8 @@ export function TopNavigation() {
           const wizardEvent = currentTournament?.event_id
             ? evs.find((event: any) => String(event.id) === String(currentTournament.event_id))
             : null;
-          const stillValid = currentEventId && evs.some((e: any) => String(e.id) === String(currentEventId));
+          const currentStoreEvent = useHubStore.getState().currentEventId || currentEventId;
+          const stillValid = currentStoreEvent && evs.some((e: any) => String(e.id) === String(currentStoreEvent));
           if (!stillValid) setCurrentEventId(wizardEvent?.id || null);
         }
       } catch (e) {
@@ -98,11 +99,11 @@ export function TopNavigation() {
   };
 
   return (
-    <nav className="bg-cardDark rounded-md p-3 flex flex-wrap items-center justify-between gap-4 text-sm shadow-md">
-      <div className="flex items-center gap-4 font-medium text-white">
+    <nav className="bg-cardDark rounded-md p-3 flex flex-wrap items-center justify-between gap-4 text-sm shadow-md border border-white/5">
+      <div className="flex items-center gap-4 font-medium text-white flex-wrap">
         <button 
           onClick={signOut}
-          className="text-textDim hover:text-accentYellow transition-colors flex items-center gap-2"
+          className="text-textDim hover:text-accentYellow transition-colors flex items-center gap-1.5 text-xs font-semibold"
         >
           <span>🚪</span> Logout{session?.workspace_name ? ` · ${session.workspace_name}` : ''}
         </button>
@@ -121,37 +122,57 @@ export function TopNavigation() {
           <span>🏆</span> Results Studio
         </a>
         <div className="flex items-center gap-2 border-l border-white/20 pl-4">
-          <span>Tournament:</span>
-          <select 
-            className="bg-transparent border-none text-white focus:ring-0 text-sm p-0 cursor-pointer hover:text-accentYellow font-bold"
-            value={currentSlug || ''}
-            onChange={(e) => setCurrentSlug(e.target.value)}
-          >
-            <option className="text-black" value="">[ Select Tournament ▼ ]</option>
-            {tournaments.map((t) => (
-              <option key={t.slug} className="text-black" value={t.slug}>
-                [ {t.name} ▼ ]
-              </option>
-            ))}
-          </select>
+          <span className="text-textDim text-xs font-mono uppercase tracking-wider">Tournament:</span>
+          <div className="relative inline-flex items-center">
+            <select 
+              className="bg-black/30 hover:bg-black/50 border border-white/15 focus:border-accentYellow text-white focus:ring-0 text-xs font-bold py-1 pl-2.5 pr-6 rounded-md cursor-pointer transition-colors appearance-none"
+              value={currentSlug || ''}
+              onChange={(e) => {
+                const slug = e.target.value;
+                if (slug) {
+                  if (selectTournamentEvent) {
+                    selectTournamentEvent(slug, null);
+                  } else {
+                    setCurrentSlug(slug);
+                  }
+                } else {
+                  setCurrentSlug(null);
+                }
+              }}
+            >
+              <option className="bg-[#161c28] text-textDim" value="">Select Tournament</option>
+              {tournaments.map((t) => (
+                <option key={t.slug} className="bg-[#161c28] text-white" value={t.slug}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+            <svg className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-textDim" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7" />
+            </svg>
+          </div>
           {currentSlug && (
-            <div className="flex items-center gap-2 ml-2">
+            <div className="flex items-center gap-1.5 ml-1">
               <button
                 onClick={globalRefresh}
                 disabled={isRefreshing}
-                className={`text-textDim hover:text-accentYellow transition-colors ${isRefreshing ? 'animate-spin' : ''}`}
+                className={`p-1 text-textDim hover:text-accentYellow hover:bg-white/5 rounded transition-colors ${isRefreshing ? 'animate-spin' : ''}`}
                 title="Refresh All Data"
+                aria-label="Refresh All Data"
               >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-4 h-4">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-3.5 h-3.5">
                   <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
                 </svg>
               </button>
               <button
                 onClick={deleteTournament}
-                className="text-[#ff4444] hover:text-[#cc2222] transition-colors"
+                className="p-1 text-statusRed/70 hover:text-statusRed hover:bg-statusRed/10 rounded transition-colors"
                 title="Delete Tournament"
+                aria-label="Delete Tournament"
               >
-                🗑️
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
               </button>
             </div>
           )}
@@ -159,30 +180,39 @@ export function TopNavigation() {
 
         {/* Challonge has one provider bracket, while Start.gg can have many events. */}
         {currentSlug && isChallonge && (
-          <div className="flex items-center gap-2 border-l border-white/20 pl-4">
-            <span className="text-textDim">Scope:</span>
-            <span className="text-white font-bold">Bracket</span>
+          <div className="flex items-center gap-1.5 border-l border-white/20 pl-4 text-xs">
+            <span className="text-textDim font-mono uppercase tracking-wider">Scope:</span>
+            <span className="text-white font-bold bg-white/10 px-2 py-0.5 rounded border border-white/10">Bracket</span>
           </div>
         )}
         {currentSlug && !isChallonge && (events?.length ?? 0) > 0 && (
           <div className="flex items-center gap-2 border-l border-white/20 pl-4">
-            <span>Event:</span>
+            <span className="text-textDim text-xs font-mono uppercase tracking-wider">Event:</span>
             {events.length === 1 ? (
-              <span className="text-white font-bold">{events[0].name}{events[0].game ? ` · ${events[0].game}` : ''}</span>
+              <span className="text-white text-xs font-bold bg-white/10 px-2.5 py-1 rounded-md border border-white/10">
+                {events[0].name}{events[0].game ? ` · ${events[0].game}` : ''}
+              </span>
             ) : (
-              <select
-                className={`bg-transparent border-none focus:ring-0 text-sm p-0 cursor-pointer hover:text-accentYellow font-bold ${currentEventId ? 'text-white' : 'text-accentYellow animate-pulse'}`}
-                value={currentEventId || ''}
-                onChange={(e) => setCurrentEventId(e.target.value || null)}
-                title="Select an event to view its matches and attendees"
-              >
-                <option className="text-black" value="">[ Select Event ▼ ]</option>
-                {events.map((ev) => (
-                  <option key={ev.id} className="text-black" value={ev.id}>
-                    [ {ev.name}{ev.game ? ` · ${ev.game}` : ''} ▼ ]
-                  </option>
-                ))}
-              </select>
+              <div className="relative inline-flex items-center">
+                <select
+                  className={`bg-black/30 hover:bg-black/50 border border-white/15 focus:border-accentYellow focus:ring-0 text-xs py-1 pl-2.5 pr-6 rounded-md cursor-pointer transition-colors appearance-none font-bold ${
+                    currentEventId ? 'text-white' : 'text-accentYellow animate-pulse'
+                  }`}
+                  value={currentEventId || ''}
+                  onChange={(e) => setCurrentEventId(e.target.value || null)}
+                  title="Select an event to view its matches and attendees"
+                >
+                  <option className="bg-[#161c28] text-textDim" value="">Select Event</option>
+                  {events.map((ev) => (
+                    <option key={ev.id} className="bg-[#161c28] text-white" value={ev.id}>
+                      {ev.name}{ev.game ? ` · ${ev.game}` : ''}
+                    </option>
+                  ))}
+                </select>
+                <svg className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-textDim" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7" />
+                </svg>
+              </div>
             )}
           </div>
         )}

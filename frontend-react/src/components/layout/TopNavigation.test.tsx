@@ -63,8 +63,8 @@ describe('TopNavigation Component', () => {
     expect(screen.getByText('Logout')).toBeInTheDocument();
 
     // Check tournament dropdown options
-    expect(screen.getByText('[ Tournament 1 ▼ ]')).toBeInTheDocument();
-    expect(screen.getByText('[ Tournament 2 ▼ ]')).toBeInTheDocument();
+    expect(screen.getByText('Tournament 1')).toBeInTheDocument();
+    expect(screen.getByText('Tournament 2')).toBeInTheDocument();
 
     // Check Status indicators text
     expect(screen.getByText('Start.gg')).toBeInTheDocument();

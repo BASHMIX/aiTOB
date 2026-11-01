@@ -243,12 +243,20 @@ async def api_add_tournament(body: AddTournamentRequest, principal: SessionPrinc
     # Capacity is checked before any provider request.  Re-importing the same
     # local projection does not consume another free-plan slot.
     workspace_id = _workspace(principal)
-    if workspace_id is not None and body.provider_account_id:
+    provider_account_id = (body.provider_account_id or "").strip()
+    if not provider_account_id and workspace_id:
+        from backend.core.integrations import list_integration_accounts
+        accounts = await list_integration_accounts(workspace_id=workspace_id)
+        active_match = next((a for a in accounts if a.get("provider_type") == provider_type and a.get("status") == "active"), None)
+        if active_match:
+            provider_account_id = str(active_match["id"])
+
+    if workspace_id is not None and provider_account_id:
         # An integration id is a tenant-owned capability, not a caller-chosen
         # adapter hint. Prove ownership before resolving or contacting a
         # provider so a workspace cannot use another workspace's credential.
         from backend.core.integrations import get_integration_account
-        account = await get_integration_account(body.provider_account_id, workspace_id=workspace_id)
+        account = await get_integration_account(provider_account_id, workspace_id=workspace_id)
         if not account or account.get("provider_type") != provider_type:
             raise HTTPException(status_code=404, detail="Provider integration account not found")
     if workspace_id is not None and not await get_tournament(slug, workspace_id):
@@ -261,12 +269,12 @@ async def api_add_tournament(body: AddTournamentRequest, principal: SessionPrinc
         if not get_provider_feature_flags().challonge_read_enabled:
             raise HTTPException(status_code=409, detail="Challonge read support is not enabled for this Hub.")
         try:
-            if not body.provider_account_id:
+            if not provider_account_id:
                 raise HTTPException(status_code=422, detail="Select a Challonge integration account before importing.")
             if not workspace_id:
                 raise HTTPException(status_code=409, detail="Workspace ownership is required")
             resolved = await resolution_service.resolve(
-                body.provider_account_id, slug, body.subdomain, workspace_id=workspace_id
+                provider_account_id, slug, body.subdomain, workspace_id=workspace_id
             )
             stored = await persist_challonge_identity(
                 resolved, locator_key=resolved["locator_key"], workspace_id=_workspace(principal)
@@ -281,7 +289,7 @@ async def api_add_tournament(body: AddTournamentRequest, principal: SessionPrinc
         except Exception as exc:
             raise HTTPException(status_code=502, detail="Challonge identity import failed.") from exc
     else:
-        if provider_type == "startgg" and not body.provider_account_id:
+        if provider_type == "startgg" and not provider_account_id:
             raise HTTPException(
                 status_code=422,
                 detail="Select a Start.gg integration account before importing.",
@@ -292,12 +300,11 @@ async def api_add_tournament(body: AddTournamentRequest, principal: SessionPrinc
                 slug = f"{parts[0]}/{parts[1]}"
         provider_id, provider_subdomain = slug, None
 
-    workspace_id = _workspace(principal)
-    if not workspace_id or not body.provider_account_id:
+    if not workspace_id or not provider_account_id:
         raise HTTPException(status_code=422, detail="A workspace provider account is required.")
     try:
         provider = await get_provider_for_account(
-            provider_type, body.provider_account_id, workspace_id
+            provider_type, provider_account_id, workspace_id
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -316,8 +323,10 @@ async def api_add_tournament(body: AddTournamentRequest, principal: SessionPrinc
         game=event.game if event else None,
         raw_data=json.dumps(compatible_raw), provider_type=provider_type,
         provider_tournament_id=str(provider_id), provider_subdomain=provider_subdomain,
-        provider_account_id=body.provider_account_id, workspace_id=_workspace(principal),
+        provider_account_id=provider_account_id, workspace_id=_workspace(principal),
     )
+    if body.default_stream_url and body.default_stream_url.strip():
+        await update_tournament_settings(slug, _workspace(principal), default_stream_url=body.default_stream_url.strip())
     # Cache the start.gg stream list so station settings can map to it later.
     await set_tournament_streams(slug, [
         {"id": s.id, "name": s.name, "source": s.source, "game": s.game}

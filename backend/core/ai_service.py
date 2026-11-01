@@ -380,10 +380,17 @@ async def set_workspace_ai_key(
 
 async def _workspace_api_key(workspace_id: str, config: dict[str, Any]) -> str:
     account_id = str(config.get("selected_account_id") or "")
+    provider_type = config.get("provider_type") or "gemini"
+    if not account_id:
+        accounts = await integrations.list_integration_accounts(workspace_id)
+        for acc in accounts:
+            if acc.get("provider_type") == provider_type and acc.get("status") == "active":
+                account_id = str(acc["id"])
+                break
     if not account_id:
         raise AIConfigurationError("No workspace AI connection is selected.")
     account = await integrations.get_integration_account(account_id, workspace_id=workspace_id)
-    if not account or account.get("provider_type") != config.get("provider_type"):
+    if not account or account.get("provider_type") != provider_type:
         raise AIConfigurationError("Selected workspace AI connection is unavailable.")
     key = await integrations.get_integration_secret(account_id, "api_key")
     if not key:

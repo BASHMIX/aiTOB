@@ -17,6 +17,7 @@ export function TournamentSettings() {
   const startAt = tournamentMeta.starts_at;
   const remoteState = String(tournamentMeta.provider_state || '').toLowerCase();
   const [slugInput, setSlugInput] = useState('');
+  const [defaultStreamInput, setDefaultStreamInput] = useState('');
   const [providerType, setProviderType] = useState<'startgg' | 'challonge'>(() =>
     (sessionStorage.getItem('aitoB.importProvider') as 'startgg' | 'challonge') || 'startgg');
   const [useSubdomain, setUseSubdomain] = useState(false);
@@ -107,10 +108,15 @@ export function TournamentSettings() {
     const slug = slugInput.trim();
     if (!slug) return;
     try {
-      const res = await axios.post('/api/tournaments', providerType === 'challonge'
+      const payload: any = providerType === 'challonge'
         ? { provider_type: 'challonge', identifier: slug, ...(useSubdomain && subdomain.trim() ? { subdomain: subdomain.trim() } : {}) }
-        : { provider_type: 'startgg', slug });
+        : { provider_type: 'startgg', slug };
+      if (defaultStreamInput.trim()) {
+        payload.default_stream_url = defaultStreamInput.trim();
+      }
+      const res = await axios.post('/api/tournaments', payload);
       setSlugInput('');
+      setDefaultStreamInput('');
       
       const tourneysRes = await axios.get('/api/tournaments');
       const updatedTournaments = tourneysRes.data.tournaments || [];
@@ -209,6 +215,11 @@ export function TournamentSettings() {
           <span className="text-sm font-mono truncate mr-2 text-textDim">
             {currentSlug ? `Active: ${currentTournament?.name || currentSlug} · ${providerProfile?.display_name || (currentTournament?.provider_type === 'challonge' ? 'Challonge' : 'Start.gg')}${currentTournament?.provider_sync_status === 'error' ? ' · Sync needs attention' : ''}` : 'No Tournament Selected'}
           </span>
+          {currentTournament?.default_stream_url && (
+            <span className="text-[11px] text-accentYellow/90 bg-accentYellow/10 px-2 py-0.5 rounded border border-accentYellow/20 truncate max-w-xs" title={`Default Stream: ${currentTournament.default_stream_url}`}>
+              📺 {currentTournament.default_stream_url}
+            </span>
+          )}
           <div className="flex gap-2">
             <button 
               onClick={globalRefresh}
@@ -380,6 +391,17 @@ export function TournamentSettings() {
             ? challongeConnection.connected ? 'Challonge connected · identity preview is available.' : 'Challonge is enabled, but no account is connected.'
             : 'Challonge identity import is disabled for this Hub.'}
         </div>}
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-textDim" htmlFor="reg-default-stream">Default Stream Channel URL (optional)</label>
+          <input 
+            id="reg-default-stream"
+            className="w-full bg-appDark border border-white/10 rounded px-3 py-1.5 text-sm text-white focus:border-accentYellow focus:ring-1 focus:ring-accentYellow placeholder:text-textDim" 
+            placeholder="e.g. https://twitch.tv/my_channel" 
+            type="text"
+            value={defaultStreamInput}
+            onChange={e => setDefaultStreamInput(e.target.value)}
+          />
+        </div>
         <div className="flex gap-2">
           <input 
             className="w-full bg-appDark border border-white/10 rounded px-3 py-1.5 text-sm text-white focus:border-accentYellow focus:ring-1 focus:ring-accentYellow" 

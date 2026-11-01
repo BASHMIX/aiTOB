@@ -3,16 +3,31 @@ import { useState } from 'react';
 import { StationSettingsModal } from './StationSettingsModal';
 import { StationMiniQueue } from './StationMiniQueue';
 import { useHubStore } from '@/store/useHubStore';
-import { tournamentAccent, withAccentAlpha } from './tournamentAccent';
+import { eventAccent, withAccentAlpha, useEventAccentWatcher } from './tournamentAccent';
 
 export function StationCard({ station, onReload, canManageStations = true, canManageOverlays = true }: { station: any, onReload: () => void, canManageStations?: boolean, canManageOverlays?: boolean }) {
+  useEventAccentWatcher();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
   const { matches, tournaments, currentSlug, currentEventId } = useHubStore();
   const owningMatch = matches.find((match) => match.station_id === station.id && (match.status === 'called' || match.status === 'in_progress'));
-  const ownerTournament = owningMatch ? tournaments.find((tournament) => tournament.slug === owningMatch.tournament_slug) : undefined;
-  const accent = ownerTournament ? tournamentAccent(ownerTournament) : undefined;
+  const boundEventId = station.event_id || owningMatch?.event_id;
+  const ownerTournament = owningMatch
+    ? tournaments.find((t) => t.slug === owningMatch.tournament_slug)
+    : boundEventId
+      ? tournaments.find((t) => {
+          if (t.event_id && String(t.event_id) === String(boundEventId)) return true;
+          if (t.slug === boundEventId) return true;
+          try {
+            const raw = typeof t.raw_data === 'string' ? JSON.parse(t.raw_data) : t.raw_data;
+            return Array.isArray(raw?.events) && raw.events.some((e: any) => String(e.id) === String(boundEventId));
+          } catch {
+            return false;
+          }
+        })
+      : undefined;
+  const accent = ownerTournament ? eventAccent(ownerTournament, boundEventId) : undefined;
 
   const showToast = (text: string, ok = true) => {
     setNotice({ text, ok });

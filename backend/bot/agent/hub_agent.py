@@ -22,6 +22,16 @@ async def _get_api_key() -> str:
         )
         if key:
             return key
+        from backend.core import integrations, database
+        from backend.core.storage import dbapi
+        async with dbapi.connect(database.DATABASE_DSN) as db:
+            row = await (await db.execute(
+                "SELECT id FROM integration_accounts WHERE provider_type='gemini' AND status='active' ORDER BY created_at ASC LIMIT 1"
+            )).fetchone()
+            if row:
+                secret = await integrations.get_integration_secret(row[0], "api_key")
+                if secret:
+                    return secret
     except Exception:
         pass
     return os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or ""

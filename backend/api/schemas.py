@@ -234,6 +234,7 @@ class AddTournamentRequest(BaseModel):
     identifier: Optional[str] = Field(default=None, description="Provider tournament ID, slug, or URL")
     provider_account_id: Optional[str] = Field(default=None, description="Account-scoped provider binding required for Challonge")
     subdomain: Optional[str] = Field(default=None, description="Optional Challonge community/subdomain")
+    default_stream_url: Optional[str] = Field(default=None, description="Default stream channel URL for the tournament", examples=["https://twitch.tv/my_channel"])
 
 
 class BotCommandRequest(BaseModel):
@@ -528,6 +529,7 @@ class PatchTournamentSettingsRequest(BaseModel):
     set_format_default: Optional[str] = Field(default=None, description="Default set format ('ft2', 'ft3', 'ft5')", examples=["ft2"])
     set_format_upgrade_rule: Optional[str] = Field(default=None, description="Auto upgrade rule ('finals_only', 'top8_finals', 'disabled')", examples=["finals_only"])
     set_format_upgraded: Optional[str] = Field(default=None, description="Format to upgrade to ('ft3', 'ft5')", examples=["ft3"])
+    default_stream_url: Optional[str] = Field(default=None, description="Default stream channel URL for the tournament", examples=["https://twitch.tv/my_channel"])
 
     @field_validator("check_in_source")
     @classmethod

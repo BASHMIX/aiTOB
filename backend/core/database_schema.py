@@ -410,7 +410,8 @@ TABLE_SCHEMAS = [
     ''',
     '''
     CREATE TABLE IF NOT EXISTS active_matches (
-        set_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        set_id TEXT NOT NULL,
         tournament_slug TEXT,
         event_id TEXT,
         event_name TEXT,
@@ -430,7 +431,8 @@ TABLE_SCHEMAS = [
         bot_enabled BOOLEAN DEFAULT TRUE,
         best_of INTEGER DEFAULT 3,
         status TEXT DEFAULT 'not_started',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (workspace_id, set_id)
     )
     ''',
     '''
@@ -1515,4 +1517,5 @@ MIGRATIONS = [
     "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS set_format_upgraded TEXT DEFAULT 'ft3'",
     "ALTER TABLE active_matches ADD COLUMN IF NOT EXISTS best_of INTEGER DEFAULT 3",
     "CREATE TABLE IF NOT EXISTS workspace_bot_settings (workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id), custom_rules_markdown TEXT DEFAULT '', welcome_message TEXT DEFAULT '', faq_help_text TEXT DEFAULT '', enable_avatar_uploads BOOLEAN NOT NULL DEFAULT TRUE, enable_match_threads BOOLEAN NOT NULL DEFAULT TRUE, enable_rules_command BOOLEAN NOT NULL DEFAULT TRUE, response_mode TEXT NOT NULL DEFAULT 'direct_template' CHECK(response_mode IN ('direct_template', 'llm_assistant', 'disabled')), language_mode TEXT NOT NULL DEFAULT 'auto' CHECK(language_mode IN ('auto', 'ar', 'en', 'both')), created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+    "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS default_stream_url TEXT",
 ]

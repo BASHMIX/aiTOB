@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from "react";
+import { createPortal } from "react-dom";
 import axios from "axios";
 import { useHubStore } from "@/store/useHubStore";
 
@@ -31,7 +32,9 @@ function deriveStreamUrl(stream: Stream | undefined): string {
 
 export function StationSettingsModal({ station, onClose, onSaved }: StationSettingsModalProps) {
   const { currentSlug, events, streamGate, setStreamGate, tournaments } = useHubStore();
-  const isStartGgTournament = tournaments.find((tournament) => tournament.slug === currentSlug)?.provider_type !== 'challonge';
+  const currentTournament = tournaments.find((tournament) => tournament.slug === currentSlug);
+  const isStartGgTournament = currentTournament?.provider_type !== 'challonge';
+  const defaultStreamUrl = currentTournament?.default_stream_url || "";
 
   const [name, setName] = useState<string>(station.name || "");
   const [hidden, setHidden] = useState<boolean>(!!station.hidden);
@@ -167,11 +170,11 @@ export function StationSettingsModal({ station, onClose, onSaved }: StationSetti
     }
   };
 
-  return (
+  return createPortal(
     <>
-      <div className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-sm" onClick={onClose} />
       <div
-        className="fixed left-1/2 top-1/2 z-50 w-[95%] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-xl border border-white/10 bg-cardDark shadow-2xl flex flex-col max-h-[90%] overflow-hidden animate-fadeIn"
+        className="fixed left-1/2 top-1/2 z-[101] w-[95%] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-xl border border-white/10 bg-cardDark shadow-2xl flex flex-col max-h-[90%] overflow-hidden animate-fadeIn"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="border-b border-white/10 px-5 py-4 flex items-center justify-between">
@@ -284,11 +287,15 @@ export function StationSettingsModal({ station, onClose, onSaved }: StationSetti
               type="text"
               value={streamUrlOverride}
               onChange={e => setStreamUrlOverride(e.target.value)}
-              placeholder={derivedUrl || "https://twitch.tv/your-channel"}
+              placeholder={derivedUrl || defaultStreamUrl || "https://twitch.tv/your-channel"}
               className="bg-black/40 border border-white/10 rounded px-2.5 py-1 text-sm text-white focus:outline-none focus:border-accentYellow/50 placeholder:text-textDim"
             />
             <span className="text-xs text-textDim">
-              {isStartGgTournament ? 'Leave blank to auto-derive from the Start.gg stream. Override for Kick, restream pages, etc.' : 'Optional public channel or Browser Source link for this local station.'}
+              {defaultStreamUrl
+                ? `Leave blank to inherit tournament default (${defaultStreamUrl}). Override for secondary stream.`
+                : isStartGgTournament
+                  ? 'Leave blank to auto-derive from the Start.gg stream. Override for Kick, restream pages, etc.'
+                  : 'Optional public channel or Browser Source link for this local station.'}
             </span>
           </label>
 
@@ -415,6 +422,7 @@ export function StationSettingsModal({ station, onClose, onSaved }: StationSetti
           </button>
         </div>
       </div>
-    </>
+    </>,
+    document.body
   );
 }

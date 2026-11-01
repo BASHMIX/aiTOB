@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useHubStore } from '@/store/useHubStore';
 import axios from 'axios';
 import { DQPlayerMenu } from './DQPlayerMenu';
-import { tournamentAccent, withAccentAlpha } from './tournamentAccent';
+import { tournamentAccent, eventAccent, withAccentAlpha, useEventAccentWatcher } from './tournamentAccent';
 import { usePermission } from '@/hooks/usePermission';
 
 // ── Icons ──────────────────────────────────────────────────────────────
@@ -34,6 +34,7 @@ export function ActiveMatchCard({ match }: { match: any }) {
   const canManageStations = usePermission('station.manage');
   const canReportResult = usePermission('result.report');
   const canManualDq = usePermission('dq.manual');
+  useEventAccentWatcher();
   const { stations, matches, setMatches, tournaments, currentSlug } = useHubStore();
   const [dqOpen, setDqOpen] = useState(false);
   const [sending, setSending] = useState(false);
@@ -91,7 +92,7 @@ export function ActiveMatchCard({ match }: { match: any }) {
   const tournament = tournaments.find((item) => item.slug === match.tournament_slug || item.slug === currentSlug);
   const providerType = match.provider_type || tournament?.provider_type || 'startgg';
   const providerLabel = providerType === 'challonge' ? 'Challonge' : 'Start.gg';
-  const accent = tournamentAccent(tournament);
+  const accent = tournament ? eventAccent(tournament, match.event_id) : tournamentAccent(tournament);
   // The On-Stream endpoint is intentionally compact.  Reuse the authoritative
   // action projection already loaded for the same match in Match Dashboard so
   // a provider-backed score/DQ action does not disappear from this card.

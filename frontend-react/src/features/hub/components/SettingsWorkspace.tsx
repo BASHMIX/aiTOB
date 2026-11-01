@@ -129,6 +129,7 @@ function TournamentWorkflowSettings() {
           initialSetFormatDefault={tournament?.set_format_default || 'ft2'}
           initialSetFormatUpgradeRule={tournament?.set_format_upgrade_rule || 'finals_only'}
           initialSetFormatUpgraded={tournament?.set_format_upgraded || 'ft3'}
+          initialDefaultStreamUrl={tournament?.default_stream_url || ''}
           onSave={() => {
             axios.get('/api/tournaments').then((response) => setTournaments(response.data.tournaments || []));
           }}
